@@ -45,6 +45,11 @@
 			path = ShuTaPlaUITests;
 			sourceTree = "<group>";
 		};
+		499BD8022FB83C2F00720129 /* doc */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = doc;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +80,7 @@
 		499BD7CD2FB83BDA00720129 = {
 			isa = PBXGroup;
 			children = (
+				499BD8022FB83C2F00720129 /* doc */,
 				499BD7D82FB83BDA00720129 /* ShuTaPla */,
 				499BD7E82FB83BDC00720129 /* ShuTaPlaTests */,
 				499BD7F22FB83BDC00720129 /* ShuTaPlaUITests */,
@@ -109,6 +115,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				499BD7D82FB83BDA00720129 /* ShuTaPla */,
+				499BD8022FB83C2F00720129 /* doc */,
 			);
 			name = ShuTaPla;
 			packageProductDependencies = (
