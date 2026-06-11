@@ -4,7 +4,6 @@
 //
 //  Manager-mode shell: a three-column layout (playlists, center file list, tag
 //  panel) built on `HSplitView` with independently collapsible side panels.
-//  The center and tag panels are placeholders until Tasks 6 and 7 land.
 //
 
 import SwiftUI
@@ -27,8 +26,8 @@ struct ManagerView: View {
                 .frame(minWidth: 360, maxWidth: .infinity)
 
             if !rightCollapsed {
-                TagPlaceholderView()
-                    .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
+                TagSidebar()
+                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 380)
                     .transition(.move(edge: .trailing))
             }
         }
@@ -50,19 +49,5 @@ struct ManagerView: View {
                 .help(rightCollapsed ? "Show tags" : "Hide tags")
             }
         }
-    }
-}
-
-/// Stand-in for the tag panel (Task 7).
-private struct TagPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "tag")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-            Text("Tags")
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

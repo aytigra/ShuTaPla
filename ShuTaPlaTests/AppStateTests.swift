@@ -35,6 +35,27 @@ private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> 
     )
 }
 
+/// Inserts a `PlaylistFile` into a playlist for the filtering/tagging tests.
+@MainActor
+@discardableResult
+private func addFile(
+    _ name: String,
+    tags: [String] = [],
+    status: TaggingStatus = .untagged,
+    skipped: Bool = false,
+    order: Int,
+    to playlist: Playlist,
+    in context: ModelContext
+) -> PlaylistFile {
+    let file = PlaylistFile(
+        relativePath: name, fileName: name, tags: tags,
+        taggingStatus: status, isSkipped: skipped, sortOrder: order
+    )
+    file.playlist = playlist
+    context.insert(file)
+    return file
+}
+
 /// Returns a canned scan result regardless of the bookmark it's handed, and a
 /// canned update delta for re-scans.
 private struct StubFileSystem: FileSystemProviding {
@@ -346,6 +367,179 @@ struct AppStateTests {
 
         #expect(error == nil)
         #expect(Set(playlist.files.map(\.fileName)) == ["b.mp4"])
+    }
+
+    // MARK: - Filtering (Task 7)
+
+    @Test func tagFilterAppliesAndOrCorrectly() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b.mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        addFile("c.mp4", order: 2, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.select(playlist)
+
+        appState.toggleFilterTag("beach")
+        #expect(Set(appState.filteredFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+
+        appState.toggleFilterTag("sun")  // AND beach + sun
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+
+        appState.setFilterMode(.or)       // beach OR sun
+        #expect(Set(appState.filteredFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+
+        await appState.updateTask?.value
+    }
+
+    @Test func serviceFilterOverridesAndRestoresTagFilter() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b.mp4", status: .untagged, order: 1, to: playlist, in: context)
+        addFile("c.mp4", status: .invalid, order: 2, to: playlist, in: context)
+        addFile("x.jpg", status: .untagged, skipped: true, order: 3, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.select(playlist)
+
+        appState.toggleFilterTag("beach")
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+
+        appState.toggleServiceFilter(.untagged)  // overrides the tag filter
+        #expect(appState.filteredFiles.map(\.fileName) == ["b.mp4"])
+
+        appState.toggleServiceFilter(.invalidTagging)  // mutually exclusive: replaces
+        #expect(appState.filteredFiles.map(\.fileName) == ["c.mp4"])
+
+        appState.toggleServiceFilter(.skipped)
+        #expect(appState.filteredFiles.map(\.fileName) == ["x.jpg"])
+
+        appState.toggleServiceFilter(.skipped)  // off → tag filter restored
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+
+        await appState.updateTask?.value
+    }
+
+    @Test func switchingPlaylistsRestoresPersistedFilter() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let p1 = Playlist(name: "P1", folderBookmark: Data(), folderPath: "/p1", mediaType: .video, sortOrder: 0)
+        let p2 = Playlist(name: "P2", folderBookmark: Data(), folderPath: "/p2", mediaType: .video, sortOrder: 1)
+        context.insert(p1)
+        context.insert(p2)
+        p1.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
+        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: p1, in: context)
+        addFile("b.mp4", order: 1, to: p1, in: context)
+        addFile("c.mp4", order: 0, to: p2, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.select(p1)
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored filter
+
+        appState.select(p2)
+        #expect(appState.filteredFiles.map(\.fileName) == ["c.mp4"])  // no filter
+
+        appState.select(p1)
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored again
+
+        await appState.updateTask?.value
+    }
+
+    // MARK: - Tag editing (Task 7)
+
+    @Test func addTagRenamesFilesAndUpdatesFrequency() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a.mp4", order: 0, to: playlist, in: context)
+        let b = addFile("b.mp4", order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.addTag("beach", to: [a, b])
+
+        #expect(error == nil)
+        #expect(a.fileName == "a [beach].mp4")
+        #expect(b.fileName == "b [beach].mp4")
+        #expect(a.tags == ["beach"])
+        #expect(playlist.tagFrequency["beach"] == 2)
+    }
+
+    @Test func batchTagEditSkipsInvalidFiles() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let good = addFile("a.mp4", order: 0, to: playlist, in: context)
+        let bad = addFile("c [x][y].mp4", status: .invalid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.addTag("beach", to: [good, bad])
+
+        #expect(error == nil)
+        #expect(good.fileName == "a [beach].mp4")
+        #expect(bad.fileName == "c [x][y].mp4")  // invalid file untouched
+    }
+
+    @Test func renameTagAcrossPlaylistRewritesEveryFile() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        let b = addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+
+        #expect(error == nil)
+        #expect(a.tags == ["shore"])
+        #expect(b.tags == ["shore"])
+        #expect(playlist.tagFrequency["shore"] == 2)
+        #expect(playlist.tagFrequency["beach"] == nil)
+    }
+
+    // MARK: - Saved searches (Task 7)
+
+    @Test func savedSearchSavesRecallsAndMovesToTop() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.select(playlist)
+
+        appState.toggleFilterTag("beach")
+        appState.saveCurrentSearch()
+        appState.clearTagFilter()
+        appState.toggleFilterTag("sun")
+        appState.saveCurrentSearch()
+
+        #expect(playlist.savedSearches.count == 2)
+        #expect(playlist.savedSearches.first?.tags == ["sun"])
+
+        // Re-applying the older one recalls it and moves it to the top (no dupe).
+        appState.applySavedSearch(SavedSearch(tags: ["beach"], mode: .and))
+        #expect(playlist.filterState.selectedTags == ["beach"])
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+        #expect(playlist.savedSearches.count == 2)
+        #expect(playlist.savedSearches.first?.tags == ["beach"])
+
+        await appState.updateTask?.value
     }
 
     private var emptyResult: ScanResult {

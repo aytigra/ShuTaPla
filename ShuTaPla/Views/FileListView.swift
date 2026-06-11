@@ -3,10 +3,10 @@
 //  ShuTaPla
 //
 //  The Manager center file list: a `LazyVStack` of rows for the playlist's
-//  playable files, with click / shift-click / cmd-click selection, double-click
-//  to play, inline rename, and a per-row context menu. Skipped files are not
-//  shown here (they surface under the Skipped service filter in Task 7). The
-//  gallery view mode is a placeholder until Task 8.
+//  filtered files (`AppState.filteredFiles`), with click / shift-click / cmd-click
+//  selection, double-click to play, inline rename, and a per-row context menu.
+//  The active tag or service filter decides what appears here. The gallery view
+//  mode is a placeholder until Task 8.
 //
 
 import SwiftUI
@@ -79,10 +79,10 @@ struct FileListView: View {
 
     // MARK: - Data
 
+    /// The filtered, sorted files for the selected playlist, cached on `AppState`
+    /// and kept in sync with the tag/service filter.
     private var visibleFiles: [PlaylistFile] {
-        playlist.files
-            .filter { !$0.isSkipped }
-            .sorted { $0.sortOrder < $1.sortOrder }
+        appState.filteredFiles
     }
 
     private var selectedFiles: [PlaylistFile] {

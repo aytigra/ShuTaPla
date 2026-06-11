@@ -71,8 +71,18 @@ final class AppState {
     private(set) var updateTask: Task<Void, Never>?
 
     /// File-list selection in the Manager center panel, by file ID. Cleared when
-    /// the selected playlist changes. The tag panel (Task 7) reads this.
+    /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
+
+    /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
+    /// While set it overrides the selected playlist's persisted tag filter; it is
+    /// mutually exclusive and never persisted.
+    private(set) var activeServiceFilter: ServiceFilter?
+
+    /// The selected playlist's files after the active filter, sorted for display.
+    /// Cached so the file list doesn't refilter on every redraw; recomputed when
+    /// the selection, filter, service filter, or file set changes.
+    private(set) var filteredFiles: [PlaylistFile] = []
 
     init(
         modelContext: ModelContext,
@@ -91,6 +101,7 @@ final class AppState {
         self.mode = existing.isEmpty ? .welcome : .manager
 
         resolveActivePlaylists()
+        recomputeFilteredFiles()
     }
 
     // MARK: - Active playlist references
@@ -222,6 +233,8 @@ final class AppState {
 
         activate(playlist)
         selectedPlaylist = playlist
+        activeServiceFilter = nil
+        recomputeFilteredFiles()
         if mode == .welcome { mode = .manager }
         return playlist
     }
@@ -239,7 +252,9 @@ final class AppState {
     func select(_ playlist: Playlist) {
         if selectedPlaylist !== playlist { selectedFileIDs = [] }
         selectedPlaylist = playlist
+        activeServiceFilter = nil   // service filters don't carry across playlists
         activate(playlist)
+        recomputeFilteredFiles()    // show the restored per-playlist filter at once
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
     }
@@ -271,6 +286,7 @@ final class AppState {
         let mediaType = playlist.mediaType
         modelContext.delete(playlist)
         compactSortOrder(for: mediaType)
+        recomputeFilteredFiles()
     }
 
     /// Reorders the playlists of one section. `ordered` is the section's current
@@ -329,6 +345,7 @@ final class AppState {
         }
 
         rebuildTagFrequency(playlist)
+        recomputeIfSelected(playlist)
     }
 
     /// Recomputes the per-playlist tag usage counts from its playable files.
@@ -365,6 +382,16 @@ final class AppState {
         }
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
 
+        if let error = await applyRename(file, to: newName, in: folderURL) { return error }
+        rebuildTagFrequency(playlist)
+        recomputeIfSelected(playlist)
+        return nil
+    }
+
+    /// Renames one file on disk and mirrors the result onto the model, with the
+    /// playlist folder's scoped access already open. Returns a message on failure.
+    /// Callers rebuild the tag-frequency cache once after a batch.
+    private func applyRename(_ file: PlaylistFile, to newName: String, in folderURL: URL) async -> String? {
         let newURL: URL
         do {
             newURL = try await fileSystem.renameFile(
@@ -384,7 +411,6 @@ final class AppState {
         let (tags, status) = tagFields(for: finalName)
         file.tags = tags
         file.taggingStatus = status
-        rebuildTagFrequency(playlist)
         return nil
     }
 
@@ -417,6 +443,7 @@ final class AppState {
             modelContext.delete(file)
         }
         rebuildTagFrequency(playlist)
+        recomputeIfSelected(playlist)
 
         guard result.failed.isEmpty else {
             return "\(result.failed.count) file(s) couldn't be moved to the Trash."
@@ -431,6 +458,7 @@ final class AppState {
         let skipped = playlist.files.filter(\.isSkipped)
         for (index, file) in playable.enumerated() { file.sortOrder = index }
         for (offset, file) in skipped.enumerated() { file.sortOrder = playable.count + offset }
+        recomputeIfSelected(playlist)
     }
 
     /// Reveals a file in the Finder.
@@ -448,6 +476,168 @@ final class AppState {
         activate(playlist)
         selectedPlaylist = playlist
         mode = .player
+    }
+
+    // MARK: - Tag editing
+
+    /// Adds a tag to each of `files`, renaming on disk. Invalid-tagging files are
+    /// skipped (they can't take a tag until their name parses cleanly), and files
+    /// that already have the tag are unchanged. Returns the first failure message.
+    @discardableResult
+    func addTag(_ tag: String, to files: [PlaylistFile]) async -> String? {
+        await editTags(files) { TagParser.addTag(tag, to: $0) }
+    }
+
+    /// Removes a tag from each of `files` that has it, renaming on disk.
+    @discardableResult
+    func removeTag(_ tag: String, from files: [PlaylistFile]) async -> String? {
+        await editTags(files) { TagParser.removeTag(tag, from: $0) }
+    }
+
+    /// Renames a tag across every file in the playlist that carries it.
+    @discardableResult
+    func renameTagAcrossPlaylist(_ playlist: Playlist, from oldTag: String, to newTag: String) async -> String? {
+        await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
+    }
+
+    /// Removes a tag from every file in the playlist that carries it.
+    @discardableResult
+    func removeTagAcrossPlaylist(_ playlist: Playlist, tag: String) async -> String? {
+        await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
+    }
+
+    /// Applies a filename transform to a batch of files (one scoped-access session,
+    /// one tag-frequency rebuild). Invalid-tagging files are excluded; transforms
+    /// that leave a name unchanged are skipped so no needless disk renames happen.
+    private func editTags(_ files: [PlaylistFile], transform: (String) -> String) async -> String? {
+        let editable = files.filter { $0.taggingStatus != .invalid }
+        guard let playlist = editable.first?.playlist else { return nil }
+        let folderURL: URL
+        do {
+            folderURL = try bookmarkService.startAccess(to: playlist.folderBookmark)
+        } catch {
+            return "Couldn't access the playlist folder."
+        }
+        defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
+
+        var firstError: String?
+        for file in editable {
+            let newName = transform(file.fileName)
+            guard newName != file.fileName else { continue }
+            if let error = await applyRename(file, to: newName, in: folderURL) {
+                firstError = firstError ?? error
+            }
+        }
+        rebuildTagFrequency(playlist)
+        recomputeIfSelected(playlist)
+        return firstError
+    }
+
+    // MARK: - Filtering
+
+    /// Toggles a service filter on/off. Service filters are mutually exclusive and,
+    /// while active, override the playlist's tag filter.
+    func toggleServiceFilter(_ filter: ServiceFilter) {
+        activeServiceFilter = (activeServiceFilter == filter) ? nil : filter
+        recomputeFilteredFiles()
+    }
+
+    /// Adds or removes a tag from the selected playlist's tag filter. Editing the
+    /// tag filter clears any active service filter.
+    func toggleFilterTag(_ tag: String) {
+        guard let playlist = selectedPlaylist else { return }
+        activeServiceFilter = nil
+        var tags = playlist.filterState.selectedTags
+        if let index = tags.firstIndex(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+            tags.remove(at: index)
+        } else {
+            tags.append(tag)
+        }
+        playlist.filterState.selectedTags = tags
+        recomputeFilteredFiles()
+    }
+
+    /// Sets the AND/OR operator on the selected playlist's tag filter.
+    func setFilterMode(_ mode: FilterMode) {
+        guard let playlist = selectedPlaylist else { return }
+        playlist.filterState.filterMode = mode
+        recomputeFilteredFiles()
+    }
+
+    /// Clears the selected playlist's tag filter.
+    func clearTagFilter() {
+        guard let playlist = selectedPlaylist else { return }
+        playlist.filterState.selectedTags = []
+        recomputeFilteredFiles()
+    }
+
+    /// Remembers the current tag filter as a saved search (most-recent first,
+    /// unique by tag set + operator, capped at 10). No-op when the filter is empty.
+    func saveCurrentSearch() {
+        guard let playlist = selectedPlaylist, !playlist.filterState.isEmpty else { return }
+        let search = SavedSearch(tags: playlist.filterState.selectedTags, mode: playlist.filterState.filterMode)
+        promote(search, in: playlist)
+    }
+
+    /// Re-applies a saved search and moves it to the top of the recents.
+    func applySavedSearch(_ search: SavedSearch) {
+        guard let playlist = selectedPlaylist else { return }
+        activeServiceFilter = nil
+        playlist.filterState.selectedTags = search.tags
+        playlist.filterState.filterMode = search.mode
+        promote(search, in: playlist)
+        recomputeFilteredFiles()
+    }
+
+    /// Removes a saved search from the recents.
+    func removeSavedSearch(_ search: SavedSearch) {
+        guard let playlist = selectedPlaylist else { return }
+        playlist.savedSearches.removeAll { $0.matches(search) }
+    }
+
+    private func promote(_ search: SavedSearch, in playlist: Playlist) {
+        var searches = playlist.savedSearches.filter { !$0.matches(search) }
+        searches.insert(search, at: 0)
+        playlist.savedSearches = Array(searches.prefix(10))
+    }
+
+    /// Recomputes `filteredFiles` for the current selection and active filter.
+    func recomputeFilteredFiles() {
+        guard let playlist = selectedPlaylist else { filteredFiles = []; return }
+        filteredFiles = computeFilteredFiles(for: playlist)
+    }
+
+    private func recomputeIfSelected(_ playlist: Playlist) {
+        if playlist === selectedPlaylist { recomputeFilteredFiles() }
+    }
+
+    private func computeFilteredFiles(for playlist: Playlist) -> [PlaylistFile] {
+        let byOrder: (PlaylistFile, PlaylistFile) -> Bool = { $0.sortOrder < $1.sortOrder }
+
+        // A service filter, while active, replaces the tag filter entirely.
+        if let service = activeServiceFilter {
+            switch service {
+            case .untagged:
+                return playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .untagged }.sorted(by: byOrder)
+            case .invalidTagging:
+                return playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .invalid }.sorted(by: byOrder)
+            case .skipped:
+                return playlist.files.filter(\.isSkipped).sorted(by: byOrder)
+            }
+        }
+
+        let playable = playlist.files.filter { !$0.isSkipped }.sorted(by: byOrder)
+        let filter = playlist.filterState
+        guard !filter.isEmpty else { return playable }
+
+        let selected = Set(filter.selectedTags.map { $0.lowercased() })
+        return playable.filter { file in
+            let fileTags = Set(file.tags.map { $0.lowercased() })
+            switch filter.filterMode {
+            case .and: return selected.isSubset(of: fileTags)
+            case .or: return !selected.isDisjoint(with: fileTags)
+            }
+        }
     }
 
     private func tagFields(for fileName: String) -> ([String], TaggingStatus) {

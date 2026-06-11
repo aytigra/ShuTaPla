@@ -162,7 +162,9 @@ The file list and playlist header with basic controls.
 
 ---
 
-## Task 7 — Manager mode: tag panel (right sidebar) and filtering
+## Task 7 — Manager mode: tag panel (right sidebar) and filtering  ✅
+
+**Status: complete.** `TagSidebar` (right panel: `FilterBar` over the selected playlist's tags + `TagEditorView` for the file-list selection), `FilterBar` (AND/OR tag cloud, saved-search recents, service-filter banner, per-tag playlist-wide rename/remove via context menu), `TagEditorView` (common-tag chips, autocomplete input with enter/arrow/esc handling, invalid-tagging files get a plain rename field and are excluded from batch ops), and `FlowLayout` (wrapping chip layout). `AppState` gains the filtering and tag-editing API: `toggleFilterTag`/`setFilterMode`/`clearTagFilter`, `toggleServiceFilter` (mutually exclusive, overrides the tag filter), `addTag`/`removeTag` (batch, invalid files excluded), `renameTagAcrossPlaylist`/`removeTagAcrossPlaylist`, saved searches (`saveCurrentSearch`/`applySavedSearch`/`removeSavedSearch`, 10 recent unique, move-to-top), and a cached `filteredFiles` (recomputed on selection/filter/edit changes) that drives `FileListView`. Center-panel counter notices now toggle service filters. Filter persisted per playlist; service filter is runtime-only. 22 `AppStateTests` passing.
 
 Tag editing and filter controls.
 

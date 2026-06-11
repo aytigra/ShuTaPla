@@ -124,8 +124,8 @@ struct PlaylistCenterView: View {
 
     // MARK: - Counter notices
 
-    /// Untagged / invalid-tagging / skipped counts. Clicking these to activate
-    /// the matching service filter arrives in Task 7; here they are informational.
+    /// Untagged / invalid-tagging / skipped counts. Each acts as a toggle for the
+    /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
         let untagged = playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .untagged }.count
@@ -133,21 +133,31 @@ struct PlaylistCenterView: View {
         let skipped = playlist.files.filter(\.isSkipped).count
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
-            HStack(spacing: 12) {
-                if untagged > 0 { notice("\(untagged) untagged", systemImage: "tag.slash") }
-                if invalid > 0 { notice("\(invalid) invalid tagging", systemImage: "exclamationmark.triangle") }
-                if skipped > 0 { notice("\(skipped) skipped", systemImage: "nosign") }
+            HStack(spacing: 8) {
+                if untagged > 0 { notice("\(untagged) untagged", systemImage: "tag.slash", filter: .untagged) }
+                if invalid > 0 { notice("\(invalid) invalid tagging", systemImage: "exclamationmark.triangle", filter: .invalidTagging) }
+                if skipped > 0 { notice("\(skipped) skipped", systemImage: "nosign", filter: .skipped) }
                 Spacer()
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
             Divider()
         }
     }
 
-    private func notice(_ text: String, systemImage: String) -> some View {
-        Label(text, systemImage: systemImage)
+    private func notice(_ text: String, systemImage: String, filter: ServiceFilter) -> some View {
+        let isActive = appState.activeServiceFilter == filter
+        return Button {
+            appState.toggleServiceFilter(filter)
+        } label: {
+            Label(text, systemImage: systemImage)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(isActive ? Color.accentColor.opacity(0.22) : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+        .help(isActive ? "Show all files" : "Show only these")
     }
 }
