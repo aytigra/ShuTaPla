@@ -14,7 +14,8 @@ Set up the Xcode project structure (directories per architecture §14), SwiftDat
 - `AppConstants.swift` — extension maps (video/image/audio extensions), dominance threshold (80%)
 - All SwiftData models: `Playlist`, `PlaylistFile`, `AppStateModel`, `GlobalSettings`
 - All embedded value types: `PlaylistPreferences`, `FilterState`, `SavedSearch`
-- All enums: `MediaType`, `ImageFitMode`, `ViewMode`, `FilterMode`, `TaggingStatus`
+- All enums: `MediaType`, `ImageFitMode`, `ViewMode`, `FilterMode`, `TaggingStatus`, `CloudStatus` (runtime-only, not persisted)
+- `AppStateModel` paused fields capture both the global pause and per-channel "paused separately" flags (video/image, audio, slideshow)
 - Fetch-or-create singleton pattern for `AppStateModel` and `GlobalSettings`
 
 **Testable:**
@@ -31,7 +32,8 @@ Pure-function service with no dependencies on other app code.
 
 **Deliverables:**
 - `TagParser.swift` — `parseTags(from:)`, `addTag(_:to:)`, `removeTag(_:from:)`, `renameTag(from:to:in:)`
-- Parsing: find `\[[^\]]*\]` groups, handle zero (untagged), one (valid), multiple (invalid)
+- Parsing: track bracket nesting — zero pairs (untagged), exactly one balanced pair (valid), more than one pair or any nesting (invalid). A single unmatched `[`/`]` that never forms a pair is ignored, not invalid
+- A single empty bracket pair (`[]`) → untagged (cleaned up on next edit); a pair where any token isn't a valid tag (e.g. `[beach ab]`, `[a b c]`) → invalid (surfaced, never silently dropped)
 - Tag validation: letters, digits, underscore, minimum 3 chars
 - Case-insensitive matching, on-disk casing preserved
 - Removing last tag removes empty brackets from filename
@@ -40,10 +42,12 @@ Pure-function service with no dependencies on other app code.
 - Parameterized Swift Testing tests (`@Test(arguments:)`) covering:
   - Valid single-bracket filenames
   - Untagged filenames (no brackets)
-  - Invalid tagging (multiple bracket groups)
-  - Empty brackets
-  - Short tags (< 3 chars) filtered out
-  - Special characters rejected
+  - Invalid tagging (multiple bracket groups, or nested brackets)
+  - Stray unmatched bracket ignored (still valid/untagged)
+  - Empty brackets (`[]`) → untagged
+  - Bracket group with any non-conforming token (too short or disallowed char, e.g. `[beach ab]`, `[a b c]`) → invalid
+  - A valid group requires every token to conform (letters/digits/underscore, ≥ 3 chars)
+  - Adding a too-short or special-character tag is rejected by the editor
   - Tag add/remove/rename produce correct filenames
   - Bracket removal when last tag removed
 
@@ -59,6 +63,8 @@ File system layer: security-scoped bookmarks, folder scanning, file rename/trash
 - File classification by extension using `AppConstants` maps
 - Dominance detection (≥ 80% threshold)
 - Fisher-Yates shuffle for initial ordering
+- Update always prunes files missing from disk (manual and auto-update); re-reads run in a background Task
+- `ScanResult` carries each file's initial cloud status (local / in cloud / downloading)
 - `ScanResult`, `UpdateDelta`, `TagParseResult` value types (Sendable)
 - `FileSystemProviding` protocol for mock injection
 
@@ -146,6 +152,7 @@ Tag editing and filter controls.
 **Deliverables:**
 - `TagSidebar.swift` — right collapsible panel, tag editor for selected file(s)
 - `TagEditorView.swift` — multi-select chip input with dropdown suggestions, tag input hotkeys (arrows, delete, enter, esc)
+- Invalid-tagging file: editor disables chip editing and shows an "invalid tag syntax" message with a plain filename-rename field; re-enables once the name parses cleanly. Multi-selection excludes invalid files from batch tag ops
 - Tag add/remove on selected files → file rename on disk → model update → tag frequency cache update
 - Multi-select tag editing: show intersection of tags, add applies to all, remove applies to all that have it
 - Playlist-wide tag operations: rename tag across all files, remove tag across all files
@@ -156,6 +163,7 @@ Tag editing and filter controls.
 
 **Testable:**
 - Tag editor shows correct chips for single file
+- Invalid-tagging file selected → editor shows the "invalid tag syntax" message + rename field, not chips; re-enables after a clean rename
 - Adding tag renames file, updates chips, updates frequency cache
 - Multi-select shows tag intersection
 - AND filter: only files with ALL selected tags shown
@@ -248,6 +256,7 @@ Orchestration of engines and the player view shell.
 - `ImagePlayerView.swift` — image display with pan/zoom gestures
 - Fullscreen transition: `NSWindow.toggleFullScreen` via NSView bridge on entering/exiting player mode
 - `PauseOverlay.swift` — opaque overlay with Unpause and Stop buttons
+- `[p]`/`[esc]` global pause also pauses the parallel audio playlist (unless audio was already paused separately); Unpause resumes only what this action paused
 - Basic `[p]` pause and `[space]` unpause/next
 
 **Testable:**
@@ -265,9 +274,9 @@ Orchestration of engines and the player view shell.
 Global key event handling and routing.
 
 **Deliverables:**
-- `HotkeyRouter.swift` — `NSEvent.addLocalMonitorForEvents(matching: .keyDown)`, routing priority chain (text field → esc chain → space → audio overlay → player/manager)
-- All player hotkeys: space, arrows, `[p]`, `[esc]`, `[delete]`, `[shift]` (fit mode), `[l]` (loop), `[right option]+arrows` (seek ±3s)
-- Manager mode hotkeys: `[arrow down/up]` (audio overlay), `[esc]` (close window), `[delete]` (trash selected)
+- `HotkeyRouter.swift` — `NSEvent.addLocalMonitorForEvents(matching: .keyDown)`, routing priority chain (text field → esc chain → space → audio holds key context → player/manager). Audio claims key context only when the overlay is fully revealed
+- All player hotkeys: space, arrows, `[tab]`/`[arrow up]` (open Files & Tags), `[arrow down]` (close it or reveal Compact audio), `[p]`, `[esc]`, `[delete]`, `[shift]` (fit mode), `[l]` (loop), `[right option]+arrows` (seek ±3s)
+- Manager mode hotkeys: `[arrow up/down]` = file-list navigation (standard), `[esc]` (close window), `[delete]` (trash selected). The audio overlay is opened by top-edge hover or the left-panel Audio section — not by arrow keys
 - Right Option key detection via `event.keyCode == 61`
 - Text input detection: skip hotkey processing when first responder is text field
 
@@ -279,7 +288,9 @@ Global key event handling and routing.
 - `[l]` → loop toggles
 - `[right option]+[arrow right]` → seek +3s
 - Text field focused → keys pass through to text field, not hotkey router
-- Arrow keys with audio overlay visible → routed to audio controls
+- Arrow keys routed to audio only when the audio overlay holds key context (fully revealed); otherwise to the player
+- Manager mode: arrow up/down move the file-list selection (not the audio overlay)
+- `[tab]` opens Files & Tags
 
 ---
 
@@ -311,7 +322,7 @@ The three major overlays in Player mode.
 
 **Deliverables:**
 - `PlaybackControlsBar.swift` — bottom hover: previous, stop, next, loop toggle, progress/scrub, volume slider (video); previous, stop, next, slideshow toggle, interval selector (image); file list button to toggle Files & Tags
-- `FilesTagsOverlayView.swift` — slides up from bottom, two sections: file list with filter controls (reuses FilterBar), tag editor (reuses TagEditorView). File interactions: double-click to jump, rename, delete, show in Finder, multi-select
+- `FilesTagsOverlayView.swift` — slides up from bottom, **simplified single-file** surface (bulk multi-select editing stays in Manager mode). Two sections: file list with filter controls (reuses FilterBar), tag editor (reuses TagEditorView) targeting the **currently active file only**. Per-file interactions: double-click to jump, rename, delete, show in Finder
 - `PlaylistsOverlay.swift` — left hover: video and image sections (read-only, no CRUD), audio hint at bottom. Selecting a playlist starts playing immediately
 - Volume slider per video/audio playlist, persisted
 - Progress bar / scrub for video (seeks via MPVClient)
@@ -335,7 +346,8 @@ The audio player UI that coexists with video/image playback.
 - Audio overlay state machine: Hidden → Compact → Extended via `[arrow down]`, back to Hidden via `[arrow up]`
 - Top-edge hover → compact (auto-dismiss on mouse leave)
 - `[arrow down]` compact → stays open until explicitly closed
-- Audio hotkey context switching: when audio overlay visible, arrows/space target audio playlist
+- Audio hotkey context switching: the audio overlay holds key context only once **fully revealed**; then arrows/space/loop/seek target the audio playlist
+- Extended file list is a simple vertical list — `[arrow left]`/`[arrow right]` switch tracks, `[arrow up]` progressively closes; arrows do not move a list selection (except when a text field inside is in edit mode)
 - Audio playlist selection in extended view → starts playing selected audio playlist
 - In Manager mode: Audio hint in playlists panel bottom → opens compact/extended overlay
 
@@ -375,7 +387,27 @@ Global settings UI, full state persistence, and app lifecycle handling.
 
 ---
 
-## Task 17 — Fullscreen polish, window management, and HDR
+## Task 17 — Cloud / offline file handling
+
+iCloud/offline awareness: per-file status indicators, on-demand download, and prefetch ahead of playback.
+
+**Deliverables:**
+- `CloudFileService.swift` — per-file status (local / in cloud / downloading) via `NSMetadataQuery` scoped to active playlist folders and URL resource values (`.ubiquitousItemDownloadingStatusKey`, `.ubiquitousItemIsDownloadingKey`)
+- On-demand download via `FileManager.startDownloadingUbiquitousItem(at:)`
+- Prefetch: while the current file plays, request downloads for the next N files in playback order (driven from `PlaybackCoordinator` on each file change)
+- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Files & Tags overlay
+- Playback integration: if the file playback reaches is still in the cloud, request its download immediately; if it cannot be made local in time, advance to the next available file (same rule as missing files)
+
+**Testable:**
+- Status mapping: placeholder/evicted → in cloud, actively fetching → downloading, present → local
+- Prefetch requests exactly the next N files in playback order on a file change
+- On-demand download requested when playback reaches an in-cloud file
+- Download timeout → advance to next available file
+- Indicators appear/clear as status changes (mock status provider)
+
+---
+
+## Task 18 — Fullscreen polish, window management, and HDR
 
 Edge cases around fullscreen, single-window enforcement, and HDR support.
 
@@ -396,7 +428,7 @@ Edge cases around fullscreen, single-window enforcement, and HDR support.
 
 ---
 
-## Task 18 — Accessibility
+## Task 19 — Accessibility
 
 VoiceOver and macOS accessibility support.
 
@@ -455,9 +487,11 @@ Task 1 ─── Data Models
   │                                   │
   │                                   └── Task 16 ── Settings + Lifecycle
   │
-  └── Task 17 ── Fullscreen + HDR (after Tasks 11, 16)
+  ├── Task 17 ── Cloud / offline files (after Tasks 6, 8, 11)
   │
-  └── Task 18 ── Accessibility (after all UI tasks)
+  ├── Task 18 ── Fullscreen + HDR (after Tasks 11, 16)
+  │
+  └── Task 19 ── Accessibility (after all UI tasks)
 ```
 
-Tasks 5–8 (Manager UI) and Tasks 9–10 (mpv/engines) can be developed in parallel once Task 4 is complete.
+Tasks 5–8 (Manager UI) and Tasks 9–10 (mpv/engines) can be developed in parallel once Task 4 is complete. Task 17 (cloud) depends on the file-list views (6, 8) for indicators and the coordinator (11) for prefetch.

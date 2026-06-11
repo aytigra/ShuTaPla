@@ -24,6 +24,7 @@ ShuTaPla is a single-window macOS media player built with SwiftUI and SwiftData.
 | Image display | Core Graphics + SwiftUI | CGImageSource for efficient loading/thumbnailing. Custom view for pan/zoom. HDR via NSImage with EDR support. |
 | File system | Foundation (FileManager, URL) | Recursive enumeration, rename, trash. Security-scoped bookmarks for persistent folder access. |
 | File re-scan | Foundation (FileManager) | One-shot re-scan on playlist activation to detect new/removed files. No continuous watching in v1. |
+| Cloud files | Foundation (NSMetadataQuery, FileManager ubiquitous APIs) | Detect iCloud/offline placeholder state per file; request on-demand downloads and prefetch the next files in playback order. |
 | Concurrency | Swift Concurrency | async/await, actors for serialized file I/O, TaskGroups for parallel thumbnail generation. |
 | Minimum deployment | macOS 26.4 | |
 
@@ -94,15 +95,17 @@ Playlist
       ├── tags: [String]               // parsed from filename, cached
       ├── taggingStatus: TaggingStatus // .valid | .untagged | .invalid
       ├── lastPosition: TimeInterval?  // for file-position persistence
-      └── sortOrder: Int               // shuffled order within playlist
+      ├── sortOrder: Int               // shuffled order within playlist
+      └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
 AppState (singleton, persisted)
  ├── activeVideoPlaylistId: UUID?
  ├── activeImagePlaylistId: UUID?
  ├── activeAudioPlaylistId: UUID?
- ├── videoPlaybackPaused: Bool
- ├── imagePlaybackPaused: Bool
- ├── audioPlaybackPaused: Bool
+ ├── globalPaused: Bool                 // window closed while globally paused ([p]/[esc])
+ ├── videoImagePausedSeparately: Bool   // paused via its own control — stays paused on reopen
+ ├── audioPausedSeparately: Bool        // audio paused via its own control — stays paused
+ ├── slideshowPausedSeparately: Bool    // slideshow paused via its own control — stays paused
  └── windowFrame: Data?               // encoded NSRect
 ```
 
@@ -124,6 +127,7 @@ enum ImageFitMode: String, Codable, Sendable { case fit, cover, original }
 enum ViewMode: String, Codable, Sendable { case list, gallery }
 enum FilterMode: String, Codable, Sendable { case and, or }
 enum TaggingStatus: String, Codable, Sendable { case valid, untagged, invalid }
+enum CloudStatus: String, Sendable { case local, inCloud, downloading }   // runtime only, not persisted
 ```
 
 ### Sendable conformance
@@ -188,18 +192,21 @@ Exposes playback state (playing/paused/stopped, current time, duration) as obser
 
 Tracks visibility of all overlays in Player mode and enforces exclusivity rules from the feature spec:
 - Extended audio is exclusive — opening it closes Files & Tags and Playlists.
-- Compact audio closes when a hotkey overlay opens.
-- Files & Tags suppresses hover triggers for Playlists and bottom controls.
+- Compact audio closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
+- Files & Tags suppresses hover triggers for Playlists and bottom controls; it closes automatically only when Extended audio opens.
+- Owns **key context** — which target (player vs. audio overlay) currently receives arrow/space/loop/seek. The audio overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
 
 State is an enum set, not a stack — overlays don't nest arbitrarily.
 
 #### HotkeyRouter
 
 Receives raw key events and routes them to the appropriate handler based on:
-1. Is a text input focused? → swallow the event.
-2. Is the audio overlay visible? → redirect arrow/space to audio controls.
-3. Is an overlay open? → `[esc]` closes it.
-4. Default → player or manager hotkey table.
+1. Is a text input focused? → swallow the event (the field handles it).
+2. Is it `[esc]`? → apply the esc priority chain (unfocus input → close overlay → pause → close window).
+3. Does the audio overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
+4. Default → player or manager hotkey table. In Manager mode, arrow keys are standard file-list navigation, not audio-overlay control.
+
+Key context is read from the OverlayManager so the router and the overlay layer agree on who owns the keys.
 
 ### Playlist state machine
 
@@ -221,7 +228,7 @@ Each playlist tracks its own playback state independently:
             unpause └──────────┘
 ```
 
-State is stored on the runtime `PlaybackCoordinator`, not on the SwiftData model. On app quit, the coordinator writes `isPaused` to the persisted `AppState`.
+State is stored on the runtime `PlaybackCoordinator`, not on the SwiftData model. On window close or app quit, the coordinator records to the persisted `AppState` both whether playback was *globally* paused (`[p]`/`[esc]`) and which channels were paused *separately* via their own controls. Channels paused separately stay paused on reopen; a global pause is restored as a global pause and is not promoted to a per-channel separate pause.
 
 ---
 
@@ -236,6 +243,7 @@ Responsibilities:
   - Resolve security-scoped bookmarks and manage access sessions.
   - Recursively enumerate a folder, classifying files by extension.
   - Determine the dominant media type (or flag as mixed).
+  - Capture each file's initial cloud status (local / in cloud / downloading).
   - Detect new/removed files for Update operations.
 
 Key methods:
@@ -253,7 +261,7 @@ static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "jxl", "gif", "
 static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "aiff", "wma"]
 ```
 
-**Dominance threshold**: if ≥ 80% of recognized media files are one type, that type is auto-selected. Below 80%, the user is prompted (mixed mode).
+**Dominance threshold**: a type is *dominant* when files of the other recognized types are only an incidental minority (e.g. a few album-cover images among many audio tracks). The app uses a single concrete boundary: if ≥ 80% of recognized media files are one type, that type is auto-selected; otherwise the folder is **Mixed** and the user is prompted to choose. There is no second threshold — "Mixed" is simply "not dominant."
 
 ### TagParser
 
@@ -262,7 +270,7 @@ Pure functions, no state. Easily unit-tested.
 ```
 Responsibilities:
   - Parse tags from a filename string.
-  - Detect invalid tagging (multiple bracket groups).
+  - Detect invalid tagging (more than one bracket pair, nested brackets, or a single group containing any token that isn't a valid tag).
   - Build a new filename after adding/removing/renaming a tag.
   - Validate tag format (letters, digits, underscore, >= 3 chars).
 
@@ -275,11 +283,14 @@ Key functions:
   renameTag(from: String, to: String, in fileName: String) -> String
 ```
 
-**Parsing algorithm**:
-1. Find all occurrences of `\[[^\]]*\]` in the filename (excluding the extension).
-2. If count == 0 → `.untagged`.
-3. If count > 1 → `.invalid`.
-4. If count == 1 → split contents by whitespace, filter to `[a-zA-Z0-9_]{3,}`, normalize to lowercase for matching but preserve original casing → `.valid(tags)`.
+**Parsing algorithm** (operates on the filename excluding its extension):
+1. Scan left to right, tracking bracket nesting depth. Any nesting (a `[` opened while already inside a pair) → `.invalid`.
+2. Count balanced top-level `[...]` pairs. More than one → `.invalid`. A single unmatched `[` or `]` that never forms a pair is ignored (treated as literal prose), not invalid.
+3. Zero pairs → `.untagged`.
+4. Exactly one pair → inspect its space-separated tokens:
+   - Empty or whitespace only → `.untagged` (the empty group is removed the next time the file's tags are edited).
+   - **Every** token matches `[a-zA-Z0-9_]{3,}` → `.valid(tags)`, lowercased for matching while the on-disk casing is preserved.
+   - **Any** token fails (too short, or disallowed character; e.g. `[beach ab]`, `[a b c]`) → `.invalid`. The content is surfaced, never silently dropped.
 
 ### PlaybackEngine
 
@@ -365,6 +376,29 @@ Lifecycle:
     playlist and a video playlist backed by the same folder). Access is released only
     when the count drops to zero.
 ```
+
+### CloudFileService
+
+```
+Responsibilities:
+  - Determine each file's cloud status: local, in the cloud (placeholder/evicted), or downloading.
+  - Observe status changes live via NSMetadataQuery (scoped to active playlist folders) and
+    URL resource values (.ubiquitousItemDownloadingStatusKey, .ubiquitousItemIsDownloadingKey).
+  - Request on-demand downloads (FileManager.startDownloadingUbiquitousItem(at:)).
+  - Prefetch ahead: while the current file plays, request downloads for the next N files in
+    playback order so they are local by the time playback reaches them.
+  - Publish per-file status so list/gallery rows can show "in the cloud" / "downloading" badges.
+
+Key methods:
+  status(for url: URL) -> CloudStatus
+  requestDownload(_ url: URL)
+  prefetch(after index: Int, in playlist: Playlist, count: Int)
+  statusStream(for playlist: Playlist) -> AsyncStream<[PlaylistFile.ID: CloudStatus]>
+```
+
+Status observation runs off the main actor; published status snapshots are `Sendable` value types
+(`[PlaylistFile.ID: CloudStatus]`) delivered to `@MainActor` consumers via `AsyncStream`, mirroring the
+MPVClient event pattern.
 
 ---
 
@@ -474,14 +508,24 @@ final class OverlayManager {
     func show(_ overlay: Overlay) {
         // Apply exclusivity rules before adding
         switch overlay {
-        case .audioExtended:
+        case .audioExtended:                 // exclusive — closes everything else
             active.remove(.filesTags)
             active.remove(.playlistsSidebar)
             active.remove(.audioCompact)
-        case .filesTags:
-            active.remove(.audioCompact)
             active.remove(.bottomControls)
-        // ... etc per feature spec rules
+        case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
+            active.remove(.audioCompact)
+            active.remove(.playlistsSidebar)
+            active.remove(.bottomControls)
+        case .audioCompact:
+            // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
+            // so it does NOT close it. It only yields to Extended audio (handled above).
+            break
+        case .playlistsSidebar, .bottomControls:
+            // Hover overlays are suppressed while Files & Tags or Extended audio is open.
+            if active.contains(.filesTags) || active.contains(.audioExtended) { return }
+        case .pauseOverlay:
+            break
         }
         active.insert(overlay)
     }
@@ -530,10 +574,12 @@ User picks folder
 
 | Operation | Reads disk | New files | Removed files | Order | Position |
 |-----------|-----------|-----------|---------------|-------|----------|
-| **Update** | Yes | Appended at end | Optionally pruned | Preserved | Preserved |
+| **Update** | Yes | Appended at end | Pruned | Preserved | Preserved |
 | **Reshuffle** | Yes | Included | Removed | New random shuffle | Reset to 0 |
 
 **Auto-update**: When a playlist becomes the active playlist (selected in Manager or started in Player), an update runs as a background Task. The UI is not blocked; new files appear in the list as the update completes.
+
+Both manual and automatic Update prune files that have disappeared from disk. Every re-read (Reshuffle and Update, manual or automatic) runs as a background Task with a small "sync in progress" indicator shown while it is running — the UI is never blocked.
 
 ### Tag editing flow
 
@@ -553,12 +599,18 @@ User edits tag in UI
     - PlaybackCoordinator reloads the file in mpv if it is currently playing
        │
        ▼
-  On failure (permissions, name collision):
-    - Show inline error in tag editor
+  On failure (name collision, permission error, read-only or disconnected/offline
+              volume, or a move-to-Trash failure):
+    - Leave the file and its playlist entry untouched (never dropped)
+    - Surface a clear, non-blocking notification so the user can resolve it
     - No model changes
+    This graceful-failure rule applies to ALL file mutations: tag edits, renames,
+    deletes, and playlist-wide tag operations.
 ```
 
 Renaming is synchronous and atomic (POSIX rename). The file stays in the same directory; only the name component changes.
+
+**Invalid-tagging files**: `TagEditorView` checks the active file's `taggingStatus`. When it is `.invalid`, the chip editor is disabled and replaced with an "invalid tag syntax" message plus a plain filename-rename field; tag add/remove/rename are not offered (they would rewrite the name and could drop the malformed bracket content). The editor re-enables automatically once a rename makes the filename parse as `.valid` or `.untagged`. In a Manager multi-selection, `.invalid` files are excluded from batch tag operations and surfaced for individual fixing.
 
 ### Playlist-wide tag operations
 
@@ -598,6 +650,7 @@ VideoPlaybackEngine
 - If looping is on → mpv's `loop-file` property handles replay internally.
 - If looping is off → `advanceToNext()` is called.
 - If the playlist has a filter active, the coordinator walks the unfiltered file list by `sortOrder`, skipping files whose tags don't match `FilterState`. `currentFileIndex` always refers to the unfiltered list so that disabling the filter restores the full sequence without losing position.
+- On each advance the coordinator triggers cloud prefetch for the upcoming files (see PlaybackCoordinator orchestration → Cloud prefetch).
 
 **HDR**: mpv handles HDR natively. With Vulkan/MoltenVK rendering, EDR pass-through is supported via mpv's `--target-colorspace-hint=yes`. The `CAMetalLayer`'s `wantsExtendedDynamicRangeContent` is set to `true` to enable HDR output on capable displays.
 
@@ -682,6 +735,8 @@ final class PlaybackCoordinator {
 }
 ```
 
+**Cloud prefetch**: On each file change (and when a playlist starts), the coordinator asks the `CloudFileService` to prefetch the next files in playback order, so they are local before playback reaches them. If the file playback is about to reach is still in the cloud, the coordinator requests its download immediately and the row shows the downloading indicator; if it cannot be made local in time, the same "advance to the next available file" rule used for missing files applies.
+
 ---
 
 ## 9. Hotkey system
@@ -715,17 +770,19 @@ Key event arrives
   3. Is it [space]?
      → If paused: unpause all (same as pressing Unpause in pause overlay).
      → If playing: advance to next file in active playlist.
-     → Audio overlay visible: applies to audio playlist instead of video/image.
+     → If the audio overlay holds key context: applies to the audio playlist instead of video/image.
        │
        ▼
-  4. Is the audio overlay visible (Compact or Extended)?
-     YES → route arrow keys to audio controls.
-     NO  → route to video/image player controls.
+  4. Does the audio overlay hold key context (revealed AND fully animated in)?
+     YES → route arrow keys, [space], [l], and seek to audio controls.
+     NO  → continue.
        │
        ▼
   5. Is app in Player mode?
-     YES → player hotkey table.
-     NO  → manager hotkey table.
+     YES → player hotkey table ([tab]/[arrow up] open Files & Tags; [arrow down]
+           closes it or reveals Compact audio).
+     NO  → manager hotkey table (arrow up/down = file-list navigation; the audio
+           overlay is opened by hover or the Audio section, not by arrows).
 ```
 
 ### Modifier key handling
@@ -784,7 +841,7 @@ func reshuffle(playlist: Playlist) async {
 |------|---------|-------------|
 | Playlists, files, preferences | SwiftData | On every mutation (SwiftData auto-save) |
 | Active playlist IDs | SwiftData (AppState) | On playlist activation/deactivation |
-| Paused state | SwiftData (AppState) | On pause/unpause and app background |
+| Paused state | SwiftData (AppState) | On pause/unpause and window close. Records the global paused flag plus per-channel "paused separately" flags (video/image, audio, slideshow). |
 | Last-played file index | SwiftData (Playlist) | On file advance |
 | File position within file | SwiftData (PlaylistFile) | Only when `playlist.preferences.filePositionPersistence` is enabled. Written periodically (every 5s) during playback and on file change/stop. |
 | Window frame | SwiftData (AppState) | On window move/resize (debounced) |
@@ -793,9 +850,9 @@ func reshuffle(playlist: Playlist) async {
 
 ### App lifecycle events
 
-- **Launch**: Load AppState from SwiftData. Reconstruct PlaybackCoordinator state. If paused playlists exist, restore them in paused state. Restore window frame.
-- **Window close** (not quit): Persist current state. Pause active playlists.
-- **Window reopen**: Restore paused state exactly as it was.
+- **Launch**: Load AppState from SwiftData. Reconstruct PlaybackCoordinator state. Restore each channel's paused state — channels paused separately stay paused; a recorded global pause is restored as a global pause. Restore window frame.
+- **Window close** (not quit): Persist current state. Record whether playback was globally paused and which channels were paused separately. Pause active playlists.
+- **Window reopen**: Restore paused state exactly as it was — separately-paused channels are not auto-unpaused.
 - **App termination**: Final persist of all playback positions and state.
 - **Folder becomes inaccessible** (bookmark stale): Surface error in playlist header with option to re-select folder.
 
@@ -809,9 +866,12 @@ func reshuffle(playlist: Playlist) async {
 | File missing during scan/update | Prune from playlist (Update mode) or don't include (Reshuffle). |
 | Corrupt/unplayable media file | Skip, advance to next. Increment skipped-files count. |
 | Folder access lost (stale bookmark) | Show inline error on playlist. Offer to re-select folder. |
-| File rename fails (permissions, collision) | Show inline error in tag editor. No model changes. |
-| Disk full during rename | Alert the user. No model changes. |
+| File rename fails (permissions, collision, read-only/offline volume) | Leave file untouched. Show a non-blocking notification. No model changes. |
+| File move-to-Trash fails | Leave file untouched. Show a non-blocking notification. No model changes. |
+| Disk full during rename | Leave file untouched. Show a non-blocking notification. No model changes. |
 | All files filtered out | Show "no files match filter" empty state. Playback stops if playing. |
+| File still in the cloud when playback reaches it | Request download on demand, show downloading indicator. If not local in time, advance to next available file. |
+| Cloud download fails / times out | Mark the file's status, advance to next available file (same as missing). |
 | Playlist folder deleted | Mark playlist as unavailable. Show in sidebar with warning icon. |
 
 ---
@@ -871,6 +931,7 @@ ShuTaPla/
 │   ├── FileSystemService.swift      // actor, folder scanning, rename, trash
 │   ├── TagParser.swift              // pure functions, no state
 │   ├── BookmarkService.swift        // security-scoped bookmark management
+│   ├── CloudFileService.swift       // iCloud status detection, on-demand download, prefetch
 │   └── ThumbnailService.swift       // async thumbnail generation + caching
 │
 ├── MPV/
@@ -913,6 +974,7 @@ ShuTaPla/
 │   │   ├── TagEditorView.swift          // multi-select chip input
 │   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
+│   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
 │   │   └── FileRowView.swift            // single file row in list
 │   │
 │   └── Settings/
@@ -930,7 +992,8 @@ ShuTaPla/
 │   ├── FileSystemServiceTests.swift
 │   ├── PlaybackCoordinatorTests.swift
 │   ├── OverlayManagerTests.swift
-│   └── HotkeyRouterTests.swift
+│   ├── HotkeyRouterTests.swift
+│   └── CloudFileServiceTests.swift
 │
 └── doc/
     ├── features.md
@@ -977,11 +1040,12 @@ Tests use **Swift Testing** (`import Testing`) as the primary framework. XCTest 
 
 | Layer | Approach |
 |-------|----------|
-| **TagParser** | Parameterized tests via `@Test(arguments:)` — a single test function covers valid tags, multiple bracket groups, empty brackets, short tags, and special characters as input rows. Pure functions — no mocking needed. `#expect` for assertions, `#require` for preconditions. |
+| **TagParser** | Parameterized tests via `@Test(arguments:)` — a single test function covers valid tags, multiple bracket groups, nested brackets, a stray unmatched bracket, empty/ineffective brackets (→ untagged), short tags, and special characters as input rows. Pure functions — no mocking needed. `#expect` for assertions, `#require` for preconditions. |
 | **FileSystemService** | Integration tests using temporary directories. Create known file structures, scan, verify results. Test rename and trash operations. Use `async` test functions with `await`. |
 | **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, pause/unpause semantics. |
-| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec. |
-| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio visible, etc.). |
+| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Files & Tags; key context transfers only when fully revealed. |
+| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key list navigation, `[tab]` opens Files & Tags). |
+| **CloudFileService** | Unit tests with a mock providing canned cloud statuses and a recording download requester. Verify status mapping, prefetch requests the next N files in order, on-demand download when playback reaches an in-cloud file, and advance-on-timeout. |
 | **UI** | Manual testing and SwiftUI Previews. Snapshot tests for overlay layouts if needed. |
 
 Services are accessed through protocols, allowing mock injection in tests. Protocol requirements are `async` to accommodate both actor-isolated and non-isolated (mock) conformers:
