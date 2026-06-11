@@ -66,7 +66,8 @@ Playlist
  ├── folderPath: String                // display-only, not used for access
  ├── mediaType: MediaType              // .video | .image | .audio
  ├── sortOrder: Int                    // user-defined ordering in sidebar
- ├── currentFileIndex: Int             // index into the unfiltered file list
+ ├── currentFileID: UUID?              // current/last-played file — an ID stays valid through Update prune/append, an index does not
+ ├── playbackState: PlaybackState      // .stopped | .playing | .paused — persisted per-playlist state
  ├── createdAt: Date
  │
  ├── preferences: PlaylistPreferences  // embedded value, not separate entity
@@ -77,14 +78,12 @@ Playlist
  │    ├── filePositionPersistence: Bool?      // nil = use global default
  │    └── viewMode: ViewMode                 // .list | .gallery
  │
- ├── filterState: FilterState          // embedded value
+ ├── filterState: FilterState          // embedded value — persisted tag filter
  │    ├── selectedTags: [String]
- │    ├── filterMode: FilterMode       // .and | .or
- │    ├── includeUntagged: Bool
- │    └── showInvalidTagging: Bool
+ │    └── filterMode: FilterMode       // .and | .or
  │
- ├── savedSearches: [SavedSearch]      // embedded array of value types
- │    └── each: { tags: [String], mode: FilterMode }
+ ├── savedSearches: [SavedSearch]      // 10 most recent unique multi-tag searches;
+ │    └── each: { tags: [String], mode: FilterMode }   // re-applying an existing one moves it to the top
  │
  ├── tagFrequency: [String: Int]       // per-playlist tag usage counts
  │
@@ -94,19 +93,16 @@ Playlist
       ├── fileName: String             // just the filename component
       ├── tags: [String]               // parsed from filename, cached
       ├── taggingStatus: TaggingStatus // .valid | .untagged | .invalid
+      ├── isSkipped: Bool              // unsupported / other-media-type file; kept for the skipped-files filter, never played or shuffled in
       ├── lastPosition: TimeInterval?  // for file-position persistence
       ├── sortOrder: Int               // shuffled order within playlist
       └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
-AppState (singleton, persisted)
- ├── activeVideoPlaylistId: UUID?
- ├── activeImagePlaylistId: UUID?
+AppStateModel (singleton, persisted)
+ ├── activeVideoPlaylistId: UUID?       // video and image share the visual channel:
+ ├── activeImagePlaylistId: UUID?       // at most one of these two is non-nil
  ├── activeAudioPlaylistId: UUID?
- ├── globalPaused: Bool                 // window closed while globally paused ([p]/[esc])
- ├── videoImagePausedSeparately: Bool   // paused via its own control — stays paused on reopen
- ├── audioPausedSeparately: Bool        // audio paused via its own control — stays paused
- ├── slideshowPausedSeparately: Bool    // slideshow paused via its own control — stays paused
- └── windowFrame: Data?               // encoded NSRect
+ └── windowFrame: Data?                 // encoded NSRect
 ```
 
 **Singleton pattern**: SwiftData has no built-in singleton mechanism. `AppStateModel` and `GlobalSettings` use a fetch-or-create pattern: on launch, fetch with `FetchDescriptor` (limit 1). If no result, insert a new instance with defaults. All access goes through a computed property on the app's container or state object that caches the fetched instance.
@@ -118,6 +114,7 @@ AppState (singleton, persisted)
 - **Security-scoped bookmarks** (`folderBookmark: Data`) are essential. A plain file path loses access after app restart on sandboxed macOS. On folder selection, the app creates a bookmark; on access, it resolves the bookmark and starts/stops security-scoped access.
 - **Relative paths in PlaylistFile** — stored relative to the playlist's root folder so that if the folder is moved and the bookmark is updated, file references remain valid.
 - **Tag data is denormalized** — tags are stored both per-file (as parsed arrays) and aggregated per-playlist (as `tagFrequency`). The per-file data is the cache; the per-playlist frequency drives UI ordering in filter/editor dropdowns.
+- **`currentFileID` instead of an index** — Update appends and prunes entries, which shifts positions; an ID reference stays valid through both. Sequence position is recovered via the file's `sortOrder`.
 
 ### Enums
 
@@ -127,14 +124,16 @@ enum ImageFitMode: String, Codable, Sendable { case fit, cover, original }
 enum ViewMode: String, Codable, Sendable { case list, gallery }
 enum FilterMode: String, Codable, Sendable { case and, or }
 enum TaggingStatus: String, Codable, Sendable { case valid, untagged, invalid }
-enum CloudStatus: String, Sendable { case local, inCloud, downloading }   // runtime only, not persisted
+enum PlaybackState: String, Codable, Sendable { case stopped, playing, paused }
+enum CloudStatus: String, Sendable { case local, inCloud, downloading }     // runtime only, not persisted
+enum ServiceFilter: String, Sendable { case untagged, invalidTagging, skipped }  // runtime only, not persisted
 ```
 
 ### Sendable conformance
 
-Types that cross isolation boundaries (e.g., from `FileSystemActor` to `@MainActor`) must be `Sendable`:
+Types that cross isolation boundaries (e.g., from `FileSystemService` to `@MainActor`) must be `Sendable`:
 
-- **`ScanResult`, `UpdateDelta`, `TagParseResult`** — value types returned from `FileSystemActor`. Conform to `Sendable` naturally as structs with Sendable fields.
+- **`ScanResult`, `UpdateDelta`, `TagParseResult`** — value types returned from `FileSystemService`. Conform to `Sendable` naturally as structs with Sendable fields.
 - **`MPVEvent`** — enum with value-type payloads (TimeInterval, Bool). Conforms to `Sendable`. Crosses from the MPVClient serial queue to MainActor via AsyncStream.
 - **`MPVClient`** — wraps an `OpaquePointer` (mpv_handle) and a serial `DispatchQueue`. Marked `@unchecked Sendable` with documented safety invariant: all access to `handle` is serialized through `queue`.
 - **All Codable embedded structs** (`PlaylistPreferences`, `FilterState`, `SavedSearch`) — pure value types, implicitly `Sendable`.
@@ -153,7 +152,7 @@ The app uses two layers of state:
 
 ```
                     ┌─────────────────────┐
-                    │     AppState        │  (persisted singleton)
+                    │   AppStateModel     │  (persisted singleton)
                     │  active playlist IDs│
                     └────────┬────────────┘
                              │ references
@@ -175,8 +174,9 @@ The app uses two layers of state:
 
 `@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds references to the SwiftData model context and the active playlist models. Responsible for:
 - Tracking which playlists are active (by media category).
-- Persisting active-playlist IDs and paused state to the SwiftData `AppState` singleton on change.
+- Persisting active-playlist IDs to the SwiftData `AppStateModel` singleton on change.
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
+- Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
 - Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
 
 #### PlaybackCoordinator
@@ -185,6 +185,8 @@ Owns both mpv instances (video, audio) and the image slideshow timer. Enforces c
 - At most one video **or** image playlist playing at a time.
 - At most one audio playlist playing in parallel.
 - Stopping one playlist does not affect the other channel.
+
+It also owns the single transient **suppression** flag: effective playback is `playing && !suppression`. `[p]`/`[esc]` (pause overlay) and window close activate suppression; Unpause (or `[p]`/`[space]` on the pause overlay) and window reopen lift it. Playlist states are untouched either way.
 
 Exposes playback state (playing/paused/stopped, current time, duration) as observable properties for UI binding.
 
@@ -202,7 +204,7 @@ State is an enum set, not a stack — overlays don't nest arbitrarily.
 
 Receives raw key events and routes them to the appropriate handler based on:
 1. Is a text input focused? → swallow the event (the field handles it).
-2. Is it `[esc]`? → apply the esc priority chain (unfocus input → close overlay → pause → close window).
+2. Is it `[esc]`? → apply the esc priority chain (unfocus input → close overlay → suppress → close window).
 3. Does the audio overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
 4. Default → player or manager hotkey table. In Manager mode, arrow keys are standard file-list navigation, not audio-overlay control.
 
@@ -221,14 +223,16 @@ Each playlist tracks its own playback state independently:
           │         ┌────▼─────┐         │
           │         │ Playing  │─────────┤
           │         └────┬─────┘         │
-          │              │ pause [p]     │
+          │              │ pause button  │
           │              │               │
           │         ┌────▼─────┐         │
           └─────────│ Paused   │─────────┘
-            unpause └──────────┘
+         play button └──────────┘
 ```
 
-State is stored on the runtime `PlaybackCoordinator`, not on the SwiftData model. On window close or app quit, the coordinator records to the persisted `AppState` both whether playback was *globally* paused (`[p]`/`[esc]`) and which channels were paused *separately* via their own controls. Channels paused separately stay paused on reopen; a global pause is restored as a global pause and is not promoted to a per-channel separate pause.
+The state is persisted per playlist (`Playlist.playbackState`); the coordinator mirrors it at runtime. The play/pause button in a playlist's own controls (video/image bottom bar, audio overlay) toggles Playing ↔ Paused; making another playlist of the same kind active resets the previous one to Stopped.
+
+**Suppression** is a single transient layer on top of these states, owned by the coordinator and never persisted: effective playback is `playing && !suppression`. It is active while the pause overlay is shown or the window is closed; when it lifts (Unpause, window reopen, app relaunch), Playing playlists continue and Paused playlists stay paused.
 
 ---
 
@@ -457,7 +461,7 @@ struct ShuTaPlaApp: App {
 
 Implemented as a custom three-column layout using `HSplitView` with collapsible side panels. `NavigationSplitView` is not used — its fixed column semantics and limited width control don't suit a media manager with independently collapsible panels. The left and right panels have toggle buttons to collapse/expand, with animated width transitions. `HSplitView` does not natively support collapsing — the collapse is implemented by conditionally setting the panel's frame width to zero (or removing its content) and animating the transition with `withAnimation`.
 
-**Playlists panel structure**: The left panel groups playlists into sections by media type — **Video**, **Image** — each with full management controls (create, rename, delete, reorder via drag). At the bottom, a collapsed **Audio** section acts as a visual hint; clicking it opens the audio overlay (compact or extended). Playlists are rendered from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro — `@ObservationIgnored` would be required), filtered by `mediaType`, sorted by `sortOrder`.
+**Playlists panel structure**: The left panel groups playlists into sections by media type — **Video**, **Image** — each with full management controls (create, rename, delete, reorder via drag). At the top, a collapsed **Audio** section acts as a visual hint; clicking it opens the extended audio overlay (where audio playlists are managed). Playlists are rendered from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro — `@ObservationIgnored` would be required), filtered by `mediaType`, sorted by `sortOrder`.
 
 **Playlists overlay (Player mode)**: The left-hover overlay in Player mode mirrors this section structure but is read-only — no create/rename/delete/reorder. Selecting a playlist immediately starts playing it. The bottom Audio hint opens the extended audio overlay.
 
@@ -524,8 +528,8 @@ final class OverlayManager {
         case .playlistsSidebar, .bottomControls:
             // Hover overlays are suppressed while Files & Tags or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
-        case .pauseOverlay:
-            break
+        case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
+            active.removeAll()
         }
         active.insert(overlay)
     }
@@ -556,6 +560,7 @@ User picks folder
        │
        ▼
   Filter to chosen media type only
+  (other files are retained as skipped entries — isSkipped — for the skipped-files filter)
        │
        ▼
   Parse tags from each filename (TagParser)
@@ -649,7 +654,8 @@ VideoPlaybackEngine
 **End-of-file handling**: When mpv fires an `eof-reached` event:
 - If looping is on → mpv's `loop-file` property handles replay internally.
 - If looping is off → `advanceToNext()` is called.
-- If the playlist has a filter active, the coordinator walks the unfiltered file list by `sortOrder`, skipping files whose tags don't match `FilterState`. `currentFileIndex` always refers to the unfiltered list so that disabling the filter restores the full sequence without losing position.
+- Advancing walks the file list by `sortOrder`, starting after the current file and wrapping past the last file to the first (previous from the first file wraps to the last). The order is never reshuffled by playback. With a filter active, non-matching files are skipped, so wrap-around applies to the filtered sequence.
+- The current file is tracked by `currentFileID`, so toggling filters or an Update prune/append never loses the position.
 - On each advance the coordinator triggers cloud prefetch for the upcoming files (see PlaybackCoordinator orchestration → Cloud prefetch).
 
 **HDR**: mpv handles HDR natively. With Vulkan/MoltenVK rendering, EDR pass-through is supported via mpv's `--target-colorspace-hint=yes`. The `CAMetalLayer`'s `wantsExtendedDynamicRangeContent` is set to `true` to enable HDR output on capable displays.
@@ -728,10 +734,11 @@ final class PlaybackCoordinator {
         }
     }
     
-    // Global pause ([p] key) affects video/image + audio
-    // But tracks which audio was already paused to avoid unpausing it
-    func pauseAll() { ... }
-    func unpauseAll() { ... }
+    // Suppression ([p], pause overlay, window close) — transient, never persisted.
+    // Effective playback = playing && !isSuppressed; playlist states are unchanged.
+    private(set) var isSuppressed = false
+    func suppress() { ... }
+    func unsuppress() { ... }
 }
 ```
 
@@ -747,6 +754,7 @@ Key events are captured at the NSWindow level via `NSEvent.addLocalMonitorForEve
 - Works in fullscreen (unlike SwiftUI `.onKeyPress` which can lose focus).
 - Intercepts events before they reach SwiftUI's responder chain.
 - Allows the HotkeyRouter to decide routing before any view sees the event.
+- Returning `nil` from the monitor consumes the event — this also keeps `[esc]` from triggering the system's default exit-from-fullscreen behavior, so the esc priority chain stays in control.
 
 ### Routing priority
 
@@ -762,13 +770,13 @@ Key event arrives
   2. Is it [esc]? → Apply esc priority chain:
      a. Tag input focused → unfocus
      b. Overlay open → close topmost
-     c. Playing → pause
-     d. Paused → close window
-     e. Manager → close window
+     c. Playing → activate suppression, show the pause overlay
+     d. Suppressed (pause overlay shown) → close window; suppression stays active while closed
+     e. Manager → cancel an in-progress operation (rename, dialog, tagging) if any, otherwise close window
        │
        ▼
   3. Is it [space]?
-     → If paused: unpause all (same as pressing Unpause in pause overlay).
+     → If the pause overlay is shown: end suppression (same as pressing Unpause).
      → If playing: advance to next file in active playlist.
      → If the audio overlay holds key context: applies to the audio playlist instead of video/image.
        │
@@ -795,10 +803,14 @@ Key event arrives
 
 ## 10. Concurrency model
 
+### Project settings
+
+Swift 6 language mode with **default actor isolation set to `MainActor`** (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and Approachable Concurrency — the Xcode 26 defaults for new projects). Everything is MainActor-isolated unless declared otherwise; the explicit `@MainActor` annotations shown in this document are then redundant but kept for clarity. Off-main work is opted into explicitly: `actor` types (`FileSystemService`), `nonisolated`/`@concurrent` functions, and the MPVClient serial queue.
+
 ### Actor boundaries
 
 ```swift
-actor FileSystemActor {
+actor FileSystemService {
     // All disk I/O is serialized through this actor
     func scanFolder(...) async throws -> ScanResult
     func renameFile(...) async throws -> URL
@@ -815,7 +827,7 @@ All `@Observable` state objects and SwiftUI views run on `@MainActor`. When a se
 ```swift
 // In a view model or state object (@MainActor)
 func reshuffle(playlist: Playlist) async {
-    let result = await fileSystemActor.scanFolder(bookmark: playlist.folderBookmark)
+    let result = await fileSystemService.scanFolder(bookmark: playlist.folderBookmark)
     // Back on MainActor — safe to update SwiftData and UI state
     playlist.files = result.files
 }
@@ -826,9 +838,9 @@ func reshuffle(playlist: Playlist) async {
 | Operation | Approach |
 |-----------|----------|
 | Folder scan (create/reshuffle) | Structured Task, shows progress indicator |
-| Auto-update on playlist activation | Structured `Task` from `@MainActor` context; the `await fileSystemActor.scanFolder(...)` call hops off MainActor naturally via actor isolation. Non-blocking — results merged on return. |
+| Auto-update on playlist activation | Structured `Task` from `@MainActor` context; the `await fileSystemService.scanFolder(...)` call hops off MainActor naturally via actor isolation. Non-blocking — results merged on return. |
 | Thumbnail generation | TaskGroup, parallel per-file, cancellable on scroll |
-| File rename (tag edit) | Inline await on FileSystemActor, fast enough to feel synchronous |
+| File rename (tag edit) | Inline await on FileSystemService, fast enough to feel synchronous |
 | Batch tag rename/remove | Structured Task with progress, cancellable |
 
 ---
@@ -840,19 +852,19 @@ func reshuffle(playlist: Playlist) async {
 | Data | Storage | When written |
 |------|---------|-------------|
 | Playlists, files, preferences | SwiftData | On every mutation (SwiftData auto-save) |
-| Active playlist IDs | SwiftData (AppState) | On playlist activation/deactivation |
-| Paused state | SwiftData (AppState) | On pause/unpause and window close. Records the global paused flag plus per-channel "paused separately" flags (video/image, audio, slideshow). |
-| Last-played file index | SwiftData (Playlist) | On file advance |
+| Active playlist IDs | SwiftData (AppStateModel) | On playlist activation/deactivation |
+| Playback state (per playlist) | SwiftData (Playlist) | On every Stopped/Playing/Paused transition. Suppression is runtime-only and never stored. |
+| Last-played file (`currentFileID`) | SwiftData (Playlist) | On file advance |
 | File position within file | SwiftData (PlaylistFile) | Only when `playlist.preferences.filePositionPersistence` is enabled. Written periodically (every 5s) during playback and on file change/stop. |
-| Window frame | SwiftData (AppState) | On window move/resize (debounced) |
+| Window frame | SwiftData (AppStateModel) | On window move/resize (debounced) |
 | Security-scoped bookmarks | SwiftData (Playlist) | On playlist creation |
 | Thumbnail cache | File system (Caches dir) | On generation |
 
 ### App lifecycle events
 
-- **Launch**: Load AppState from SwiftData. Reconstruct PlaybackCoordinator state. Restore each channel's paused state — channels paused separately stay paused; a recorded global pause is restored as a global pause. Restore window frame.
-- **Window close** (not quit): Persist current state. Record whether playback was globally paused and which channels were paused separately. Pause active playlists.
-- **Window reopen**: Restore paused state exactly as it was — separately-paused channels are not auto-unpaused.
+- **Launch**: Load persisted state and reconstruct the PlaybackCoordinator. Playlists in Playing state resume, Paused ones stay paused — relaunching behaves the same as reopening the window. Restore window frame.
+- **Window close** (not quit): Persist current state and activate suppression. Playlist states are unchanged.
+- **Window reopen**: Lift suppression — Playing playlists continue, Paused ones stay paused.
 - **App termination**: Final persist of all playback positions and state.
 - **Folder becomes inaccessible** (bookmark stale): Surface error in playlist header with option to re-select folder.
 
@@ -905,8 +917,10 @@ While ShuTaPla is primarily hotkey-driven in Player mode, all interactive UI mus
 
 ## 14. Directory structure
 
+The repo root contains the Xcode file-system-synchronized groups `ShuTaPla/` (app source), `ShuTaPlaTests/`, `ShuTaPlaUITests/`, and `doc/` — files created on disk inside them appear in Xcode automatically.
+
 ```
-ShuTaPla/
+ShuTaPla/                            (app source)
 ├── App/
 │   ├── ShuTaPlaApp.swift            // @main, scene definition, container setup
 │   └── AppConstants.swift           // extension maps, thresholds, magic numbers
@@ -963,7 +977,7 @@ ShuTaPla/
 │   │   ├── VideoPlayerView.swift        // hosts MPVMetalView via NSViewRepresentable
 │   │   ├── ImagePlayerView.swift        // image display + pan/zoom
 │   │   ├── PauseOverlay.swift
-│   │   ├── PlaybackControlsBar.swift    // bottom hover controls (video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
+│   │   ├── PlaybackControlsBar.swift    // bottom hover controls (both: prev/play-pause/stop/next; video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
 │   │   └── PlaylistsOverlay.swift       // left hover playlist selector
 │   │
 │   ├── Audio/
@@ -984,20 +998,20 @@ ShuTaPla/
 │   ├── URL+MediaType.swift              // extension classification
 │   └── NSWindow+Fullscreen.swift        // fullscreen helpers
 │
-├── Resources/
-│   └── Assets.xcassets
-│
-├── Tests/
-│   ├── TagParserTests.swift
-│   ├── FileSystemServiceTests.swift
-│   ├── PlaybackCoordinatorTests.swift
-│   ├── OverlayManagerTests.swift
-│   ├── HotkeyRouterTests.swift
-│   └── CloudFileServiceTests.swift
-│
-└── doc/
-    ├── features.md
-    └── architecture.md
+└── Resources/
+    └── Assets.xcassets
+
+ShuTaPlaTests/                       (unit tests — Swift Testing)
+├── TagParserTests.swift
+├── FileSystemServiceTests.swift
+├── PlaybackCoordinatorTests.swift
+├── OverlayManagerTests.swift
+├── HotkeyRouterTests.swift
+└── CloudFileServiceTests.swift
+
+doc/
+├── features.md
+└── architecture.md
 ```
 
 ---
@@ -1026,7 +1040,7 @@ macOS sandbox (even for direct-distribution apps) requires security-scoped bookm
 
 ### Why a single actor for file I/O
 
-File system operations on the same folder must not interleave (renaming a file while scanning could produce inconsistent results). A single `FileSystemActor` serializes all disk access without explicit locking, using Swift's actor model for safety.
+File system operations on the same folder must not interleave (renaming a file while scanning could produce inconsistent results). A single actor (`FileSystemService`) serializes all disk access without explicit locking, using Swift's actor model for safety.
 
 ### Why embedded value types for preferences/filters
 
@@ -1036,13 +1050,13 @@ Using separate SwiftData entities for PlaylistPreferences, FilterState, and Save
 
 ## 16. Testing strategy
 
-Tests use **Swift Testing** (`import Testing`) as the primary framework. XCTest is not used — there is no UI automation or performance measurement in v1 that requires it.
+Tests use **Swift Testing** (`import Testing`) for all unit and integration tests. The `ShuTaPlaUITests` target stays on XCTest (`XCUIApplication` requires it); in v1 UI coverage comes from manual testing and Previews.
 
 | Layer | Approach |
 |-------|----------|
 | **TagParser** | Parameterized tests via `@Test(arguments:)` — a single test function covers valid tags, multiple bracket groups, nested brackets, a stray unmatched bracket, empty/ineffective brackets (→ untagged), short tags, and special characters as input rows. Pure functions — no mocking needed. `#expect` for assertions, `#require` for preconditions. |
 | **FileSystemService** | Integration tests using temporary directories. Create known file structures, scan, verify results. Test rename and trash operations. Use `async` test functions with `await`. |
-| **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, pause/unpause semantics. |
+| **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, and suppression vs per-playlist pause (`playback = playing && !suppression`). |
 | **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Files & Tags; key context transfers only when fully revealed. |
 | **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key list navigation, `[tab]` opens Files & Tags). |
 | **CloudFileService** | Unit tests with a mock providing canned cloud statuses and a recording download requester. Verify status mapping, prefetch requests the next N files in order, on-demand download when playback reaches an in-cloud file, and advance-on-timeout. |
@@ -1058,7 +1072,7 @@ protocol FileSystemProviding: Sendable {
 }
 
 // Actor conformance — actor isolation satisfies the async requirement naturally
-extension FileSystemActor: FileSystemProviding {}
+extension FileSystemService: FileSystemProviding {}
 
 // Mock for tests — struct or final class, no actor needed
 struct MockFileSystem: FileSystemProviding {

@@ -7,6 +7,10 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 - `doc/features.md` — complete feature specification
 - `doc/architecture.md` — system design and architecture (17 sections)
 
+## Writing rules
+
+**No residue from dismissed alternatives.** When a choice, code, or prose is corrected or replaced, never describe the dismissed version in artifacts (docs, plans, comments, commit messages) — no "it is no longer X", "this does not do Y anymore", "unlike before". Mention the former state only when the current choice is hard to understand without it, and only as an explanation of the current choice.
+
 ## Claude Code configuration
 
 This project uses `~/.claude-ios/` as the Claude Code configuration directory (not the default `~/.claude/`). MCP servers, skills, settings, and memory are all stored there.

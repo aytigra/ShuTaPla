@@ -14,8 +14,9 @@ Set up the Xcode project structure (directories per architecture §14), SwiftDat
 - `AppConstants.swift` — extension maps (video/image/audio extensions), dominance threshold (80%)
 - All SwiftData models: `Playlist`, `PlaylistFile`, `AppStateModel`, `GlobalSettings`
 - All embedded value types: `PlaylistPreferences`, `FilterState`, `SavedSearch`
-- All enums: `MediaType`, `ImageFitMode`, `ViewMode`, `FilterMode`, `TaggingStatus`, `CloudStatus` (runtime-only, not persisted)
-- `AppStateModel` paused fields capture both the global pause and per-channel "paused separately" flags (video/image, audio, slideshow)
+- All enums: `MediaType`, `ImageFitMode`, `ViewMode`, `FilterMode`, `TaggingStatus`, `PlaybackState`, plus runtime-only `CloudStatus` and `ServiceFilter`
+- `Playlist.playbackState` persists the per-playlist Stopped/Playing/Paused state; `Playlist.currentFileID` tracks the current file by ID (stays valid through Update prune/append)
+- `AppStateModel` holds active playlist IDs (video and image share the visual channel — at most one of the two is non-nil) and the window frame
 - Fetch-or-create singleton pattern for `AppStateModel` and `GlobalSettings`
 
 **Testable:**
@@ -36,6 +37,7 @@ Pure-function service with no dependencies on other app code.
 - A single empty bracket pair (`[]`) → untagged (cleaned up on next edit); a pair where any token isn't a valid tag (e.g. `[beach ab]`, `[a b c]`) → invalid (surfaced, never silently dropped)
 - Tag validation: letters, digits, underscore, minimum 3 chars
 - Case-insensitive matching, on-disk casing preserved
+- Duplicates never accumulate: `addTag` is a no-op when the file already has the tag (case-insensitively); `renameTag` collapses a resulting within-file duplicate to a single instance
 - Removing last tag removes empty brackets from filename
 
 **Testable:**
@@ -49,6 +51,7 @@ Pure-function service with no dependencies on other app code.
   - A valid group requires every token to conform (letters/digits/underscore, ≥ 3 chars)
   - Adding a too-short or special-character tag is rejected by the editor
   - Tag add/remove/rename produce correct filenames
+  - Adding an already-present tag (any casing) leaves the filename unchanged; rename collapses duplicates
   - Bracket removal when last tag removed
 
 ---
@@ -103,7 +106,7 @@ The left collapsible panel with playlist CRUD and sections.
 
 **Deliverables:**
 - `ManagerView.swift` — `HSplitView` three-column layout (left, center, right panels), collapse/expand for side panels
-- `PlaylistSidebar.swift` — sections by media type (Video, Image), playlist rows with selection, Audio hint at bottom
+- `PlaylistSidebar.swift` — sections by media type (Video, Image), playlist rows with selection, collapsed Audio section at the top (opens the extended audio overlay)
 - Playlist CRUD: create (folder picker), rename (inline editing), delete (with confirmation)
 - Playlist reorder via drag within section
 - `@Query` filtered by `mediaType`, sorted by `sortOrder`
@@ -132,7 +135,7 @@ The file list and playlist header with basic controls.
 - Delete (single and multi-select) → trash on disk, remove from playlist
 - Show in Finder → `NSWorkspace.shared.activateFileViewerSelecting`
 - Reshuffle and Update button actions (invoke FileSystemService, update models)
-- Skipped-files notice, invalid-tagging notice
+- Counter notices for untagged / invalid tagging / skipped files (shown only when the count is non-zero; clicking activates the corresponding service filter — Task 7)
 
 **Testable:**
 - File list renders all files from active playlist
@@ -156,10 +159,11 @@ Tag editing and filter controls.
 - Tag add/remove on selected files → file rename on disk → model update → tag frequency cache update
 - Multi-select tag editing: show intersection of tags, add applies to all, remove applies to all that have it
 - Playlist-wide tag operations: rename tag across all files, remove tag across all files
-- `FilterBar.swift` — tag multi-select, AND/OR switch, "Untagged" toggle, "Invalid tagging" toggle
-- Saved multi-tag searches: save, list, re-select
+- `FilterBar.swift` — tag multi-select, AND/OR switch
+- Service filters (Untagged / Invalid tagging / Skipped): activated/deactivated by clicking the counter notices, mutually exclusive with each other, temporarily override the tag filter while active; Manager mode only, runtime-only state
+- Saved multi-tag searches: 10 most recent unique combinations (tag set + AND/OR operator), re-applying an existing one moves it to the top, manual removal
 - Filtered file list: computed and cached on AppState, drives file list display
-- Filter state persisted per playlist
+- Filter state persisted per playlist; service filters are not persisted
 
 **Testable:**
 - Tag editor shows correct chips for single file
@@ -168,9 +172,9 @@ Tag editing and filter controls.
 - Multi-select shows tag intersection
 - AND filter: only files with ALL selected tags shown
 - OR filter: files with ANY selected tag shown
-- "Untagged" filter shows files with no brackets
-- "Invalid tagging" filter shows files with multiple bracket groups
-- Saved search: save, recall, produces same filter state
+- Untagged service filter shows files with no brackets; Invalid tagging shows files with invalid tagging; Skipped lists non-playable files
+- Activating a service filter deactivates the other service filters and the tag filter; deactivating restores the tag filter
+- Saved search: save, recall, produces same filter state; re-applying an existing combination moves it to the top instead of duplicating
 - Switching playlists restores that playlist's filter
 
 ---
@@ -249,23 +253,26 @@ Playback engines that own MPVClient (video) or timer (images) and expose observa
 Orchestration of engines and the player view shell.
 
 **Deliverables:**
-- `PlaybackCoordinator.swift` — owns all three engines, enforces mutual exclusivity (one video XOR image, plus one audio), `play(playlist:)`, `pauseAll()`, `unpauseAll()`, `stop(playlist:)`
-- Track which audio was independently paused for correct unpause semantics
+- `PlaybackCoordinator.swift` — owns all three engines, enforces mutual exclusivity (one video XOR image, plus one audio), `play(playlist:)`, `stop(playlist:)`, per-playlist pause/unpause
+- Suppression: transient `isSuppressed` flag with `suppress()`/`unsuppress()` — effective playback is `playing && !suppression`, playlist states are untouched and never persisted with it
+- Per-playlist Stopped/Playing/Paused mirrored to `Playlist.playbackState`; making another playlist of the same kind active resets the previous one to Stopped
+- Advance/previous with wrap-around: past the last file wraps to the first, previous from the first wraps to the last (applies to the filtered sequence when a filter is active); order is never reshuffled by playback
 - `PlayerView.swift` — fullscreen container, switches between `VideoPlayerView` and `ImagePlayerView` based on active playlist type
 - `VideoPlayerView.swift` — hosts `MPVMetalView` via `NSViewRepresentable`
 - `ImagePlayerView.swift` — image display with pan/zoom gestures
 - Fullscreen transition: `NSWindow.toggleFullScreen` via NSView bridge on entering/exiting player mode
-- `PauseOverlay.swift` — opaque overlay with Unpause and Stop buttons
-- `[p]`/`[esc]` global pause also pauses the parallel audio playlist (unless audio was already paused separately); Unpause resumes only what this action paused
-- Basic `[p]` pause and `[space]` unpause/next
+- `PauseOverlay.swift` — opaque overlay (covers everything) with Unpause and Stop buttons
+- `[p]`/`[esc]` activates suppression and shows the pause overlay (halts all playback, including audio); Unpause ends it — Playing playlists continue, Paused playlists stay paused
+- Basic `[p]` suppression and `[space]` end-suppression/next
 
 **Testable:**
 - PlaybackCoordinator: start video → stop image, start image → stop video
 - Start audio → runs in parallel with video/image
-- pauseAll → both channels paused, unpauseAll → both resumed
-- Audio was independently paused → unpauseAll does not unpause it
+- suppress → playback halts on both channels, playlist states unchanged; unsuppress → Playing playlists resume
+- Playlist in its own Paused state → unsuppress does not resume it
+- Advance past last file wraps to first; previous from first wraps to last; filtered sequence wraps within matches
 - Player view enters fullscreen, shows correct content for video vs. image
-- Pause overlay appears on `[p]`, Unpause resumes, Stop returns to manager
+- Pause overlay appears on `[p]`, Unpause ends suppression, Stop returns to manager
 
 ---
 
@@ -279,12 +286,13 @@ Global key event handling and routing.
 - Manager mode hotkeys: `[arrow up/down]` = file-list navigation (standard), `[esc]` (close window), `[delete]` (trash selected). The audio overlay is opened by top-edge hover or the left-panel Audio section — not by arrow keys
 - Right Option key detection via `event.keyCode == 61`
 - Text input detection: skip hotkey processing when first responder is text field
+- The monitor returns `nil` for handled events, which also keeps `[esc]` from triggering the system's default exit-from-fullscreen behavior
 
 **Testable:**
 - Synthetic NSEvent with `[space]` when playing → advances to next file
-- `[space]` when paused → unpauses
-- `[p]` → pauses, shows overlay
-- `[esc]` priority: overlay open → closes overlay, playing → pauses, paused → closes window
+- `[space]` when the pause overlay is shown → ends suppression
+- `[p]` → activates suppression, shows the pause overlay
+- `[esc]` priority: overlay open → closes overlay, playing → suppresses + pause overlay, suppressed → closes window, Manager → cancels in-progress operation or closes window
 - `[l]` → loop toggles
 - `[right option]+[arrow right]` → seek +3s
 - Text field focused → keys pass through to text field, not hotkey router
@@ -310,6 +318,7 @@ Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 **Testable:**
 - Show audioExtended → filesTags and playlistsSidebar removed from active set
 - Show filesTags → audioCompact and bottomControls removed
+- Show pauseOverlay → all other overlays removed (suppression UI covers the whole screen)
 - Show audioCompact → closing on hotkey overlay open
 - Hover zone fires callback on cursor enter/exit at screen edge
 - Animated transitions play correctly (visual verification)
@@ -321,15 +330,15 @@ Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 The three major overlays in Player mode.
 
 **Deliverables:**
-- `PlaybackControlsBar.swift` — bottom hover: previous, stop, next, loop toggle, progress/scrub, volume slider (video); previous, stop, next, slideshow toggle, interval selector (image); file list button to toggle Files & Tags
-- `FilesTagsOverlayView.swift` — slides up from bottom, **simplified single-file** surface (bulk multi-select editing stays in Manager mode). Two sections: file list with filter controls (reuses FilterBar), tag editor (reuses TagEditorView) targeting the **currently active file only**. Per-file interactions: double-click to jump, rename, delete, show in Finder
-- `PlaylistsOverlay.swift` — left hover: video and image sections (read-only, no CRUD), audio hint at bottom. Selecting a playlist starts playing immediately
+- `PlaybackControlsBar.swift` — bottom hover: previous, play/pause, stop, next, loop toggle, progress/scrub, volume slider (video); previous, play/pause, stop, next, slideshow toggle, interval selector (image); file list button to toggle Files & Tags. The play/pause button toggles the playlist's own Playing/Paused state — never suppression
+- `FilesTagsOverlayView.swift` — slides up from bottom, **simplified single-file** surface (bulk multi-select editing stays in Manager mode). Two sections: file list with filter controls (reuses FilterBar — tag filtering only, no service filters), tag editor (reuses TagEditorView) targeting the **currently active file only**. Per-file interactions: double-click to jump, rename, delete, show in Finder
+- `PlaylistsOverlay.swift` — left hover: video and image sections (read-only, no CRUD), collapsed Audio section at the top (opens the extended audio overlay). Selecting a playlist starts playing immediately
 - Volume slider per video/audio playlist, persisted
 - Progress bar / scrub for video (seeks via MPVClient)
 - Slideshow interval selector for image playlists
 
 **Testable:**
-- Bottom controls: previous/next advance files, loop toggles, volume changes, scrub seeks
+- Bottom controls: previous/next advance files, play/pause toggles the playlist's Paused state (suppression untouched), loop toggles, volume changes, scrub seeks
 - Files & Tags: file list shows filtered files, double-click jumps player, tag edits rename files
 - Playlists overlay: selecting playlist starts it, audio hint opens extended audio
 - Controls dismiss on mouse leave (via hover zone)
@@ -341,22 +350,22 @@ The three major overlays in Player mode.
 The audio player UI that coexists with video/image playback.
 
 **Deliverables:**
-- `AudioOverlayCompact.swift` — current track info, play/pause, prev/next, stop, progress/scrub, volume, loop toggle
-- `AudioOverlayExtended.swift` — expands compact to include: audio playlist selector (audio playlists only), file list with filtering, tag editor for current track
+- `AudioOverlayCompact.swift` — current track info, play/pause (sets the audio playlist's own Paused state, separate from suppression), prev/next, stop, progress/scrub, volume, loop toggle
+- `AudioOverlayExtended.swift` — expands compact into the manager view for audio playlists: audio-only playlists panel with full management (create, rename, delete, reorder), file list with filtering, tag editor for current track; works during playback
 - Audio overlay state machine: Hidden → Compact → Extended via `[arrow down]`, back to Hidden via `[arrow up]`
 - Top-edge hover → compact (auto-dismiss on mouse leave)
 - `[arrow down]` compact → stays open until explicitly closed
 - Audio hotkey context switching: the audio overlay holds key context only once **fully revealed**; then arrows/space/loop/seek target the audio playlist
 - Extended file list is a simple vertical list — `[arrow left]`/`[arrow right]` switch tracks, `[arrow up]` progressively closes; arrows do not move a list selection (except when a text field inside is in edit mode)
 - Audio playlist selection in extended view → starts playing selected audio playlist
-- In Manager mode: Audio hint in playlists panel bottom → opens compact/extended overlay
+- In Manager mode: Audio section at the top of the playlists panel → opens the extended audio overlay; compact appears only via top-edge hover (never arrow keys, so arrows stay free for file-list navigation)
 
 **Testable:**
 - Arrow down from hidden → compact appears, arrow down again → extended
 - Arrow up from either → hidden
 - Top hover → compact, mouse leave → dismisses
-- Audio controls: play/pause/prev/next/stop work on audio engine
-- Extended: selecting audio playlist switches audio playback
+- Audio controls: play/pause/prev/next/stop work on audio engine; pause persists as the playlist's own Paused state
+- Extended: selecting audio playlist switches audio playback; create/rename/delete/reorder work for audio playlists
 - Tag editing in extended overlay renames audio files
 
 ---
@@ -370,9 +379,9 @@ Global settings UI, full state persistence, and app lifecycle handling.
 - Per-playlist preference overrides surfaced in playlist header or context
 - File-position persistence: write position every 5s during playback and on file change/stop (when enabled)
 - App lifecycle:
-  - Launch: restore AppState, reconstruct PlaybackCoordinator, restore paused playlists in paused state, restore window frame
-  - Window close (not quit): persist state, pause playlists, hide window, keep app running
-  - Window reopen (Dock click): restore exact prior state
+  - Launch: restore persisted state, reconstruct PlaybackCoordinator — Playing playlists resume, Paused stay paused (relaunch behaves like reopening the window), restore window frame
+  - Window close (not quit): persist state, activate suppression, hide window, keep app running; playlist states unchanged
+  - Window reopen (Dock click): lift suppression — Playing playlists continue, Paused stay paused
   - App termination: final persist of all positions and state
 - Window frame persistence (debounced on move/resize)
 - Stale bookmark handling: inline error on playlist, option to re-select folder
@@ -381,8 +390,8 @@ Global settings UI, full state persistence, and app lifecycle handling.
 - Change global default → new playlists use it
 - Per-playlist override → overrides global
 - File-position persistence: stop and restart → resumes at saved position
-- Quit and relaunch → active playlists, paused state, window frame restored
-- Close window → app still running, reopen restores state
+- Quit and relaunch → active playlists and window frame restored; Playing playlists resume, Paused stay paused
+- Close window → app still running, playback halted (suppressed); reopen → Playing playlists continue
 - Stale bookmark → error shown, re-select folder works
 
 ---

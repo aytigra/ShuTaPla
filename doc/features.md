@@ -20,11 +20,11 @@ A video or image playlist can play in fullscreen while an audio playlist plays i
 
 The goal is good support for common formats, not exhaustive coverage.
 
-- **Video**: mp4, webm primarily(including VP9). Other common formats accepted opportunistically. HDR supported where the OS and display allow.
+- **Video**: mp4 and webm (including VP9) primarily. Other common formats accepted opportunistically. HDR supported where the OS and display allow.
 - **Image**: jpeg, png, jpeg xl, gif, and other common formats. HDR supported where available.
 - **Audio**: mp3 primarily, plus other common formats.
 
-Unsupported files in a selected folder are ignored silently. A small, non-intrusive notice in the playlist info area surfaces the count of skipped files so the user knows they exist without cluttering the main UI.
+Unsupported files in a selected folder are ignored silently. A small, non-intrusive notice in the playlist info area surfaces the count of skipped files so the user knows they exist without cluttering the main UI. Clicking the notice activates the Skipped service filter (see Filtering and search), which lists the skipped files for inspection — they can be shown in Finder or trashed, but never play.
 
 ### Cloud / offline files
 
@@ -33,7 +33,7 @@ Source folders may live in cloud storage (for example an iCloud Drive folder) wh
 - An **"in the cloud"** indicator marks files that are not yet downloaded (placeholder / evicted).
 - A **"downloading from cloud"** indicator marks files that are actively being fetched.
 
-These indicators appear in every file list (Manager list and gallery, and the Files & Tags overlay). To avoid stalls, the app **prefetches ahead**: while the current file plays, it requests the download of the next file(s) in line so they are ready by the time playback reaches them. If a file is still in the cloud when playback reaches it, the app requests its download immediately and shows the downloading indicator; if it cannot be made available in time, playback advances to the next available file (unless file was selected explicitly by double-click from file list, in this case it will wait for download to finish).
+These indicators appear in every file list (Manager list and gallery, and the Files & Tags overlay). To avoid stalls, the app **prefetches ahead**: while the current file plays, it requests the download of the next files in line (default: the next 3) so they are ready by the time playback reaches them. If a file is still in the cloud when playback reaches it, the app requests its download immediately and shows the downloading indicator; if it cannot be made available in time, playback advances to the next available file (unless the file was selected explicitly by double-click from a file list — in that case playback waits for the download to finish).
 
 ## First launch and creating playlists
 
@@ -47,7 +47,7 @@ A playlist can be created in three equivalent ways:
 
 Each path opens a folder picker.
 
-When a folder is read, the app classifies its contents by media type. A folder is **dominant** in one type when the other types are only an incidental minority (for example, a handful of album-cover images among many audio tracks):
+When a folder is read, the app classifies its contents by media type. A folder is **dominant** in one type when the other types are only an incidental minority (for example, a handful of album-cover images among many audio tracks) — concretely, when at least 80% of the recognized media files are of that type:
 
 - All-video or video-dominant → video playlist.
 - All-image or image-dominant → image playlist.
@@ -56,6 +56,8 @@ When a folder is read, the app classifies its contents by media type. A folder i
 
 A single folder may back multiple playlists (for instance, an audio playlist and an image playlist over the same folder).
 
+If the selected folder contains no supported media files at all, the app shows a brief message and does not create a playlist.
+
 ## Playlists
 
 Each playlist stores:
@@ -63,14 +65,14 @@ Each playlist stores:
 - Its origin folder path.
 - The full list of files found recursively at creation time, in shuffled order.
 - A display name (defaults to the folder name, can be renamed).
-- Its own preferences: volume, slideshow interval, slideshow enabled, file-position persistence, image fit mode, list/gallery mode.
-- Its state: active state, current file, playing/paused, file-position, filter state, search history (see relevant sections below), relative volume, Frequently-used-tag ordering
+- Its own preferences: volume (relative to system volume, default 100%), slideshow interval, slideshow enabled, file-position persistence, image fit mode, list/gallery mode.
+- Its state: active state, current file, playing/paused, file-position, filter state, search history, frequently-used-tag ordering (see relevant sections below).
 
 ### Global settings
 
-- Default slideshow interval.
-- Default file-position persistence behavior (whether playlists resume mid-file by default).
-- Default image fit mode.
+- Default slideshow interval (initially 10 s).
+- Default file-position persistence behavior (whether playlists resume mid-file by default; initially off).
+- Default image fit mode (initially Fit).
 
 ### Reshuffle vs. Update
 
@@ -82,6 +84,10 @@ Each playlist exposes two refresh actions:
 In addition, whenever a playlist becomes active the app performs an **Update** so new files appear without manual intervention. Both the manual and the automatic Update prune missing files.
 
 All folder re-reads (Reshuffle and Update, manual or automatic) run in the **background** without blocking the UI, with a small "sync in progress" indicator shown while a re-read is running.
+
+### Playback order and wrap-around
+
+Files play in the playlist's stored shuffled order. Advancing past the last file wraps around to the first and playback continues — the order is not reshuffled. Stepping to the previous file from the first file wraps to the last. When a filter is active, wrap-around applies to the filtered sequence.
 
 ### Playlist states
 
@@ -97,7 +103,7 @@ A playlist is always in one of three states:
 - **Selecting** a playlist from the Playlists overlay during Player mode immediately starts **Playing** the selected playlist.
 - **Play button** (in Manager mode, or the audio player's Play control) transitions to **Playing**. Playback resumes from the playlist's last-played or first file. If file-position persistence is enabled for the playlist, playback also resumes from the last position within that file; otherwise it starts from the beginning of the file.
 - **Double-clicking a file** in the file list (whether in Manager mode or in the Files & Tags overlay during play) transitions to **Playing** starting from that file (always from the start).
-- **`[p]` or the Pause button** transitions to **Paused**.
+- **`[p]`** activates suppression (see Suppression vs per-playlist pause); playlist states are unchanged.
 - **Stop button** (in the pause overlay, or in the playback controls) transitions back to **Stopped** — the playlist returns to its Manager view.
 - **`[esc]`** — context-dependent (see Esc behavior under Playback Controls).
 
@@ -107,7 +113,7 @@ At any time:
 
 - At most one video playlist OR one image playlist may be in **Playing** or **Paused** state.
 - At most one audio playlist may be in **Playing** or **Paused** state in parallel with the above.
-- Any number of playlists may exist in **Stopped** state, but only one playlist is shown in the main window's Manager view at a time. Switching to a different video/image playlist's Manager view does not interrupt an audio playlist that is currently Playing in parallel (and vise versa).
+- Any number of playlists may exist in **Stopped** state, but only one playlist is shown in the main window's Manager view at a time. Switching to a different video/image playlist's Manager view does not interrupt an audio playlist that is currently Playing in parallel (and vice versa).
 
 Switching to a different playlist of the same kind (and between image and video) cleanly stops the previous one (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears in its Manager view. In Player mode (via the left-hover Playlists overlay) the selected playlist starts playing immediately. Each playlist's last-played file and optional position-within-file are preserved, so returning to it later resumes where it was.
 
@@ -119,8 +125,8 @@ In Manager mode, the window content is laid out as panels — no overlays are us
 
 ### Layout
 
-- **Left collapsible panel** — Playlists. Shows video and image playlists in separate sections with full management controls (create, rename, delete, reorder). At the top, a collapsed "Audio" section acts as a visual hint; pressing it reveals the audio overlay (see Audio Player). Selecting a playlist here opens it in Stopped state in the Manager view.
-- **Center** — playlist header (name, Play button, Reshuffle / Update controls, list/gallery toggle for image/video laylists), filtering controls (tag multi-select, AND/OR switch, "Untagged" option, "Invalid tagging" option, skipped-files option, saved multi-tag searches), skipped-files notice, and invalid-tagging notice, file list respecting the active filter.
+- **Left collapsible panel** — Playlists. Shows video and image playlists in separate sections with full management controls (create, rename, delete, reorder). At the top, a collapsed "Audio" section acts as a visual hint; pressing it reveals the extended audio overlay (see Audio Player). Selecting a playlist here opens it in Stopped state in the Manager view.
+- **Center** — playlist header (name, Play button, Reshuffle / Update controls, list/gallery toggle for image/video playlists), filtering controls (tag multi-select, AND/OR switch, saved multi-tag searches), counter notices for untagged / invalid tagging / skipped files (each activates its service filter — see Service filters), file list respecting the active filter.
 - **Right collapsible panel** — Tag management for the file(s) currently selected in the center list. Same multi-select tag input described under Tag editing UI.
 
 ### File list view modes
@@ -138,7 +144,7 @@ The choice is persisted per playlist. Audio playlists always use list view.
 - **Double-click** — enters Player mode starting from that file (always from beginning of that file, resets file-position).
 - **Multi-select** — standard shift / command click to select multiple files at once. With a multi-selection:
   - **Delete** moves all selected files to the system Trash and removes them from the playlist.
-  - **Tag edits in the right panel** apply to all selected files. The chips shown represent the **intersection** of tags across the selection (tags every selected file has). Adding a tag adds it to every selected file; removing a tag removes it from every selected file that has it.
+  - **Tag edits in the right panel** apply to all selected files. The chips shown represent the **intersection** of tags across the selection (tags every selected file has). Adding a tag adds it to every selected file (a no-op for files that already have it); removing a chip removes that tag from every selected file.
 - **Rename** an individual file is also available as a per-file action (context menu / inline rename).
 - **Show in Finder** is available per file.
 
@@ -170,7 +176,8 @@ Rules:
 - An **empty** bracket group (`[]`, or whitespace only) yields no tags; the file is treated as **untagged**, and the empty group is cleaned up the next time the file's tags are edited.
 - A non-empty bracket group containing **any** token that fails the rules above (for example `[beach ab]`, where `ab` is too short, or `[a b c]`) is **not** treated as untagged. It is flagged as **invalid tagging** (see below) so its contents are surfaced to the user and never silently dropped on the next tag edit.
 - Tags are **case-insensitive**. They are normalized for matching and filtering but the on-disk casing is preserved when reading and writing.
-- A file without any bracket group is **untagged**. "Untagged" is itself selectable as a filter option.
+- Duplicate tags never accumulate: adding a tag a file already has (case-insensitively) is a no-op, and a playlist-wide tag rename that would produce a duplicate within a file collapses it to a single instance.
+- A file without any bracket group is **untagged**. Untagged files are surfaced via a counter notice that activates the Untagged service filter.
 - Removing the last tag from a file also removes the now-empty brackets from the filename.
 
 ### Invalid tagging
@@ -182,9 +189,9 @@ A file is considered to have invalid tagging when its bracket usage is either am
 
 A single stray, unmatched bracket that does not break parsing (for example a literal `[` or `]` used in prose) is simply ignored, not treated as invalid. These invalid files are not silently ignored:
 
-- The playlist surfaces a small indicator showing the count of files with invalid tagging, clicking it activates filter described below.
-- The file list offers a filter to show only those files, so the user can step through them and fix each one with a simple rename.
-- Until fixed, an invalid-tagged file still plays normally as part of the playlist; it simply does not contribute any tags and is excluded from any tag-based filter except the "invalid tagging" filter itself.
+- The playlist surfaces a counter notice showing the count of files with invalid tagging; clicking it activates the Invalid tagging service filter.
+- While that filter is active, the list shows only those files, so the user can step through them and fix each one with a simple rename.
+- Until fixed, an invalid-tagged file still plays normally as part of the playlist; it simply does not contribute any tags and is excluded from any tag-based filter (it appears under the Invalid tagging service filter).
 
 ### Tag cache
 
@@ -223,7 +230,17 @@ The filter UI appears in the center section of Manager mode and in the Files & T
 
 ### Current scope
 
-For the first version, each playlist's filter is a single flat multi-select of tags plus an **AND / OR** switch that applies to the whole selection. "Untagged" and "Invalid tagging" are selectable options alongside the tags. The filter is **per playlist** — not a single app-wide setting — so each playlist's current combination of selected tags and AND/OR mode is its own.
+For the first version, each playlist's filter is a single flat multi-select of tags plus an **AND / OR** switch that applies to the whole selection. The filter is **per playlist** — not a single app-wide setting — so each playlist's current combination of selected tags and AND/OR mode is its own.
+
+### Service filters
+
+Separate from the tag filter, Manager mode provides three **service filters**: **Untagged**, **Invalid tagging**, and **Skipped**. Each surfaces as a small counter notice in the playlist info area (shown only when its count is non-zero); clicking the notice activates the corresponding service filter, and clicking it again deactivates it. While a service filter is active, the file list shows only its files and the tag filter is temporarily inactive; service filters are mutually exclusive with each other.
+
+- **Untagged** — files without any bracket group.
+- **Invalid tagging** — files with invalid tagging (see Invalid tagging), for stepping through and fixing them.
+- **Skipped** — files found in the folder but excluded from the playlist as unsupported or of another media type; listed for inspection only (Show in Finder, move to Trash) and never play.
+
+Like the tag filter, an active Untagged or Invalid tagging service filter affects playback — only matching files play; Skipped files never play. Service filters are available in Manager mode only (the Files & Tags overlay offers plain tag filtering).
 
 Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the active file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file.
 
@@ -231,7 +248,7 @@ Filtering affects playback: files that don't match are silently skipped during p
 
 - Each playlist remembers its current filter selection across playlist switches, so returning to a playlist restores its filter.
 - **Search history** is playlist-scoped and split into two parts:
-  - **Multi-tag searches** (two or more tags in either AND or OR mode) are remembered as saved searches, listed for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination.
+  - **Multi-tag searches** (two or more tags in either AND or OR mode) are remembered as saved searches, listed for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination. The list keeps the 10 most recent unique searches — re-applying an already-saved combination moves it to the top instead of adding a duplicate; an entry can be removed manually.
   - **Single-tag filters** are not stored as separate entries; instead, frequently used tags float to the top of the tag list within that playlist.
 
 ### Future direction (not in scope yet)
@@ -246,11 +263,11 @@ Per-search AND/OR toggling and grouped expressions (e.g. `A AND B AND (C OR D)`)
 
 1. **Tag input is focused** → unfocuses the tag input. No other effect.
 2. **An overlay is open** (Files & Tags overlay, Playlists overlay, audio overlay opened by hotkey) → closes the topmost overlay. Playback continues.
-3. **Playing (no overlays open)** → pauses all active playlists (global pause) and shows the pause overlay. The window stays open.
-4. **Paused (no overlays open)** → closes the window. The app keeps running. Opening the window again restores the previously active playlists in their playing/paused state, exactly as they were.
+3. **Playing (no overlays open)** → activates suppression and shows the pause overlay. The window stays open.
+4. **Suppressed (pause overlay shown, no other overlays)** → closes the window. The app keeps running. Suppression stays active while the window is closed; opening the window again lifts it, and Playing playlists continue.
 5. **Stopped / Manager mode** → if in the middle of some operation (renaming, dialog, tagging) - cancels operation, otherwise closes the window. Opening it again returns to the stopped state.
 
-The bottom playback controls bar is not considered an "overlay" for Esc purposes — it dismisses itself when the cursor leaves.
+The bottom playback controls bar and the pause overlay are not considered "overlays" for Esc purposes — the bar dismisses itself when the cursor leaves, and the pause overlay is governed by rules 3–4 (pressing `[esc]` while it is shown closes the window).
 
 ### Player mode hotkeys
 
@@ -270,8 +287,8 @@ While the player holds key context:
 | `[arrow left]` | Previous file in active playlist |
 | `[arrow up]` / `[tab]` | Open the Files & Tags overlay if it is closed. If it is already open, no effect (use `[arrow down]` or `[esc]` to close it). |
 | `[arrow down]` | If the Files & Tags overlay is open: close it. Otherwise: reveal the audio overlay (Hidden → Compact). |
-| `[p]` | Pause all active playlists (including audio) and show pause overlay |
-| `[esc]` | Close overlay → pause (if playing) → close window (if paused). See Esc behavior above. |
+| `[p]` | Activate suppression and show the pause overlay (halts all playback, including audio) |
+| `[esc]` | Close overlay → suppress (if playing) → close window (if suppressed). See Esc behavior above. |
 | `[delete]` | Move the active file to the system Trash |
 | `[shift]` | Cycle image fit modes: Fit → Cover → Original (image playlists only) |
 | `[l]` | Toggle loop on the current file (video only here) |
@@ -300,7 +317,7 @@ In Manager mode (Stopped state), most playback hotkeys are inactive. The followi
 | `[esc]` | Close the window |
 | `[delete]` | Move selected file(s) to the system Trash |
 
-In Manager mode compact audio overlay is opened only by hovering the top edge, once it opens and fully revealed it takes key context (see Key context above): arrow keys then drive the audio overlay/track, and `[arrow up]` closes it back to Hidden, returning navigation to the file list. Audio extended overlay also opens directly by pressing the "Audio" section in the left panel. So arrow keys stay free for file-list navigation. 
+In Manager mode the compact audio overlay is opened only by hovering the top edge — never by arrow keys, so arrow keys stay free for file-list navigation. Once it is fully revealed it takes key context (see Key context above): arrow keys then drive the audio overlay/track, and `[arrow up]` closes it back to Hidden, returning navigation to the file list. The extended audio overlay also opens directly by pressing the "Audio" section in the left panel.
 
 ### Overlay interaction rules
 
@@ -314,18 +331,20 @@ Overlays in Player mode follow exclusivity and dismissal rules:
 
 ### Pause overlay
 
-Pressing `[p]` (or `[esc]` while playing) activates global pause for active video/image playlist and alsothe parallel audio playlist, then shows an opaque overlay on top of the media with two buttons:
+Pressing `[p]` (or `[esc]` while playing) activates suppression and shows an opaque overlay on top of the media with two buttons:
 
-- **Unpause** — resumes all playlists that were paused by this action. Note: if the audio playlist was already paused separately (via its own controls) before `[p]` was pressed, it stays paused.
+- **Unpause** — ends the suppression; every playlist in Playing state continues, while playlists in their own Paused state stay paused.
 - **Stop** — returns the video/image playlist to **Stopped** state (exits fullscreen Player mode, shows the playlist in Manager mode in the main window). The audio playlist has its own separate Stop control; the main Stop button does not affect it.
 
-Pressing `[p]` or `[space]` while paused unpauses, with the same caveat about separately-paused audio.
+Pressing `[p]` or `[space]` while the pause overlay is shown also ends the suppression.
 
-#### Global pause vs playlist pause
+#### Suppression vs per-playlist pause
 
-Global pause - pauses all playing playlists only while pause overlay is shown, when global pause ends - all previously playing playlists continue playing, reopening closed window automatically removes global pause.
+Each playlist is always Stopped, Playing, or Paused - a persistent per-playlist state. **Suppression** is a single transient layer on top of those states: actual playback happens only while a playlist is Playing and suppression is off (`playback = playing && !suppression`).
 
-Per playlist paused state - puts **active** playlist on pause independent of other active laylists, this state persists despite global pause or windows closing or quitting and restarting. But it is cleared when another playlists of the same king is selected made active (video and images also stop each other)
+Suppression is active while the pause overlay is shown or the window is closed; when it ends (Unpause, or reopening the window), every Playing playlist continues. Quitting and relaunching the app behaves the same way as closing and reopening the window. Since the pause overlay hides the whole UI, playback controls only ever reflect the playlist states.
+
+**Per-playlist paused state** is set via the play/pause control in a playlist's own playback controls (video/image bottom bar, audio overlay). It persists through suppression, window closing, and quitting/restarting. It is cleared when another playlist of the same kind is made active (video and image playlists also clear each other this way).
 
 ## Video player
 
@@ -335,7 +354,7 @@ The video player plays files from the active video playlist one after another in
 
 - **Top edge** — slides in the compact audio overlay (auto-closes when the cursor leaves; see Audio Player for details).
 - **Left edge** — slides in the Playlists overlay for quick playlist switching. Selecting a playlist starts playing it immediately.
-- **Bottom area** — reveals video playback controls: previous, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Files & Tags overlay.
+- **Bottom area** — reveals video playback controls: previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Files & Tags overlay.
 
 ### Files & Tags overlay
 
@@ -343,7 +362,7 @@ Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playba
 
 The overlay is a **simplified** view meant for quick file switching and single-file operations during playback — not the full management surface that Manager mode provides. It has two sections:
 
-1. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, (but no "Untagged"/"Invalid tagging"/"Skipped" options), saved multi-tag searches), the list of files in the active playlist (always list view, not gallery).
+1. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery).
 2. **Tag management** — tag editor for the **currently active file** only (same UI as described in Tag editing UI).
 
 Per-file actions in the list act on a single file:
@@ -381,7 +400,7 @@ Slideshow interval is configurable both globally (default 10s) and per playlist;
 
 - **Top edge** — slides in the compact audio overlay (same behavior as video player).
 - **Left edge** — slides in the Playlists overlay for quick playlist switching.
-- **Bottom area** — reveals in image playback controls: previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Files & Tags overlay.
+- **Bottom area** — reveals image playback controls: previous, play/pause, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Files & Tags overlay.
 
 The Files & Tags overlay works identically to the video player's (see above).
 
@@ -395,7 +414,7 @@ Audio playlists use the same folder / shuffle / tag model as the other types but
 2. **Compact** — shows current track and basic playback controls (play/pause, previous, next, stop, track progress / scrub, volume, loop toggle). Appears via:
    - **Hovering** over the top edge of the screen — auto-closes when the cursor leaves the overlay area.
    - **`[arrow down]`** from Hidden — stays open until explicitly closed. Does not auto-close on mouse leave; closes on click outside or `[arrow up]`.
-3. **Extended** — expands the compact view to manager mode, include: audio-only playlists panel, active playlist's file list with filtering, and tag management for the current track. Playback controls remain visible. This effectively serves as a manager view for audio playlists that works during playback.
+3. **Extended** — expands the compact view into a manager view: an audio-only playlists panel with full management controls (create, rename, delete, reorder), the active playlist's file list with filtering, and tag management for the current track. Playback controls remain visible. This effectively serves as the manager view for audio playlists (which do not appear in the main window's Manager mode) and works during playback.
 
 ### Navigation between states
 
@@ -408,7 +427,7 @@ In the **Extended** state the file list is a simple vertical list, so it does no
 
 The compact and extended audio UI exposes:
 
-- Play / pause (audio only — separate from the global `[p]` pause).
+- Play / pause (audio only — sets the audio playlist's per-playlist paused state; separate from `[p]` suppression).
 - Previous / next track.
 - Stop (returns the audio playlist to Stopped state without affecting the video/image playlist).
 - Volume slider (per-playlist, persisted).
@@ -427,4 +446,4 @@ This is a simplified playlist selector — it shows video and image playlists in
 
 At the top, a collapsed "Audio" section acts as a visual hint. Pressing it reveals the extended audio overlay with its own playlist controls.
 
-Full playlist management (create, rename, delete, reorder) is available only in Manager mode via the left collapsible panel.
+Full management of video and image playlists (create, rename, delete, reorder) is available only in Manager mode via the left collapsible panel; audio playlists are managed in the extended audio overlay.
