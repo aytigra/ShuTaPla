@@ -1,0 +1,28 @@
+//
+//  AppConstants.swift
+//  ShuTaPla
+//
+//  Extension maps, thresholds, and other magic numbers. `nonisolated` so the
+//  file-system actor can read them off the main actor.
+//
+
+import Foundation
+
+nonisolated enum AppConstants {
+    static let videoExtensions: Set<String> = ["mp4", "webm", "mov", "avi", "mkv", "m4v"]
+    static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "jxl", "gif", "heic", "heif", "webp", "tiff", "bmp"]
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "aiff", "wma"]
+
+    /// A type is dominant when ≥ 80% of recognized media files are that type.
+    /// Below this, the folder is Mixed and the user is prompted to choose.
+    static let dominanceThreshold = 0.8
+
+    /// Classify a filename extension into a media type, or `nil` if unrecognized.
+    static func mediaType(forExtension ext: String) -> MediaType? {
+        let lower = ext.lowercased()
+        if videoExtensions.contains(lower) { return .video }
+        if imageExtensions.contains(lower) { return .image }
+        if audioExtensions.contains(lower) { return .audio }
+        return nil
+    }
+}

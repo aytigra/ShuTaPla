@@ -2,9 +2,13 @@
 
 Ordered by dependency. Each task produces a testable, self-contained increment. Later tasks build on earlier ones but never require forward references.
 
+Status legend: ✅ = complete (built and tested). Unmarked tasks are not started.
+
 ---
 
-## Task 1 — Project scaffold and data models
+## Task 1 — Project scaffold and data models  ✅
+
+**Status: complete.** All models, embedded value types, enums, and singleton fetch-or-create implemented; 9 tests passing. Project is on Swift 6 language mode.
 
 Set up the Xcode project structure (directories per architecture §14), SwiftData container, and all model types.
 
@@ -27,7 +31,9 @@ Set up the Xcode project structure (directories per architecture §14), SwiftDat
 
 ---
 
-## Task 2 — TagParser service
+## Task 2 — TagParser service  ✅
+
+**Status: complete.** `parseTags`/`addTag`/`removeTag`/`renameTag` with depth-based bracket scanning and case-insensitive dedup; 43 parameterized/unit tests passing.
 
 Pure-function service with no dependencies on other app code.
 
