@@ -89,7 +89,9 @@ File system layer: security-scoped bookmarks, folder scanning, file rename/trash
 
 ---
 
-## Task 4 — AppState and Welcome view
+## Task 4 — AppState and Welcome view  ✅
+
+**Status: complete.** `AppState` (`@MainActor @Observable`: `ModelContext`, app mode, active-playlist references with visual-channel exclusivity, fetch-or-create singletons, launch-mode determination) and the folder-picker → scan → creation flow (`addPlaylist`/`confirmPlaylist`/`makePlaylist`, auto-detect dominant type or prompt for Mixed, non-matching files marked skipped, shuffled initial order). `WelcomeView` ("Add Playlist" → `.fileImporter`, Mixed-type confirmation dialog), `RootView` mode switch (Manager/Player placeholders), `SettingsView` stub wired to the `Settings` scene (Cmd+,); 7 tests passing.
 
 Runtime state object and the first visible UI: the welcome screen.
 

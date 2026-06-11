@@ -32,6 +32,10 @@ Locally installed skills live in `/Users/aytm/.claude-ios/skills/`. Use them for
 
 Each skill has a `SKILL.md` with workflow decision trees and a `references/` directory with detailed topic guides. Read the SKILL.md first, then drill into references as needed.
 
+## Testing
+
+**SwiftData in tests: hold the `ModelContainer` for the whole test body.** A test helper must return the `ModelContainer` and the test must keep it alive, pulling `container.mainContext` locally — as `ModelTests.swift` does. A helper that builds a container internally and returns only `container.mainContext` lets the container deallocate when the helper returns; the orphaned context then traps (`EXC_BREAKPOINT`, code=1) on its next `fetch` — surfacing at the fetch site, e.g. `AppStateModel.fetchOrCreate`. Plain `init`-and-assert tests trap most reliably; tests with intervening `insert(...)` calls or `await` suspensions may survive by chance because they stretch the autorelease pool, so the failure can look intermittent or test-specific.
+
 ## Xcode project structure
 
 This project uses Xcode **file system synchronized groups** (`PBXFileSystemSynchronizedRootGroup`). The following directories auto-sync with Xcode — files created on disk inside them appear in the Xcode project navigator automatically:
