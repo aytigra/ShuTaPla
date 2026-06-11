@@ -5,8 +5,8 @@
 //  The Manager center file list: a `LazyVStack` of rows for the playlist's
 //  filtered files (`AppState.filteredFiles`), with click / shift-click / cmd-click
 //  selection, double-click to play, inline rename, and a per-row context menu.
-//  The active tag or service filter decides what appears here. The gallery view
-//  mode is a placeholder until Task 8.
+//  The active tag or service filter decides what appears here. The gallery
+//  presentation of the same files lives in `FileGalleryView`.
 //
 
 import SwiftUI
@@ -24,14 +24,6 @@ struct FileListView: View {
     @State private var draftName = ""
 
     var body: some View {
-        if playlist.preferences.viewMode == .gallery {
-            galleryPlaceholder
-        } else {
-            list
-        }
-    }
-
-    private var list: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(visibleFiles) { file in
@@ -62,19 +54,10 @@ struct FileListView: View {
             Button("Rename") { beginRename(file) }
             Button("Show in Finder") { appState.revealInFinder(file) }
             Divider()
-            Button("Delete", role: .destructive) { confirmDelete(deleteTargets(for: file)) }
+            Button("Delete", role: .destructive) {
+                confirmDelete(FileSelection.deleteTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles))
+            }
         }
-    }
-
-    private var galleryPlaceholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "square.grid.2x2")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-            Text("Gallery view arrives in Task 8.")
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Data
@@ -85,43 +68,16 @@ struct FileListView: View {
         appState.filteredFiles
     }
 
-    private var selectedFiles: [PlaylistFile] {
-        visibleFiles.filter { appState.selectedFileIDs.contains($0.id) }
-    }
-
-    /// Deleting a row that's part of the selection deletes the whole selection;
-    /// deleting an unselected row deletes just it.
-    private func deleteTargets(for file: PlaylistFile) -> [PlaylistFile] {
-        appState.selectedFileIDs.contains(file.id) && selectedFiles.count > 1 ? selectedFiles : [file]
-    }
-
     // MARK: - Selection
 
     private func handleClick(_ file: PlaylistFile) {
-        let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let id = file.id
-
-        if modifiers.contains(.command) {
-            if appState.selectedFileIDs.contains(id) {
-                appState.selectedFileIDs.remove(id)
-            } else {
-                appState.selectedFileIDs.insert(id)
-                anchor = id
-            }
-        } else if modifiers.contains(.shift),
-                  let anchor,
-                  let lo = index(of: anchor),
-                  let hi = index(of: id) {
-            let range = lo <= hi ? lo...hi : hi...lo
-            appState.selectedFileIDs.formUnion(visibleFiles[range].map(\.id))
-        } else {
-            appState.selectedFileIDs = [id]
-            anchor = id
-        }
-    }
-
-    private func index(of id: UUID) -> Int? {
-        visibleFiles.firstIndex { $0.id == id }
+        FileSelection.apply(
+            click: file.id,
+            modifiers: NSEvent.modifierFlags,
+            in: visibleFiles,
+            selection: &appState.selectedFileIDs,
+            anchor: &anchor
+        )
     }
 
     // MARK: - Rename

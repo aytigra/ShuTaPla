@@ -14,6 +14,7 @@ import SwiftData
 struct ShuTaPlaApp: App {
     let modelContainer: ModelContainer
     @State private var appState: AppState
+    @State private var thumbnailService = ThumbnailService()
 
     init() {
         let schema = Schema([
@@ -37,6 +38,7 @@ struct ShuTaPlaApp: App {
         WindowGroup {
             RootView()
                 .environment(appState)
+                .environment(thumbnailService)
                 .frame(minWidth: 800, minHeight: 600)
         }
         .modelContainer(modelContainer)

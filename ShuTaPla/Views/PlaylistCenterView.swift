@@ -23,11 +23,19 @@ struct PlaylistCenterView: View {
                     header(playlist)
                     Divider()
                     noticeBar(playlist)
-                    FileListView(
-                        playlist: playlist,
-                        confirmDelete: { deleteCandidates = $0 },
-                        reportError: { errorMessage = $0 }
-                    )
+                    if playlist.preferences.viewMode == .gallery {
+                        FileGalleryView(
+                            playlist: playlist,
+                            confirmDelete: { deleteCandidates = $0 },
+                            reportError: { errorMessage = $0 }
+                        )
+                    } else {
+                        FileListView(
+                            playlist: playlist,
+                            confirmDelete: { deleteCandidates = $0 },
+                            reportError: { errorMessage = $0 }
+                        )
+                    }
                 }
             } else {
                 ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")

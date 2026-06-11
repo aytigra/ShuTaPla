@@ -195,7 +195,9 @@ Tag editing and filter controls.
 
 ---
 
-## Task 8 — ThumbnailService and gallery view
+## Task 8 — ThumbnailService and gallery view  ✅
+
+**Status: complete.** `ThumbnailService` (`@MainActor @Observable`, injected via the environment): images thumbnailed with `CGImageSource`, videos with `AVAssetImageGenerator`; in-memory `NSCache` of decoded `NSImage`s over an on-disk PNG cache in the Caches directory; cache key = SHA-256 of relative path + modification date + size, so an edited file invalidates its stale thumbnail. Generation runs off the main actor — the entry point reads the model, then `nonisolated` workers resolve the bookmark and return PNG `Data`. `FileGalleryView` (`LazyVGrid` of `GalleryCell`s; each loads its thumbnail via `.task(id:)` so the load cancels when scrolled off-screen, shows a film/photo placeholder until ready), with the list view's interactions. The click-selection algorithm and delete-target logic moved to a shared `FileSelection` helper used by both views; `PlaylistCenterView` swaps `FileListView`/`FileGalleryView` on the header's view-mode toggle. 4 `ThumbnailServiceTests` (image thumbnail size, cache-key stability, stale-date invalidation, disk-cache hit without regeneration) + the existing 22 `AppStateTests` pass.
 
 Thumbnail generation and the gallery view mode.
 
