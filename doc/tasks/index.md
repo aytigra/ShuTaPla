@@ -62,7 +62,9 @@ Pure-function service with no dependencies on other app code.
 
 ---
 
-## Task 3 — BookmarkService and FileSystemService
+## Task 3 — BookmarkService and FileSystemService  ✅
+
+**Status: complete.** `BookmarkService` (create/resolve with scoped-access fallback, reference-counted sessions, stale detection) and the `FileSystemService` actor (`scanFolder`/`updatePlaylist`/`renameFile`/`trashFiles`), with `ScanResult`/`ScannedFile`/`UpdateDelta`/`TrashResult` Sendable value types, the `FileSystemProviding` protocol, and Fisher-Yates shuffle; 15 tests passing.
 
 File system layer: security-scoped bookmarks, folder scanning, file rename/trash.
 
