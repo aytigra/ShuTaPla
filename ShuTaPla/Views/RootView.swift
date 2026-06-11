@@ -3,8 +3,7 @@
 //  ShuTaPla
 //
 //  Top-level view that switches the window between Welcome, Manager, and Player
-//  based on `AppState.mode`. Manager and Player are placeholders until their
-//  tasks land.
+//  based on `AppState.mode`. Player is a placeholder until its task lands.
 //
 
 import SwiftUI
@@ -17,33 +16,29 @@ struct RootView: View {
         case .welcome:
             WelcomeView()
         case .manager:
-            ManagerPlaceholderView()
+            ManagerView()
         case .player:
             PlayerPlaceholderView()
         }
     }
 }
 
-/// Stand-in for the Manager UI (Task 5+).
-private struct ManagerPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "rectangle.3.group")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("Manager")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Stand-in for the Player UI (Task 11+).
+/// Stand-in for the Player UI (Task 11+). Until real playback and hotkeys land,
+/// a Back button returns to Manager mode.
 private struct PlayerPlaceholderView: View {
+    @Environment(AppState.self) private var appState
+
     var body: some View {
         Color.black
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
+            .overlay(alignment: .topLeading) {
+                Button {
+                    appState.mode = .manager
+                } label: {
+                    Label("Back to Manager", systemImage: "chevron.left")
+                }
+                .padding()
+            }
     }
 }

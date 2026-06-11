@@ -35,13 +35,15 @@ private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> 
     )
 }
 
-/// Returns a canned scan result regardless of the bookmark it's handed.
+/// Returns a canned scan result regardless of the bookmark it's handed, and a
+/// canned update delta for re-scans.
 private struct StubFileSystem: FileSystemProviding {
     let result: ScanResult
+    var delta = UpdateDelta(added: [], removedRelativePaths: [])
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { result }
     func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta {
-        UpdateDelta(added: [], removedRelativePaths: [])
+        delta
     }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
@@ -183,6 +185,167 @@ struct AppStateTests {
         #expect(appState.activeVideoPlaylist == nil)
         #expect(appState.appStateModel.activeVideoPlaylistId == nil)
         #expect(appState.appStateModel.activeImagePlaylistId == image.id)
+    }
+
+    // MARK: - Manager operations (Task 5)
+
+    @Test func selectActivatesAndSetsSelection() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        context.insert(video)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.select(video)
+        #expect(appState.selectedPlaylist === video)
+        #expect(appState.activeVideoPlaylist === video)
+
+        await appState.updateTask?.value  // let the background re-scan finish
+    }
+
+    @Test func renameUpdatesNameAndRejectsBlank() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let video = Playlist(name: "Old", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        context.insert(video)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.rename(video, to: "  New  ")
+        #expect(video.name == "New")
+
+        appState.rename(video, to: "   ")
+        #expect(video.name == "New")  // blank rejected
+    }
+
+    @Test func deleteRemovesPlaylistCompactsOrderAndClearsRefs() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .video, sortOrder: 0)
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .video, sortOrder: 1)
+        let c = Playlist(name: "C", folderBookmark: Data(), folderPath: "/c", mediaType: .video, sortOrder: 2)
+        [a, b, c].forEach(context.insert)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.select(b)
+        appState.delete(b)  // cancels the in-flight update before b is freed
+        await appState.updateTask?.value
+
+        #expect(appState.selectedPlaylist == nil)
+        #expect(appState.activeVideoPlaylist == nil)
+        let remaining = try context.fetch(FetchDescriptor<Playlist>())
+        #expect(remaining.count == 2)
+        #expect(a.sortOrder == 0)
+        #expect(c.sortOrder == 1)  // compacted from 2
+    }
+
+    @Test func reorderUpdatesSortOrder() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .video, sortOrder: 0)
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .video, sortOrder: 1)
+        let c = Playlist(name: "C", folderBookmark: Data(), folderPath: "/c", mediaType: .video, sortOrder: 2)
+        [a, b, c].forEach(context.insert)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        // Move C to the front.
+        appState.reorder([a, b, c], fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        #expect(c.sortOrder == 0)
+        #expect(a.sortOrder == 1)
+        #expect(b.sortOrder == 2)
+    }
+
+    @Test func updateAppliesDeltaAddingAndRemovingFiles() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video), scanned("b.mp4", .video)],
+            counts: [.video: 2],
+            dominantType: .video
+        )
+        let delta = UpdateDelta(added: [scanned("c.mp4", .video, tags: ["beach"])], removedRelativePaths: ["a.mp4"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, delta: delta))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard case .created(let playlist) = await appState.addPlaylist(from: dir) else {
+            Issue.record("expected .created")
+            return
+        }
+        #expect(playlist.files.count == 2)
+
+        await appState.update(playlist)
+
+        let names = Set(playlist.files.map(\.fileName))
+        #expect(names == ["b.mp4", "c.mp4"])
+        #expect(playlist.tagFrequency["beach"] == 1)
+    }
+
+    // MARK: - File operations (Task 6)
+
+    @Test func reshufflePermutesPlayableAndKeepsSkippedLast() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        for i in 0..<5 {
+            let file = PlaylistFile(relativePath: "v\(i).mp4", fileName: "v\(i).mp4", sortOrder: i)
+            file.playlist = playlist
+            context.insert(file)
+        }
+        let skipped = PlaylistFile(relativePath: "x.jpg", fileName: "x.jpg", isSkipped: true, sortOrder: 5)
+        skipped.playlist = playlist
+        context.insert(skipped)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.reshuffle(playlist)
+
+        let playableOrders = Set(playlist.files.filter { !$0.isSkipped }.map(\.sortOrder))
+        #expect(playableOrders == Set(0..<5))  // a permutation of the playable slots
+        #expect(skipped.sortOrder == 5)         // skipped stays after the playable files
+    }
+
+    @Test func renameFileUpdatesNamePathAndTags() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "old.mp4", fileName: "old.mp4", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.renameFile(file, to: "new [beach].mp4")
+
+        #expect(error == nil)
+        #expect(file.fileName == "new [beach].mp4")
+        #expect(file.relativePath == "new [beach].mp4")
+        #expect(file.tags == ["beach"])
+        #expect(file.taggingStatus == .valid)
+    }
+
+    @Test func deleteFilesRemovesTrashedFromPlaylist() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = PlaylistFile(relativePath: "a.mp4", fileName: "a.mp4", sortOrder: 0)
+        let b = PlaylistFile(relativePath: "b.mp4", fileName: "b.mp4", sortOrder: 1)
+        a.playlist = playlist
+        b.playlist = playlist
+        context.insert(a)
+        context.insert(b)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.deleteFiles([a])
+
+        #expect(error == nil)
+        #expect(Set(playlist.files.map(\.fileName)) == ["b.mp4"])
     }
 
     private var emptyResult: ScanResult {

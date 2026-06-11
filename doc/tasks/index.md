@@ -110,7 +110,9 @@ Runtime state object and the first visible UI: the welcome screen.
 
 ---
 
-## Task 5 — Manager mode: playlists panel (left sidebar)
+## Task 5 — Manager mode: playlists panel (left sidebar)  ✅
+
+**Status: complete.** `ManagerView` (three-column `HSplitView` with independently collapsible left/right panels via toolbar toggles; center and tag panels are Task 6/7 placeholders) and `PlaylistSidebar` (a single `@Query` sorted by `sortOrder`, filtered in memory into Video and Image sections, with a collapsed Audio hint at the top for the Task 15 extended overlay). Playlist CRUD on `AppState`: create via folder picker (reuses the add flow), inline rename, delete with confirmation (clears active/selected refs, compacts the section's `sortOrder`), drag reorder (`Array.move` extension), and `select` (sets selected + active, cancels any stale background re-scan and starts a new tracked one). `update(_:)` applies the scan delta — prunes missing files (detaching the inverse so `playlist.files` updates synchronously), appends new ones, rebuilds the tag-frequency cache. 12 `AppStateTests` passing.
 
 The left collapsible panel with playlist CRUD and sections.
 
@@ -132,7 +134,9 @@ The left collapsible panel with playlist CRUD and sections.
 
 ---
 
-## Task 6 — Manager mode: center panel (file list, header)
+## Task 6 — Manager mode: center panel (file list, header)  ✅
+
+**Status: complete.** `PlaylistCenterView` (header: name, Play, Reshuffle, Update, list/gallery segmented toggle bound to `preferences.viewMode`; owns the delete confirmation and error alert), `FileListView` (`LazyVStack` of the playlist's playable files, click/shift-click/cmd-click selection via `NSEvent.modifierFlags`, double-click to play, inline rename, per-row context menu, gallery placeholder for Task 8), `FileRowView` (filename + read-only tag chips, selection highlight, inline rename field). `AppState` file ops: `renameFile` (disk rename via `BookmarkService` scoped access + `FileSystemService`, then re-parses tags/path), `deleteFiles` (best-effort trash, prunes trashed from the playlist), `reshuffle` (Fisher-Yates over playable, skipped kept last), `revealInFinder`, shared `selectedFileIDs`, and a temporary `beginPlayback`→Player-mode hook (real playback is Task 11; the Player placeholder has a Back button). Counter notices for untagged/invalid/skipped render when non-zero (clicking to activate a service filter is Task 7). 15 `AppStateTests` passing.
 
 The file list and playlist header with basic controls.
 
