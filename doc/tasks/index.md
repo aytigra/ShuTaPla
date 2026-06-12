@@ -261,24 +261,29 @@ Visual frame rendering is verified once the player views host `MPVMetalView` (Ta
 
 ---
 
-## Task 10 — VideoPlaybackEngine and ImagePlaybackEngine
+## Task 10 — VideoPlaybackEngine and ImagePlaybackEngine  ✅
 
-Playback engines that own MPVClient (video) or timer (images) and expose observable state.
+**Status: complete.** The three `@MainActor @Observable` engines, with a `PlaybackSource` seam for navigation; build clean, 9 `PlaybackEngineTests` passing (plus the `SendableImage` extraction below leaving the 4 `ThumbnailServiceTests` green).
+
+`VideoPlaybackEngine` and `AudioPlaybackEngine` share all logic in a base `MPVPlaybackEngine` — both own one `MPVClient` and expose the same surface, differing only in configuration (video renders into an embedded `MPVMetalView`, created first so its `wid` reaches the client at init; audio uses `--vo=null`). The base consumes the client's `AsyncStream<MPVEvent>` on the main actor and writes its observable state directly: `currentTime`/`duration` from `time-pos`/`duration`, `isPlaying` from `pause`, plus `currentFile`, `isLooping`, and `volume` (0–100, forwarded to the client). `load`/`play`/`pause`/`stop`/`seek(to:)`/`seek(by:)`, `setLooping`/`toggleLoop`, and `advanceToNext`/`returnToPrevious`; an `eof-reached` event advances (looping replays inside mpv, so it never reaches the handler). `load` takes a URL (file path or protocol resource); a string overload drives libavfilter sources in tests.
+
+`ImagePlaybackEngine` has no mpv instance: it decodes the current image off the main actor with `CGImageSource` (`kCGImageSourceShouldAllowFloat` for HDR), publishes `currentImage`, and resets `transform` (an `ImageTransform` of pan offset + zoom scale) to identity on every file change and fit-mode cycle. `cycleFitMode` runs fit → cover → original → fit; an async-`Task` slideshow timer advances on each interval. Pan/zoom gesture wiring lands with `ImagePlayerView` (Task 11).
+
+The `PlaybackSource` protocol (`fileAfter`/`fileBefore`/`url(for:)`) is the seam an engine uses to ask *what* to play next; the `PlaybackCoordinator` conforms in Task 11, tests use a mock. Off-main decode reuses a shared `SendableImage` box extracted from `ThumbnailService` into `Extensions/`.
 
 **Deliverables:**
-- `VideoPlaybackEngine.swift` — owns MPVClient, consumes events, exposes `currentTime`, `duration`, `isPlaying`, `isLooping` as observable properties, `loadFile`, `advanceToNext`, `returnToPrevious`, `seek(by:)`, EOF → advance
-- `AudioPlaybackEngine.swift` — owns separate MPVClient configured with `--vo=null`, same interface as video engine
-- `ImagePlaybackEngine.swift` — loads images via `CGImageSource`, publishes `currentImage`, `fitMode`, `transform`, slideshow timer, `cycleFitMode` (fit → cover → original)
-- Pan and zoom: `MagnifyGesture`, `DragGesture`, scroll wheel via NSView bridge, transform reset on file change
+- `MPVPlaybackEngine.swift` — shared base: owns MPVClient, consumes events, exposes `currentTime`, `duration`, `isPlaying`, `isLooping`, `currentFile`, `volume` as observable state; `load`, `advanceToNext`, `returnToPrevious`, `seek(to:)`, `seek(by:)`, `setLooping`/`toggleLoop`, EOF → advance
+- `VideoPlaybackEngine.swift` — base + an embedded `MPVMetalView` (`.video` config)
+- `AudioPlaybackEngine.swift` — base with the `--vo=null` `.audio` config
+- `ImagePlaybackEngine.swift` — loads images via `CGImageSource` off-main, publishes `currentImage`, `fitMode`, `transform` (+ the `ImageTransform` type), async slideshow timer, `cycleFitMode` (fit → cover → original)
+- `PlaybackSource.swift` — navigation/URL-resolution seam the engines hold weakly
+- `Extensions/SendableImage.swift` — shared off-main `NSImage` box (was private in `ThumbnailService`)
+- Pan/zoom gestures and transform-on-file-change wiring land with the image player view in Task 11
 
 **Testable:**
-- VideoPlaybackEngine: load file → isPlaying becomes true, currentTime advances
-- EOF event → advanceToNext called (verify with mock coordinator)
-- Loop toggle → mpv loop-file property set
-- AudioPlaybackEngine: load file → plays audio (no video output)
-- ImagePlaybackEngine: load image → currentImage published, transform at identity
-- Slideshow timer: fires after interval, advances to next
-- Fit mode cycle: fit → cover → original → fit
+- mpv engine (via `AudioPlaybackEngine`, window-free): load → `isPlaying` true and `currentTime` advances; `eof-reached` → `advanceToNext` queries the source (mock); loop toggle reaches mpv's `loop-file`; seek moves `currentTime`; `volume` forwards to the client; `stop` clears state
+- ImagePlaybackEngine: load image → `currentImage` published, `transform` at identity; fit-mode cycle fit → cover → original → fit and resets the transform; slideshow fires after the interval and advances via the source
+- Video engine shares the base implementation (verified through the audio engine); its frame output is verified once the player views host `MPVMetalView` (Tasks 11–12)
 
 ---
 

@@ -188,6 +188,8 @@ final class ThumbnailService {
         return SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
     }
 
+    // MARK: - Generation
+
     /// Renders a thumbnail for a file on disk and encodes it as PNG. Used by
     /// `produceData` and exercised directly by tests.
     nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> Data? {
@@ -218,11 +220,4 @@ final class ThumbnailService {
         let time = CMTime(seconds: 1, preferredTimescale: 600)
         return try? await generator.image(at: time).image
     }
-}
-
-/// Carries an `NSImage` decoded off the main actor back to it. The image is
-/// constructed once and never mutated, so the unchecked conformance is safe.
-private nonisolated struct SendableImage: @unchecked Sendable {
-    let image: NSImage
-    init(_ image: NSImage) { self.image = image }
 }

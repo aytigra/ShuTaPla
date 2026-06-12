@@ -1,0 +1,183 @@
+//
+//  MPVPlaybackEngine.swift
+//  ShuTaPla
+//
+//  The shared implementation behind `VideoPlaybackEngine` and
+//  `AudioPlaybackEngine`. Both own one `MPVClient` and expose the same playback
+//  surface; they differ only in how the client is configured (video renders into
+//  an embedded view, audio uses `--vo=null`). That difference is captured at
+//  construction, so all the playback logic — loading, time/duration/pause
+//  observation, looping, seeking, and end-of-file advance — lives here once.
+//
+//  The engine is `@MainActor @Observable`: it consumes its client's event stream
+//  on the main actor and writes its observable state directly, so SwiftUI (and
+//  the Task 11 coordinator) track `currentTime`/`duration`/`isPlaying` with no
+//  extra plumbing. `currentFile` is the engine's notion of "now playing"; the
+//  `source` decides what comes next.
+//
+
+import Foundation
+
+@MainActor
+@Observable
+class MPVPlaybackEngine {
+
+    // MARK: - Observable playback state
+
+    /// Current playback position in seconds (observed `time-pos`).
+    private(set) var currentTime: TimeInterval = 0
+
+    /// Duration of the current file in seconds, or 0 until known.
+    private(set) var duration: TimeInterval = 0
+
+    /// Whether the file is advancing (not paused). Driven by mpv's `pause` so it
+    /// reflects the engine's real state rather than the last requested command.
+    private(set) var isPlaying: Bool = false
+
+    /// Whether the current file loops forever (`loop-file=inf`). Toggle via
+    /// `setLooping(_:)`/`toggleLoop()`.
+    private(set) var isLooping: Bool = false
+
+    /// The file the engine considers current. `nil` when stopped or idle. Set on
+    /// load and used as the anchor for advance/previous.
+    private(set) var currentFile: PlaylistFile?
+
+    /// Playback volume, 0–100 (mpv's scale). Writes are forwarded to the client.
+    var volume: Double = 100 {
+        didSet { client.volume = volume }
+    }
+
+    /// Supplies the next/previous file and its URL on advance. Set by the
+    /// coordinator when a playlist starts; weak so the coordinator owns the cycle.
+    weak var source: PlaybackSource?
+
+    // MARK: - Underlying client
+
+    /// The libmpv wrapper this engine drives. Exposed for the coordinator and
+    /// tests; all routine control goes through the engine's own methods.
+    let client: MPVClient
+
+    private var eventTask: Task<Void, Never>?
+
+    // MARK: - Lifecycle
+
+    /// Creates the engine and begins consuming its client's events. `wid` is the
+    /// host view pointer for embedded video output; `nil` for audio (and tests).
+    init(configuration: MPVClient.Configuration, wid: UnsafeMutableRawPointer? = nil) throws {
+        self.client = try MPVClient(configuration: configuration, wid: wid)
+        self.volume = configuration.initialVolume
+        observeEvents()
+    }
+
+    /// Stops event consumption and tears down the client. Safe to call once.
+    func shutdown() {
+        eventTask?.cancel()
+        eventTask = nil
+        client.shutdown()
+    }
+
+    // MARK: - Loading & transport
+
+    /// Loads `file` from `url`, resuming at `position` if given, and starts playing.
+    func load(_ file: PlaylistFile?, at url: URL, startingAt position: TimeInterval? = nil) {
+        load(file, resource: Self.mpvResource(for: url), startingAt: position)
+    }
+
+    /// Loads an mpv resource string directly (a file path or a protocol URL such as
+    /// `av://…`). The URL-taking overload funnels here; tests drive it with libmpv's
+    /// virtual sources, which aren't expressible as `URL`s.
+    func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
+        currentFile = file
+        isPlaying = true               // optimistic; corrected by the next `pause` event
+        client.loadFile(resource, startingAt: position)
+        client.play()
+    }
+
+    func play() { client.play() }
+    func pause() { client.pause() }
+
+    /// Stops playback and clears the engine's current-file/position state.
+    func stop() {
+        client.stop()
+        isPlaying = false
+        currentTime = 0
+        currentFile = nil
+    }
+
+    /// Seeks to an absolute position in seconds.
+    func seek(to seconds: TimeInterval) { client.seek(to: seconds) }
+
+    /// Seeks by a relative offset in seconds (the ±3s hotkey passes ±3 here).
+    func seek(by delta: TimeInterval) { client.seek(by: delta) }
+
+    // MARK: - Advance / previous
+
+    /// Loads the next file from `source`, wrapping past the last to the first.
+    /// Returns `false` when there is nothing to advance to.
+    @discardableResult
+    func advanceToNext() -> Bool {
+        guard let source,
+              let next = source.fileAfter(currentFile),
+              let url = source.url(for: next) else { return false }
+        load(next, at: url)
+        return true
+    }
+
+    /// Loads the previous file from `source`, wrapping from the first to the last.
+    /// Returns `false` when there is nothing to step back to.
+    @discardableResult
+    func returnToPrevious() -> Bool {
+        guard let source,
+              let previous = source.fileBefore(currentFile),
+              let url = source.url(for: previous) else { return false }
+        load(previous, at: url)
+        return true
+    }
+
+    // MARK: - Looping
+
+    /// Turns looping on/off, mirroring the state to mpv's `loop-file` property.
+    func setLooping(_ looping: Bool) {
+        isLooping = looping
+        client.isLooping = looping
+    }
+
+    func toggleLoop() { setLooping(!isLooping) }
+
+    // MARK: - Event consumption (main actor)
+
+    private func observeEvents() {
+        eventTask = Task { [weak self] in
+            guard let events = self?.client.events else { return }
+            for await event in events {
+                guard let self else { break }
+                self.handle(event)
+            }
+        }
+    }
+
+    private func handle(_ event: MPVEvent) {
+        switch event {
+        case .timePosition(let value):
+            currentTime = value ?? 0
+        case .duration(let value):
+            duration = value ?? 0
+        case .pausedChanged(let paused):
+            isPlaying = !paused
+        case .endFile(.eof):
+            // Natural end. With looping on mpv replays internally and never reaches
+            // here, so this is unconditionally an advance.
+            advanceToNext()
+        case .endFile, .fileLoaded, .shutdown, .logMessage:
+            break
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// The string mpv's `loadfile` expects: a plain filesystem path for file URLs,
+    /// the full URL for everything else (network/protocol sources).
+    static func mpvResource(for url: URL) -> String {
+        url.isFileURL ? url.path(percentEncoded: false) : url.absoluteString
+    }
+}
