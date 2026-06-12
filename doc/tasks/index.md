@@ -218,6 +218,20 @@ Thumbnail generation and the gallery view mode.
 
 ---
 
+## Task 8.1 — Manager UX refinements  ✅
+
+**Status: complete.** A polish pass over the Manager layout and the thumbnail pipeline, plus the sandbox file-access fix that on-disk edits require. Build clean; 26 tests pass.
+
+**Layout.** The three-pane Manager shell uses `NavigationSplitView` (Playlists sidebar + center detail) with the Tag panel as a trailing `.inspector`. Both side regions fill the full window height, are independently resizable, and remember their widths; collapsing one no longer collapses the layout. The sidebar collapses via the system toggle and the inspector via a toolbar button. The Add-Playlist control is a borderless **+** in a `.safeAreaInset` bar at the bottom of the sidebar, so it stays grouped with the playlists.
+
+**File access (sandbox).** The app is sandboxed with `ENABLE_USER_SELECTED_FILES = readwrite` (rename, tag-edit, and trash are disk writes — read-only access blocked them). `AppState.beginFolderAccess(to:)` centralizes scoped access for every file mutation: it starts a scoped session and, when the bookmark is stale or denied, prompts the user with an `NSOpenPanel` to relocate the folder, refreshes and persists the bookmark, then retries.
+
+**Thumbnails.** Generation and PNG decode run off the main actor. Under Approachable Concurrency a `nonisolated async` function runs on the caller's actor, so the CPU-bound workers (`cacheKey`, `produceImage`) are marked `@concurrent` to land on the concurrent pool while staying in the cell's `.task` cancellation chain. The image is decoded into a ready-to-draw `NSImage` off-main, so scrolling never blocks on a draw-time decode. A synchronous in-memory hit (`cachedThumbnail`) serves already-seen cells without disk I/O or a placeholder flash, and gallery tiles are uniform 4:3 (image center-cropped to fill). The on-disk cache key is the SHA-256 of relative path + modification date + max pixel size.
+
+**Optimistic progress indicators.** `AppState` exposes three transient states the sidebar renders as spinners: a folder being scanned into a playlist appears immediately as a row with a spinner; a playlist with a background re-scan in flight shows a spinner in place of its file count; deleting a large playlist clears the selection at once, then removes its files in batches (yielding between each so the UI stays responsive) while its row shows a destructive red spinner until it disappears.
+
+---
+
 ## Task 9 — mpv integration (MPVClient, MPVMetalView)
 
 The C-to-Swift bridge for libmpv and the Metal rendering surface.

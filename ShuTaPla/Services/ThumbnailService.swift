@@ -54,25 +54,43 @@ final class ThumbnailService {
         let bookmark = playlist.folderBookmark
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video
+        let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
+
+        if let cached = memory.object(forKey: memKey) { return cached }
 
         guard let key = await Self.cacheKey(
             bookmark: bookmark, relativePath: relativePath, maxPixelSize: maxPixelSize
         ) else { return nil }
 
-        let nsKey = key as NSString
-        if let cached = memory.object(forKey: nsKey) { return cached }
-
-        guard let data = await Self.produceData(
+        // Generation *and* decode happen off the main actor, so the cell receives a
+        // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
+        guard let boxed = await Self.produceImage(
             bookmark: bookmark,
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
             key: key,
             cacheDirectory: cacheDirectory
-        ), let image = NSImage(data: data) else { return nil }
+        ) else { return nil }
 
-        memory.setObject(image, forKey: nsKey)
-        return image
+        memory.setObject(boxed.image, forKey: memKey)
+        return boxed.image
+    }
+
+    /// A synchronous in-memory hit for the scroll-hot path — no disk I/O, so a
+    /// cell that has been shown before paints its thumbnail immediately without a
+    /// placeholder flash. Returns `nil` on a miss; the caller then awaits
+    /// `thumbnail(for:in:maxPixelSize:)` to generate it off the main actor.
+    func cachedThumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSImage? {
+        memory.object(forKey: memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize))
+    }
+
+    /// Cheap, disk-I/O-free key for the in-memory cache: folder + relative path +
+    /// size. The on-disk cache keys additionally by modification date; an
+    /// in-memory entry is refreshed when the file is renamed (its relative path
+    /// changes) or on the next launch.
+    private func memoryKey(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSString {
+        "\(playlist.folderBookmark.hashValue)|\(file.relativePath)|\(maxPixelSize)" as NSString
     }
 
     /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative
@@ -97,6 +115,7 @@ final class ThumbnailService {
     /// `<relativePath>|<modDate>|<size>` hashed to a filesystem-safe name. A
     /// changed modification date yields a new key, invalidating the old thumbnail.
     /// Returns `nil` when the file is gone.
+    @concurrent
     nonisolated static func cacheKey(bookmark: Data, relativePath: String, maxPixelSize: Int) async -> String? {
         guard let resolved = try? BookmarkService.resolve(bookmark) else { return nil }
         let didAccess = resolved.url.startAccessingSecurityScopedResource()
@@ -142,6 +161,33 @@ final class ThumbnailService {
         return data
     }
 
+    /// Like `produceData`, but additionally decodes the PNG into a fully
+    /// rasterized `NSImage` off the main actor. Wrapping the result lets it cross
+    /// back to the main actor without a draw-time decode on the scroll path.
+    @concurrent
+    private nonisolated static func produceImage(
+        bookmark: Data,
+        relativePath: String,
+        isVideo: Bool,
+        maxPixelSize: Int,
+        key: String,
+        cacheDirectory: URL
+    ) async -> SendableImage? {
+        guard let data = await produceData(
+            bookmark: bookmark,
+            relativePath: relativePath,
+            isVideo: isVideo,
+            maxPixelSize: maxPixelSize,
+            key: key,
+            cacheDirectory: cacheDirectory
+        ) else { return nil }
+
+        // `cgImage` forces the decode here, off-main; `NSImage(cgImage:)` then wraps
+        // an already-decoded bitmap so no lazy decode happens when the cell draws.
+        guard let rep = NSBitmapImageRep(data: data), let cg = rep.cgImage else { return nil }
+        return SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
+    }
+
     /// Renders a thumbnail for a file on disk and encodes it as PNG. Used by
     /// `produceData` and exercised directly by tests.
     nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> Data? {
@@ -172,4 +218,11 @@ final class ThumbnailService {
         let time = CMTime(seconds: 1, preferredTimescale: 600)
         return try? await generator.image(at: time).image
     }
+}
+
+/// Carries an `NSImage` decoded off the main actor back to it. The image is
+/// constructed once and never mutated, so the unchecked conformance is safe.
+private nonisolated struct SendableImage: @unchecked Sendable {
+    let image: NSImage
+    init(_ image: NSImage) { self.image = image }
 }

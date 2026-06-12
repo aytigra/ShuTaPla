@@ -33,6 +33,8 @@ struct PlaylistSidebar: View {
         List {
             audioHint
 
+            importingSection
+
             section(title: "Video", mediaType: .video)
             section(title: "Image", mediaType: .image)
         }
@@ -46,16 +48,23 @@ struct PlaylistSidebar: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 0) {
                 Button {
                     isImporting = true
                 } label: {
-                    Label("Add Playlist", systemImage: "plus")
+                    Image(systemName: "plus")
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.borderless)
                 .disabled(isWorking)
                 .help("Add a playlist from a folder")
+                Spacer()
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.bar)
         }
         .fileImporter(
             isPresented: $isImporting,
@@ -92,8 +101,8 @@ struct PlaylistSidebar: View {
             presenting: deleteCandidate
         ) { playlist in
             Button("Delete “\(playlist.name)”", role: .destructive) {
-                appState.delete(playlist)
                 deleteCandidate = nil
+                Task { await appState.delete(playlist) }
             }
             Button("Cancel", role: .cancel) { deleteCandidate = nil }
         } message: { _ in
@@ -111,6 +120,26 @@ struct PlaylistSidebar: View {
     private var videoPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .video } }
     private var imagePlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .image } }
     private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
+
+    /// Transient rows for folders still being scanned, each with a spinner. They
+    /// disappear once the finished playlist appears in its section.
+    @ViewBuilder
+    private var importingSection: some View {
+        if !appState.importingPlaylists.isEmpty {
+            Section {
+                ForEach(appState.importingPlaylists) { importing in
+                    HStack {
+                        Text(importing.name)
+                            .lineLimit(1)
+                        Spacer()
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private func section(title: String, mediaType: MediaType) -> some View {
@@ -141,13 +170,23 @@ struct PlaylistSidebar: View {
                     Text(playlist.name)
                         .lineLimit(1)
                     Spacer()
-                    Text("\(playlist.files.count)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                    if appState.deletingPlaylistIDs.contains(playlist.id) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.red)
+                    } else if appState.busyPlaylistIDs.contains(playlist.id) {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("\(playlist.files.count)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(appState.deletingPlaylistIDs.contains(playlist.id))
             .listRowBackground(appState.selectedPlaylist === playlist ? Color.accentColor.opacity(0.18) : nil)
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }

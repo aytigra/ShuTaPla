@@ -2,8 +2,10 @@
 //  ManagerView.swift
 //  ShuTaPla
 //
-//  Manager-mode shell: a three-column layout (playlists, center file list, tag
-//  panel) built on `HSplitView` with independently collapsible side panels.
+//  Manager-mode shell: a three-pane layout built on `NavigationSplitView` (the
+//  playlists sidebar and the center file panel) plus a trailing `.inspector` for
+//  the tag panel. Each region fills the full window height and is independently
+//  resizable, and the split view remembers the widths the user sets.
 //
 
 import SwiftUI
@@ -11,42 +13,29 @@ import SwiftUI
 struct ManagerView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var leftCollapsed = false
-    @State private var rightCollapsed = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var showInspector = true
 
     var body: some View {
-        HSplitView {
-            if !leftCollapsed {
-                PlaylistSidebar()
-                    .frame(minWidth: 200, idealWidth: 240, maxWidth: 360)
-                    .transition(.move(edge: .leading))
-            }
-
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            PlaylistSidebar()
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
+        } detail: {
             PlaylistCenterView()
-                .frame(minWidth: 360, maxWidth: .infinity)
-
-            if !rightCollapsed {
-                TagSidebar()
-                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 380)
-                    .transition(.move(edge: .trailing))
-            }
+                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .inspector(isPresented: $showInspector) {
+                    TagSidebar()
+                        .inspectorColumnWidth(min: 220, ideal: 280, max: 380)
+                }
         }
         .toolbar {
-            ToolbarItem(placement: .navigation) {
+            ToolbarItem {
                 Button {
-                    withAnimation { leftCollapsed.toggle() }
-                } label: {
-                    Label("Toggle Playlists", systemImage: "sidebar.left")
-                }
-                .help(leftCollapsed ? "Show playlists" : "Hide playlists")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation { rightCollapsed.toggle() }
+                    showInspector.toggle()
                 } label: {
                     Label("Toggle Tags", systemImage: "sidebar.right")
                 }
-                .help(rightCollapsed ? "Show tags" : "Hide tags")
+                .help(showInspector ? "Hide tags" : "Show tags")
             }
         }
     }

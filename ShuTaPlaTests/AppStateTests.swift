@@ -248,7 +248,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
         appState.select(b)
-        appState.delete(b)  // cancels the in-flight update before b is freed
+        await appState.delete(b)  // cancels the in-flight update before b is freed
         await appState.updateTask?.value
 
         #expect(appState.selectedPlaylist == nil)

@@ -178,6 +178,8 @@ The app uses two layers of state:
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
 - Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
 - Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
+- Centralizing scoped folder access for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt.
+- Exposing optimistic-progress state that the sidebar renders as spinners: folders being scanned into new playlists, playlists with a background re-scan in flight, and playlists being deleted (whose files are removed in batches, yielding between each so the UI stays responsive).
 
 #### PlaybackCoordinator
 
@@ -349,18 +351,23 @@ class MPVClient {
 
 ### ThumbnailService
 
+`@MainActor @Observable`, injected into the environment.
+
 ```
 Responsibilities:
-  - Generate thumbnails for video files (mpv screenshot command, or ffmpeg via libmpv).
   - Generate thumbnails for image files (CGImageSource with kCGImageSourceThumbnailMaxPixelSize).
-  - Cache thumbnails in memory (NSCache) and on disk (Caches directory).
-  - Provide async thumbnail loading for gallery view.
+  - Generate thumbnails for video files (AVAssetImageGenerator; an mpv screenshot can
+    replace this once the player lands, for formats AVFoundation can't decode).
+  - Cache decoded images in memory (NSCache) over an on-disk PNG cache (Caches directory).
+  - Provide async, cancellable thumbnail loading for the gallery, generated and decoded
+    off the main actor.
 
 Key methods:
-  thumbnail(for file: PlaylistFile, in playlist: Playlist, size: CGSize) async -> NSImage?
+  thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> NSImage?
+  cachedThumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSImage?
 ```
 
-Thumbnails are generated lazily on first request and cached. Cache key is `file relativePath + modification date` so stale thumbnails are invalidated.
+Thumbnails are generated lazily on first request and cached. The on-disk cache key is the SHA-256 of `relativePath + modification date + max pixel size`, so an edited file (or a different requested size) yields a fresh thumbnail. Generation and PNG decode run off the main actor: the `@MainActor` entry point reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoding off-main, so scrolling never blocks on a draw-time decode — see §10). `cachedThumbnail` is a synchronous in-memory lookup so a cell shown before paints without disk I/O or a placeholder flash. Each gallery cell loads via `.task(id:)`, which cancels the work when the cell scrolls off-screen.
 
 ### BookmarkService
 
@@ -369,7 +376,9 @@ Responsibilities:
   - Create security-scoped bookmarks from user-selected folder URLs.
   - Resolve bookmarks back to URLs with security-scoped access.
   - Track active access sessions (startAccessingSecurityScopedResource / stop).
-  - Handle stale bookmarks (re-prompt user if bookmark can no longer be resolved).
+  - Surface stale/denied bookmarks by throwing, so the caller can re-prompt. The re-grant
+    flow lives in AppState.beginFolderAccess(to:): it prompts with an NSOpenPanel, recreates
+    and persists the bookmark from the freshly granted URL, then retries the operation.
 
 Lifecycle:
   - startAccessingSecurityScopedResource() is called when a playlist becomes active
@@ -418,6 +427,7 @@ Because the app is single-window, the default "New Window" command is removed so
 @main
 struct ShuTaPlaApp: App {
     @State private var appState = AppState()
+    @State private var thumbnailService = ThumbnailService()
 
     var body: some Scene {
         WindowGroup {
@@ -427,6 +437,7 @@ struct ShuTaPlaApp: App {
             case .player:     PlayerView()
             }
             .environment(appState)
+            .environment(thumbnailService)
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -459,7 +470,7 @@ struct ShuTaPlaApp: App {
 └──────────────────────────────────────────────────────────┘
 ```
 
-Implemented as a custom three-column layout using `HSplitView` with collapsible side panels. `NavigationSplitView` is not used — its fixed column semantics and limited width control don't suit a media manager with independently collapsible panels. The left and right panels have toggle buttons to collapse/expand, with animated width transitions. `HSplitView` does not natively support collapsing — the collapse is implemented by conditionally setting the panel's frame width to zero (or removing its content) and animating the transition with `withAnimation`.
+Implemented with `NavigationSplitView` — the Playlists sidebar and the center detail — plus a trailing `.inspector` for the Tag panel. Each region fills the full window height and is independently resizable, and the split view remembers the widths the user sets. The sidebar collapses via the system sidebar toggle; the Tag inspector toggles from a toolbar button. The inspector (rather than a third split-view column) is what makes the right panel independently collapsible and resizable — a two-column split view only offers progressive left-to-right column hiding, which can't toggle a trailing panel on its own. The Add-Playlist control lives in a `.safeAreaInset` bar at the bottom of the sidebar so it stays grouped with the playlists.
 
 **Playlists panel structure**: The left panel groups playlists into sections by media type — **Video**, **Image** — each with full management controls (create, rename, delete, reorder via drag). At the top, a collapsed **Audio** section acts as a visual hint; clicking it opens the extended audio overlay (where audio playlists are managed). Playlists are rendered from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro — `@ObservationIgnored` would be required), filtered by `mediaType`, sorted by `sortOrder`.
 
@@ -805,7 +816,7 @@ Key event arrives
 
 ### Project settings
 
-Swift 6 language mode with **default actor isolation set to `MainActor`** (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and Approachable Concurrency — the Xcode 26 defaults for new projects). Everything is MainActor-isolated unless declared otherwise; the explicit `@MainActor` annotations shown in this document are then redundant but kept for clarity. Off-main work is opted into explicitly: `actor` types (`FileSystemService`), `nonisolated`/`@concurrent` functions, and the MPVClient serial queue.
+Swift 6 language mode with **default actor isolation set to `MainActor`** (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and Approachable Concurrency — the Xcode 26 defaults for new projects). Everything is MainActor-isolated unless declared otherwise; the explicit `@MainActor` annotations shown in this document are then redundant but kept for clarity. Off-main work is opted into explicitly: `actor` types (`FileSystemService`), the MPVClient serial queue, and `@concurrent` functions. **Under Approachable Concurrency a plain `nonisolated async` function runs on the caller's actor**, so a CPU-bound helper awaited from the main actor stays on the main thread unless marked `@concurrent` (as the thumbnail generation/decode workers are). `nonisolated` alone is not enough to leave the main actor here.
 
 ### Actor boundaries
 
@@ -839,7 +850,7 @@ func reshuffle(playlist: Playlist) async {
 |-----------|----------|
 | Folder scan (create/reshuffle) | Structured Task, shows progress indicator |
 | Auto-update on playlist activation | Structured `Task` from `@MainActor` context; the `await fileSystemService.scanFolder(...)` call hops off MainActor naturally via actor isolation. Non-blocking — results merged on return. |
-| Thumbnail generation | TaskGroup, parallel per-file, cancellable on scroll |
+| Thumbnail generation | Per-cell `.task(id:)`; generated and decoded on `@concurrent` workers off the main actor, cancellable on scroll |
 | File rename (tag edit) | Inline await on FileSystemService, fast enough to feel synchronous |
 | Batch tag rename/remove | Structured Task with progress, cancellable |
 
@@ -866,7 +877,7 @@ func reshuffle(playlist: Playlist) async {
 - **Window close** (not quit): Persist current state and activate suppression. Playlist states are unchanged.
 - **Window reopen**: Lift suppression — Playing playlists continue, Paused ones stay paused.
 - **App termination**: Final persist of all playback positions and state.
-- **Folder becomes inaccessible** (bookmark stale): Surface error in playlist header with option to re-select folder.
+- **Folder becomes inaccessible** (bookmark stale): On a file mutation, prompt the user to relocate the folder and refresh the bookmark, then retry (`AppState.beginFolderAccess(to:)`). Persistent inaccessibility surfaces an error in the playlist header with an option to re-select the folder.
 
 ---
 
@@ -877,7 +888,7 @@ func reshuffle(playlist: Playlist) async {
 | File missing during playback | Skip silently, remove from playlist, advance to next. |
 | File missing during scan/update | Prune from playlist (Update mode) or don't include (Reshuffle). |
 | Corrupt/unplayable media file | Skip, advance to next. Increment skipped-files count. |
-| Folder access lost (stale bookmark) | Show inline error on playlist. Offer to re-select folder. |
+| Folder access lost (stale bookmark) | On a file mutation, prompt to relocate the folder and refresh the bookmark, then retry. Persistent inaccessibility shows an inline error on the playlist. |
 | File rename fails (permissions, collision, read-only/offline volume) | Leave file untouched. Show a non-blocking notification. No model changes. |
 | File move-to-Trash fails | Leave file untouched. Show a non-blocking notification. No model changes. |
 | Disk full during rename | Leave file untouched. Show a non-blocking notification. No model changes. |
@@ -989,6 +1000,7 @@ ShuTaPla/                            (app source)
 │   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
+│   │   ├── FileSelection.swift          // shared click-selection + delete-target logic (list + gallery)
 │   │   └── FileRowView.swift            // single file row in list
 │   │
 │   └── Settings/
@@ -1036,7 +1048,7 @@ SwiftUI's `.onHover` does not fire when the cursor hits the screen edge in fulls
 
 ### Why security-scoped bookmarks
 
-macOS sandbox (even for direct-distribution apps) requires security-scoped bookmarks to persist folder access across launches. Without them, the app would need to re-prompt for folder access every time it launches. Storing bookmark data in SwiftData alongside the playlist ensures seamless access.
+macOS sandbox (even for direct-distribution apps) requires security-scoped bookmarks to persist folder access across launches. Without them, the app would need to re-prompt for folder access every time it launches. Storing bookmark data in SwiftData alongside the playlist ensures seamless access. The app declares user-selected **read-write** file access (`ENABLE_USER_SELECTED_FILES = readwrite`), since tag edits, renames, and trashing write to the selected folders; if a saved bookmark goes stale or access is denied, `AppState.beginFolderAccess(to:)` prompts the user to relocate the folder and refreshes the bookmark.
 
 ### Why a single actor for file I/O
 

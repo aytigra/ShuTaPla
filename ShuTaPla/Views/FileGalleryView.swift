@@ -125,30 +125,40 @@ private struct GalleryCell: View {
         .background(isSelected ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .task(id: thumbnailKey) {
+            // A previously generated thumbnail is served synchronously, so seen
+            // cells don't flash a placeholder while scrolling; otherwise generate
+            // it off the main actor.
+            if let cached = thumbnails.cachedThumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize) {
+                image = cached
+                return
+            }
             image = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
         }
     }
 
+    /// A uniform 4:3 tile: the rectangle fills the (equal) grid-column width, so
+    /// every thumbnail is the same size regardless of the source's dimensions.
+    /// The image fills and is center-cropped to the tile.
     private var thumbnail: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 6).fill(.quaternary)
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: playlist.mediaType == .video ? "film" : "photo")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.secondary)
+        RoundedRectangle(cornerRadius: 6)
+            .fill(.quaternary)
+            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: playlist.mediaType == .video ? "film" : "photo")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                }
             }
-        }
-        .frame(height: 120)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
+            }
     }
 
     @ViewBuilder

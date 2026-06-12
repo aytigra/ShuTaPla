@@ -29,6 +29,13 @@ struct PendingPlaylist {
     let scan: ScanResult
 }
 
+/// A folder being scanned into a new playlist, shown optimistically in the
+/// sidebar (with a spinner) until the finished playlist replaces it.
+struct ImportingPlaylist: Identifiable {
+    let id = UUID()
+    let name: String
+}
+
 /// Outcome of picking a folder and scanning it.
 enum AddPlaylistOutcome {
     /// A single dominant type was detected; the playlist was created.
@@ -83,6 +90,18 @@ final class AppState {
     /// Cached so the file list doesn't refilter on every redraw; recomputed when
     /// the selection, filter, service filter, or file set changes.
     private(set) var filteredFiles: [PlaylistFile] = []
+
+    /// Folders currently being scanned into new playlists, shown in the sidebar as
+    /// transient spinner rows so a large import gives immediate feedback.
+    private(set) var importingPlaylists: [ImportingPlaylist] = []
+
+    /// IDs of existing playlists with a long-running operation in flight (e.g. a
+    /// background re-scan), so their sidebar rows can show a spinner.
+    private(set) var busyPlaylistIDs: Set<UUID> = []
+
+    /// IDs of playlists currently being deleted (their files are being cleaned out
+    /// in batches), so their sidebar rows can show a destructive red spinner.
+    private(set) var deletingPlaylistIDs: Set<UUID> = []
 
     init(
         modelContext: ModelContext,
@@ -146,6 +165,10 @@ final class AppState {
     /// creates the playlist (single dominant type) or reports that a type choice
     /// is needed (Mixed) or that the folder is empty.
     func addPlaylist(from url: URL) async -> AddPlaylistOutcome {
+        let importing = ImportingPlaylist(name: url.lastPathComponent)
+        importingPlaylists.append(importing)
+        defer { importingPlaylists.removeAll { $0.id == importing.id } }
+
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
 
@@ -266,9 +289,12 @@ final class AppState {
         playlist.name = trimmed
     }
 
-    /// Deletes a playlist (cascading to its files), clearing any active/selected
-    /// reference to it, and compacts the remaining sort orders in its section.
-    func delete(_ playlist: Playlist) {
+    /// Deletes a playlist and its files, clearing any active/selected reference to
+    /// it and compacting the remaining sort orders in its section. The selection
+    /// clears immediately; the files are then removed in batches (yielding between
+    /// each) so a large playlist's cleanup keeps the UI responsive and its row can
+    /// show a spinner until it disappears.
+    func delete(_ playlist: Playlist) async {
         updateTask?.cancel()
         if selectedPlaylist === playlist { selectedPlaylist = nil }
         if activeVideoPlaylist === playlist {
@@ -284,7 +310,23 @@ final class AppState {
             appStateModel.activeAudioPlaylistId = nil
         }
         let mediaType = playlist.mediaType
+        let id = playlist.id
+
+        deletingPlaylistIDs.insert(id)
+        let files = Array(playlist.files)
+        var start = 0
+        let batchSize = 200
+        while start < files.count {
+            let end = min(start + batchSize, files.count)
+            for file in files[start..<end] {
+                file.playlist = nil  // detach so the cascade doesn't re-walk them
+                modelContext.delete(file)
+            }
+            start = end
+            await Task.yield()
+        }
         modelContext.delete(playlist)
+        deletingPlaylistIDs.remove(id)
         compactSortOrder(for: mediaType)
         recomputeFilteredFiles()
     }
@@ -304,6 +346,9 @@ final class AppState {
     /// here; the file list simply stays as it was.
     func update(_ playlist: Playlist) async {
         guard !Task.isCancelled else { return }
+        busyPlaylistIDs.insert(playlist.id)
+        defer { busyPlaylistIDs.remove(playlist.id) }
+
         let known = Set(playlist.files.map(\.relativePath))
         let delta: UpdateDelta
         do {
@@ -374,12 +419,7 @@ final class AppState {
     /// re-parsed tags). Returns a user-facing message on failure, `nil` on success.
     func renameFile(_ file: PlaylistFile, to newName: String) async -> String? {
         guard let playlist = file.playlist else { return "This file isn't in a playlist." }
-        let folderURL: URL
-        do {
-            folderURL = try bookmarkService.startAccess(to: playlist.folderBookmark)
-        } catch {
-            return "Couldn't access the playlist folder."
-        }
+        guard let folderURL = beginFolderAccess(to: playlist) else { return nil }
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
 
         if let error = await applyRename(file, to: newName, in: folderURL) { return error }
@@ -418,12 +458,7 @@ final class AppState {
     /// the playlist. Returns a message when some files couldn't be trashed.
     func deleteFiles(_ files: [PlaylistFile]) async -> String? {
         guard let playlist = files.first?.playlist else { return nil }
-        let folderURL: URL
-        do {
-            folderURL = try bookmarkService.startAccess(to: playlist.folderBookmark)
-        } catch {
-            return "Couldn't access the playlist folder."
-        }
+        guard let folderURL = beginFolderAccess(to: playlist) else { return nil }
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
 
         var byURL: [URL: PlaylistFile] = [:]
@@ -464,9 +499,47 @@ final class AppState {
     /// Reveals a file in the Finder.
     func revealInFinder(_ file: PlaylistFile) {
         guard let playlist = file.playlist,
-              let folderURL = try? bookmarkService.startAccess(to: playlist.folderBookmark) else { return }
+              let folderURL = beginFolderAccess(to: playlist) else { return }
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
         NSWorkspace.shared.activateFileViewerSelecting([folderURL.appending(path: file.relativePath)])
+    }
+
+    // MARK: - Folder access
+
+    /// Returns the playlist's folder URL with a scoped-access session started, or
+    /// `nil` if the user cancels. When the saved bookmark is stale or access is
+    /// denied, the user is asked to locate the folder again and the bookmark is
+    /// refreshed before access is retried. Each successful call must be balanced
+    /// by `bookmarkService.stopAccess(to: playlist.folderBookmark)`.
+    private func beginFolderAccess(to playlist: Playlist) -> URL? {
+        if let url = try? bookmarkService.startAccess(to: playlist.folderBookmark) {
+            return url
+        }
+        guard let url = promptForFolderAccess(to: playlist),
+              refreshBookmark(of: playlist, from: url) else { return nil }
+        return try? bookmarkService.startAccess(to: playlist.folderBookmark)
+    }
+
+    /// Re-creates and persists the playlist's bookmark from a freshly granted URL.
+    private func refreshBookmark(of playlist: Playlist, from url: URL) -> Bool {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        guard let bookmark = try? BookmarkService.makeBookmark(for: url) else { return false }
+        playlist.folderBookmark = bookmark
+        playlist.folderPath = url.path(percentEncoded: false)
+        return true
+    }
+
+    /// Asks the user to point at the playlist's folder to re-grant access.
+    private func promptForFolderAccess(to playlist: Playlist) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Grant Access"
+        panel.message = "Locate “\(playlist.name)” to let ShuTaPla modify its files."
+        panel.directoryURL = URL(fileURLWithPath: playlist.folderPath)
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     /// Temporary playback entry point until the PlaybackCoordinator (Task 11).
@@ -512,12 +585,7 @@ final class AppState {
     private func editTags(_ files: [PlaylistFile], transform: (String) -> String) async -> String? {
         let editable = files.filter { $0.taggingStatus != .invalid }
         guard let playlist = editable.first?.playlist else { return nil }
-        let folderURL: URL
-        do {
-            folderURL = try bookmarkService.startAccess(to: playlist.folderBookmark)
-        } catch {
-            return "Couldn't access the playlist folder."
-        }
+        guard let folderURL = beginFolderAccess(to: playlist) else { return nil }
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
 
         var firstError: String?

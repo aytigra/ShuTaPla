@@ -58,6 +58,8 @@ A single folder may back multiple playlists (for instance, an audio playlist and
 
 If the selected folder contains no supported media files at all, the app shows a brief message and does not create a playlist.
 
+Scanning a large folder can take a moment. The new playlist appears in the Playlists panel immediately with a progress spinner and fills in once the scan completes, so adding a folder never leaves the window looking idle.
+
 ## Playlists
 
 Each playlist stores:
@@ -125,7 +127,7 @@ In Manager mode, the window content is laid out as panels — no overlays are us
 
 ### Layout
 
-- **Left collapsible panel** — Playlists. Shows video and image playlists in separate sections with full management controls (create, rename, delete, reorder). At the top, a collapsed "Audio" section acts as a visual hint; pressing it reveals the extended audio overlay (see Audio Player). Selecting a playlist here opens it in Stopped state in the Manager view.
+- **Left collapsible panel** — Playlists. Shows video and image playlists in separate sections with full management controls (create, rename, delete, reorder). At the top, a collapsed "Audio" section acts as a visual hint; pressing it reveals the extended audio overlay (see Audio Player). Selecting a playlist here opens it in Stopped state in the Manager view. A playlist with a background re-scan in progress shows a spinner in place of its file count; deleting a large playlist clears the selection at once and the row shows a red progress spinner while its files are cleaned out in the background, staying visible until removal completes.
 - **Center** — playlist header (name, Play button, Reshuffle / Update controls, list/gallery toggle for image/video playlists), filtering controls (tag multi-select, AND/OR switch, saved multi-tag searches), counter notices for untagged / invalid tagging / skipped files (each activates its service filter — see Service filters), file list respecting the active filter.
 - **Right collapsible panel** — Tag management for the file(s) currently selected in the center list. Same multi-select tag input described under Tag editing UI.
 
@@ -222,7 +224,7 @@ When the tag input is focused, all keys are captured by the tag editor and do no
 
 Adding, removing, or renaming a tag immediately renames the underlying file on disk. The playlist's reference is updated in place so play position is not lost.
 
-If a disk operation fails — a rename that would collide with an existing filename, a permission error, a read-only or disconnected volume, or any move-to-Trash failure — the app does not lose the file or its playlist entry: it leaves the file as-is and surfaces a clear, non-blocking notification so the user knows to resolve it. This applies to all file mutations (tag edits, renames, deletes, and playlist-wide tag operations).
+If the app has lost write access to a playlist's folder (the saved permission went stale, or the folder moved or was renamed), it asks the user to locate the folder again before the edit; once re-granted, it remembers the new permission and proceeds. If a disk operation still fails — a rename that would collide with an existing filename, a permission error, a read-only or disconnected volume, or any move-to-Trash failure — the app does not lose the file or its playlist entry: it leaves the file as-is and surfaces a clear, non-blocking notification so the user knows to resolve it. This applies to all file mutations (tag edits, renames, deletes, and playlist-wide tag operations).
 
 ## Filtering and search
 
