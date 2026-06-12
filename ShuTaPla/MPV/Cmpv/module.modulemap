@@ -1,0 +1,9 @@
+// Clang module wrapping libmpv's C API. Marked [system] so warnings from the mpv headers
+// are suppressed. Imported from Swift as `import Cmpv`. The module is discovered via
+// SWIFT_INCLUDE_PATHS (this directory); the mpv headers it pulls in resolve through
+// HEADER_SEARCH_PATHS. No `link` directive — the app target links libmpv via OTHER_LDFLAGS,
+// and the test target loads it at runtime through the host app.
+module Cmpv [system] {
+    header "shim.h"
+    export *
+}

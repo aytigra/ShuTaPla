@@ -11,6 +11,10 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 **No residue from dismissed alternatives.** When a choice, code, or prose is corrected or replaced, never describe the dismissed version in artifacts (docs, plans, comments, commit messages) — no "it is no longer X", "this does not do Y anymore", "unlike before". Mention the former state only when the current choice is hard to understand without it, and only as an explanation of the current choice.
 
+## Code conventions
+
+**Extract reusable logic into type extensions.** When a piece of logic is a general operation on a standard type (e.g. an array reordering that mirrors SwiftUI's `move(fromOffsets:toOffset:)`), add it as a type extension in `Extensions/` rather than inlining the body at the call site — even when the motivation is to avoid an import (e.g. SwiftUI in the state layer). Keeps call sites readable, makes the helper reusable and testable on its own, and matches familiar standard-library/SwiftUI naming.
+
 ## Claude Code configuration
 
 This project uses `~/.claude-ios/` as the Claude Code configuration directory (not the default `~/.claude/`). MCP servers, skills, settings, and memory are all stored there.

@@ -232,30 +232,32 @@ Thumbnail generation and the gallery view mode.
 
 ---
 
-## Task 9 — mpv integration (MPVClient, MPVMetalView)
+## Task 9 — mpv integration (MPVClient, MPVMetalView) ✅
 
-The C-to-Swift bridge for libmpv and the Metal rendering surface.
+**Status: complete.** The C-to-Swift bridge for libmpv and the Metal rendering surface.
 
 **Deliverables:**
-- `mpv-bridging.h` — C bridging header for libmpv
-- `MPVEvent.swift` — Swift enum mapping mpv events (time-pos, duration, pause, eof-reached, etc.)
-- `MPVClient.swift` — Swift wrapper around `mpv_handle`:
-  - Serial `DispatchQueue` for all mpv API calls
-  - `loadFile`, `play`, `pause`, `stop`, `seek(to:)`, `seek(by:)`, volume, isLooping
-  - `mpv_observe_property` for time-pos, duration, pause, eof-reached
-  - `mpv_set_wakeup_callback` → events into `AsyncStream<MPVEvent>`
-  - `@unchecked Sendable` with documented safety invariant
-- `MPVMetalView.swift` — `NSView` subclass with `CAMetalLayer`, mpv render context via Vulkan/MoltenVK, resize handling
-- Build phase: copy and sign `libmpv.dylib`, `libMoltenVK.dylib`, and dependencies into `Frameworks/`
-- mpv configured with `--vo=gpu-next --gpu-api=vulkan --gpu-context=moltenvk`
+- `MPV/Cmpv/` — a Clang module (`module.modulemap` + `shim.h`) exposing libmpv's C API to Swift as `import Cmpv`. A module rather than an Objective-C bridging header so `@testable import` consumers resolve it cleanly under explicit modules. Discovered via `SWIFT_INCLUDE_PATHS`; the mpv headers it pulls in resolve through `HEADER_SEARCH_PATHS` (the Homebrew mpv keg).
+- `MPVEvent.swift` — `nonisolated` `Sendable` enum projecting the mpv events the app consumes (time-pos, duration, pause, file-loaded, end-of-file with reason, shutdown, log).
+- `MPVClient.swift` — `nonisolated final class … @unchecked Sendable` wrapper around `mpv_handle`:
+  - Serial `DispatchQueue` serializes every mpv API call (`handle` is `nonisolated(unsafe)`).
+  - `loadFile(_:startingAt:)`, `play`, `pause`, `stop`, `seek(to:)`, `seek(by:)`, `volume` get/set, `isLooping` get/set.
+  - `mpv_observe_property` for time-pos, duration, pause, and eof-reached (the natural-end trigger under `keep-open=yes`).
+  - `mpv_set_wakeup_callback` (capture-free C closure) → serial drain → `AsyncStream<MPVEvent>`, single consumer.
+  - Audio vs. video via `Configuration` (`--vo=null` vs. `--vo=gpu-next`); optional `wid` passed at init for video embedding.
+- `MPVMetalView.swift` — `NSView` subclass backed by a `CAMetalLayer` (EDR enabled); mpv renders into it through Vulkan/MoltenVK via the view's `wid`. Keeps the drawable size in step with backing scale on resize/display change.
+- "Bundle mpv" build phase (`Scripts/bundle-mpv.sh`) — copies libmpv and its full dependency closure plus MoltenVK into `Contents/Frameworks/`, rewrites all install names to `@rpath`, writes the MoltenVK Vulkan ICD manifest into `Resources/`, and re-signs each dylib with the app's identity (passes library validation under the hardened runtime). `MPVClient` points the Vulkan loader at the bundled ICD via `VK_DRIVER_FILES`. The app links libmpv from the keg (`-lmpv`, `LIBRARY_SEARCH_PATHS`); the shipped bundle carries its own signed copies and needs no Homebrew at runtime.
+- mpv configured with `--vo=gpu-next --gpu-api=vulkan --gpu-context=moltenvk`, `target-colorspace-hint=yes`, `keep-open=yes`, `idle=yes`.
 
-**Testable:**
-- MPVClient creates handle without crash
-- Load a test video file → events stream produces time-pos and duration updates
-- Play/pause/stop commands change state observable via events
-- Seek produces updated time-pos
-- Volume get/set round-trips correctly
-- MPVMetalView renders frames (visual verification)
+**Testable:** `MPVClientTests` drives a real libmpv instance via mpv's libavfilter virtual sources (`av://lavfi:…`), so no media fixture or subprocess is needed inside the sandboxed test host. 6 tests, all passing:
+- MPVClient creates and destroys a handle without crashing.
+- Loading a file streams duration and advancing time-pos events.
+- Pause command emits `pausedChanged`.
+- Seek moves time-pos.
+- Volume get/set round-trips.
+- Natural end emits `endFile(.eof)` (via eof-reached).
+
+Visual frame rendering is verified once the player views host `MPVMetalView` (Tasks 11–12).
 
 ---
 

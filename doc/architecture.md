@@ -32,9 +32,9 @@ ShuTaPla is a single-window macOS media player built with SwiftUI and SwiftData.
 
 mpv is embedded as **libmpv** (dynamic library, `libmpv.dylib`) built via Homebrew or from source with `--enable-libmpv-shared`. The app ships the dylib inside the app bundle's `Frameworks/` directory.
 
-**Rendering pipeline**: mpv is configured with `--vo=gpu-next --gpu-api=vulkan --gpu-context=moltenvk`. MoltenVK translates Vulkan calls to Metal, so mpv renders through the Metal driver without using the deprecated OpenGL API. The `MPVMetalView` (an `NSView` subclass) hosts a `CAMetalLayer` and uses mpv's render API (`mpv_render_context`) to present decoded frames. This NSView is bridged into SwiftUI via `NSViewRepresentable`. MoltenVK (`libMoltenVK.dylib`) is bundled alongside libmpv in the app's `Frameworks/` directory.
+**Rendering pipeline**: mpv is configured with `--vo=gpu-next --gpu-api=vulkan --gpu-context=moltenvk`. MoltenVK translates Vulkan calls to Metal, so mpv renders through the Metal driver without using the deprecated OpenGL API. The `MPVMetalView` (an `NSView` subclass) is backed by a `CAMetalLayer`; mpv renders into it through Vulkan/MoltenVK via the view's `wid` (window-embedding), which `MPVClient` passes at initialization — the Vulkan/MoltenVK path has no public `mpv_render_context` API type, so embedding is by `wid` rather than an app-driven render loop. The NSView is bridged into SwiftUI via `NSViewRepresentable`. MoltenVK (`libMoltenVK.dylib`) is a Vulkan ICD loaded at runtime: it is bundled in `Frameworks/` and discovered through an ICD manifest in `Resources/` that `MPVClient` points the loader at via `VK_DRIVER_FILES`.
 
-**C-to-Swift bridge**: libmpv exposes a C API. The app uses a thin Swift wrapper (`MPVClient`) that:
+**C-to-Swift bridge**: libmpv's C API is exposed to Swift as a Clang module (`MPV/Cmpv/`: a `module.modulemap` over a `shim.h` that includes `<mpv/client.h>`/`<mpv/render.h>`), imported as `import Cmpv`. A module rather than an Objective-C bridging header so `@testable import ShuTaPla` resolves it cleanly under Xcode's explicit modules. The thin Swift wrapper (`MPVClient`) over it:
 - Manages the `mpv_handle` lifecycle (create/destroy).
 - Serializes all `mpv_command`/`mpv_set_property`/`mpv_observe_property` calls through a dedicated serial `DispatchQueue`. mpv's C API is not thread-safe — all calls to a given `mpv_handle` must be serialized.
 - Sends commands via `mpv_command_async` (load file, seek, pause, etc.).
@@ -43,7 +43,7 @@ mpv is embedded as **libmpv** (dynamic library, `libmpv.dylib`) built via Homebr
 
 **Two-instance architecture**: Video and audio use **separate `mpv_handle` instances**. Each instance has independent state (volume, position, pause). macOS CoreAudio automatically mixes the output of both instances — no additional audio session configuration needed.
 
-**Build and distribution**: The `libmpv.dylib`, `libMoltenVK.dylib`, and their dependencies (e.g., ffmpeg libs) are embedded in the app bundle and code-signed. For notarization, all embedded dylibs must have valid signatures. The Xcode build phase copies and signs them automatically.
+**Build and distribution**: A "Bundle mpv" build phase (`Scripts/bundle-mpv.sh`) copies libmpv, its full dependency closure (ffmpeg, libplacebo, the Vulkan loader, …), and MoltenVK into `Contents/Frameworks/`, rewrites every install name to `@rpath` so the app loads them from the bundle rather than `/opt/homebrew`, and re-signs each dylib with the app's identity (required for library validation under the hardened runtime, and for notarization). At build time the app links libmpv from the Homebrew keg (`-lmpv` + `LIBRARY_SEARCH_PATHS`); the shipped bundle is self-contained and needs no Homebrew at runtime.
 
 **HDR**: mpv handles HDR tone-mapping natively. With Vulkan/MoltenVK rendering, HDR pass-through to EDR-capable displays works via mpv's `--target-colorspace-hint` and the Metal layer's `wantsExtendedDynamicRangeContent = true`.
 
@@ -963,7 +963,7 @@ ShuTaPla/                            (app source)
 │   ├── MPVClient.swift              // Swift wrapper around mpv_handle (C API)
 │   ├── MPVMetalView.swift           // NSView subclass with CAMetalLayer for mpv rendering
 │   ├── MPVEvent.swift               // Swift enum mapping mpv events
-│   └── mpv-bridging.h               // C bridging header for libmpv
+│   └── Cmpv/                        // Clang module exposing libmpv (module.modulemap + shim.h)
 │
 ├── Engines/
 │   ├── VideoPlaybackEngine.swift    // owns MPVClient for video
