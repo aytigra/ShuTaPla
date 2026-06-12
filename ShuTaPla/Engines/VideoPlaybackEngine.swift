@@ -3,9 +3,9 @@
 //  ShuTaPla
 //
 //  The video channel. It is an `MPVPlaybackEngine` whose client renders into an
-//  embedded `MPVMetalView` via gpu-next on Vulkan/MoltenVK. The view must exist
-//  before the client (mpv needs its `wid` at initialization), so it is created
-//  first and its pointer handed to the base initializer.
+//  app-owned `MPVVideoView` through the libmpv OpenGL render API. The engine creates
+//  the client (`--vo=libmpv`) and the view, then connects them; the view creates the
+//  render context once its OpenGL context exists. mpv never opens a window of its own.
 //
 
 import Foundation
@@ -15,11 +15,12 @@ import AppKit
 final class VideoPlaybackEngine: MPVPlaybackEngine {
 
     /// The surface mpv renders into, hosted in SwiftUI via `NSViewRepresentable`.
-    let renderView: MPVMetalView
+    let renderView: MPVVideoView
 
     init() throws {
-        let view = MPVMetalView(frame: .zero)
+        let view = MPVVideoView(frame: .zero)
         self.renderView = view
-        try super.init(configuration: .video, wid: view.windowID)
+        try super.init(configuration: .video)
+        view.attach(client)
     }
 }

@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		494A539F2FDC550900738D95 /* .gitignore in Sources */ = {isa = PBXBuildFile; fileRef = 494A539E2FDC54FE00738D95 /* .gitignore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		499BD7E62FB83BDC00720129 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		494A539E2FDC54FE00738D95 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = .gitignore; sourceTree = "<group>"; };
 		499BD7D62FB83BDA00720129 /* ShuTaPla.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ShuTaPla.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		499BD7E52FB83BDC00720129 /* ShuTaPlaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShuTaPlaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		499BD7EF2FB83BDC00720129 /* ShuTaPlaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShuTaPlaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -81,6 +86,7 @@
 		499BD7CD2FB83BDA00720129 = {
 			isa = PBXGroup;
 			children = (
+				494A539E2FDC54FE00738D95 /* .gitignore */,
 				499BD8032FB83C3000720129 /* CLAUDE.md */,
 				499BD8022FB83C2F00720129 /* doc */,
 				499BD7D82FB83BDA00720129 /* ShuTaPla */,
@@ -264,6 +270,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				494A539F2FDC550900738D95 /* .gitignore in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

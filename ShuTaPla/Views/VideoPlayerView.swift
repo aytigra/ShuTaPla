@@ -2,9 +2,9 @@
 //  VideoPlayerView.swift
 //  ShuTaPla
 //
-//  Hosts the video engine's `MPVMetalView` in SwiftUI. mpv renders straight into
-//  the view's `CAMetalLayer`, so this representable only surfaces the engine's
-//  existing view rather than creating or drawing one.
+//  Hosts the video engine's `MPVVideoView` in SwiftUI. mpv renders into the view's
+//  OpenGL layer through the libmpv render API, so this representable only surfaces the
+//  engine's existing view rather than creating or drawing one.
 //
 
 import SwiftUI

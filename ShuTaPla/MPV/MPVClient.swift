@@ -23,8 +23,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// How the instance is configured at creation. Video and audio differ only by output.
     struct Configuration: Sendable {
         enum VideoOutput: Sendable {
-            /// Render video through `gpu-next` on Vulkan/MoltenVK into an embedded view.
-            case gpuNext
+            /// Render video through the libmpv render API (`--vo=libmpv`) into a render
+            /// context the app drives — see ``createRenderContext(updateCallback:)``.
+            case embedded
             /// No video output (`--vo=null`) — used by the audio instance and by tests.
             case null
         }
@@ -33,7 +34,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
         var hardwareDecoding: Bool
         var initialVolume: Double
 
-        static let video = Configuration(videoOutput: .gpuNext, hardwareDecoding: true, initialVolume: 100)
+        static let video = Configuration(videoOutput: .embedded, hardwareDecoding: true, initialVolume: 100)
         static let audio = Configuration(videoOutput: .null, hardwareDecoding: false, initialVolume: 100)
     }
 
@@ -44,6 +45,19 @@ nonisolated final class MPVClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.aytigra.ShuTaPla.mpv")
     private let continuation: AsyncStream<MPVEvent>.Continuation
 
+    /// The libmpv render context for embedded video, or `nil` until the GL view creates it
+    /// (and for the audio/`vo=null` instances, which never do).
+    ///
+    /// The render API is intentionally decoupled from the `mpv_handle`'s serial-queue
+    /// invariant: `mpv_render_context_create/render/report_swap/free` are called directly on
+    /// the GL thread (the `CAOpenGLLayer`'s draw thread) while the core keeps running on its
+    /// own threads — this is exactly the usage libmpv's render API is designed for.
+    private nonisolated(unsafe) var renderContext: OpaquePointer?
+
+    /// Invoked by libmpv (on an arbitrary thread) when a new frame is ready to render. Set
+    /// when the render context is created; reads it to ask the GL layer for a redraw.
+    private nonisolated(unsafe) var renderUpdate: (() -> Void)?
+
     /// The single event stream for this instance. Consume it once from the owning engine.
     let events: AsyncStream<MPVEvent>
 
@@ -51,13 +65,14 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     /// Creates and initializes an mpv instance.
     ///
-    /// - Parameters:
-    ///   - configuration: output/decoding/volume options applied before `mpv_initialize`.
-    ///   - wid: optional pointer to the host `NSView` (its `CAMetalLayer` is the render
-    ///     surface). Must be supplied before initialization for the video output to embed,
-    ///     so it is passed here rather than attached later. `nil` for audio and tests.
+    /// For embedded video the render surface is attached after construction:
+    /// `mpv_initialize` brings the core up with `--vo=libmpv`, then the GL view calls
+    /// ``createRenderContext(updateCallback:)`` once its OpenGL context exists. mpv never
+    /// creates a window of its own.
+    ///
+    /// - Parameter configuration: output/decoding/volume options applied before `mpv_initialize`.
     /// - Throws: `MPVError` if the handle cannot be created or initialized.
-    init(configuration: Configuration, wid: UnsafeMutableRawPointer? = nil) throws {
+    init(configuration: Configuration) throws {
         guard let handle = mpv_create() else { throw MPVError.createFailed }
         self.handle = handle
 
@@ -65,22 +80,13 @@ nonisolated final class MPVClient: @unchecked Sendable {
         self.events = AsyncStream(bufferingPolicy: .unbounded) { continuation = $0 }
         self.continuation = continuation
 
-        // Vulkan discovers MoltenVK as an ICD; point the loader at the bundled manifest
-        // before mpv (via libplacebo) brings up the Vulkan context.
-        MPVClient.configureVulkanICD()
-
         // --- options that must be set before mpv_initialize ---
         switch configuration.videoOutput {
-        case .gpuNext:
-            setOption("vo", "gpu-next")
-            setOption("gpu-api", "vulkan")
-            setOption("gpu-context", "moltenvk")
+        case .embedded:
+            // The render API draws into the app's own GL surface; mpv owns no window.
+            setOption("vo", "libmpv")
             setOption("hwdec", configuration.hardwareDecoding ? "auto-safe" : "no")
-            setOption("target-colorspace-hint", "yes")   // HDR pass-through to EDR displays
-            if let wid {
-                var value = Int64(Int(bitPattern: wid))
-                mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &value)
-            }
+            setOption("target-colorspace-hint", "yes")   // adapt output to the EDR layer
         case .null:
             setOption("vo", "null")
             setOption("audio-display", "no")
@@ -96,6 +102,10 @@ nonisolated final class MPVClient: @unchecked Sendable {
             mpv_destroy(handle)
             throw MPVError.initializeFailed
         }
+
+        // Surface mpv's own diagnostics (VO/window/embedding decisions, decode errors)
+        // on the event stream so they reach the console — otherwise terminal=no hides them.
+        mpv_request_log_messages(handle, "v")
 
         // Observe the properties the engines mirror as UI state.
         mpv_observe_property(handle, PropertyID.timePos, "time-pos", MPV_FORMAT_DOUBLE)
@@ -114,14 +124,90 @@ nonisolated final class MPVClient: @unchecked Sendable {
         }, Unmanaged.passUnretained(self).toOpaque())
     }
 
-    /// Tears the instance down: stops wakeups, finishes the event stream, and destroys the
-    /// handle on `queue`. Safe to call once; further commands become no-ops at the C layer.
+    /// Tears the instance down: frees the render context (must happen before the handle is
+    /// destroyed), stops wakeups, finishes the event stream, and destroys the handle on
+    /// `queue`. Safe to call once; further commands become no-ops at the C layer.
     func shutdown() {
+        freeRenderContext()
         queue.async {
             mpv_set_wakeup_callback(self.handle, nil, nil)
             self.continuation.finish()
             mpv_terminate_destroy(self.handle)
         }
+    }
+
+    // MARK: - Render context (GL thread)
+
+    /// Creates the libmpv OpenGL render context, binding it to this handle. Call once, on the
+    /// thread that owns the GL context (the `CAOpenGLLayer` draw thread), after that context is
+    /// current. `updateCallback` fires whenever mpv has a new frame to draw — it runs on an
+    /// arbitrary mpv thread, so it must hop to the GL/main thread before requesting a redraw.
+    func createRenderContext(updateCallback: @escaping () -> Void) {
+        guard renderContext == nil else { return }
+        renderUpdate = updateCallback
+
+        var initParams = mpv_opengl_init_params(
+            get_proc_address: { _, name in mpvGLProcAddress(name) },
+            get_proc_address_ctx: nil
+        )
+
+        var created: OpaquePointer?
+        "opengl".withCString { apiType in
+            withUnsafeMutablePointer(to: &initParams) { initPtr in
+                var params = [
+                    mpv_render_param(type: MPV_RENDER_PARAM_API_TYPE,
+                                     data: UnsafeMutableRawPointer(mutating: apiType)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                                     data: UnsafeMutableRawPointer(initPtr)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
+                ]
+                mpv_render_context_create(&created, handle, &params)
+            }
+        }
+        guard let created else { return }
+        renderContext = created
+
+        mpv_render_context_set_update_callback(created, { ctx in
+            guard let ctx else { return }
+            Unmanaged<MPVClient>.fromOpaque(ctx).takeUnretainedValue().renderUpdate?()
+        }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// Renders the current frame into `fbo` (the framebuffer CoreAnimation bound for the
+    /// layer) at the given pixel size. Call on the GL draw thread with the context current.
+    /// A no-op for the audio/`vo=null` instances, which have no render context.
+    func render(fbo: Int32, width: Int32, height: Int32) {
+        guard let renderContext else { return }
+        var target = mpv_opengl_fbo(fbo: fbo, w: width, h: height, internal_format: 0)
+        var flipY: CInt = 1   // GL's origin is bottom-left; flip to match the layer.
+        withUnsafeMutablePointer(to: &target) { fboPtr in
+            withUnsafeMutablePointer(to: &flipY) { flipPtr in
+                var params = [
+                    mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_FBO,
+                                     data: UnsafeMutableRawPointer(fboPtr)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_FLIP_Y,
+                                     data: UnsafeMutableRawPointer(flipPtr)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
+                ]
+                mpv_render_context_render(renderContext, &params)
+            }
+        }
+    }
+
+    /// Tells mpv the buffer was presented, so it can pace presentation timing. Call after the
+    /// layer flushes its drawable.
+    func reportSwap() {
+        if let renderContext { mpv_render_context_report_swap(renderContext) }
+    }
+
+    /// Detaches the update callback and frees the render context. Idempotent. Must run before
+    /// `mpv_terminate_destroy`; `shutdown()` calls it for that reason.
+    func freeRenderContext() {
+        guard let renderContext else { return }
+        mpv_render_context_set_update_callback(renderContext, nil, nil)
+        mpv_render_context_free(renderContext)
+        self.renderContext = nil
+        renderUpdate = nil
     }
 
     // MARK: - Commands
@@ -238,7 +324,10 @@ nonisolated final class MPVClient: @unchecked Sendable {
         case MPV_EVENT_LOG_MESSAGE:
             guard let data = event.data else { return nil }
             let msg = data.assumingMemoryBound(to: mpv_event_log_message.self).pointee
-            return .logMessage(String(cString: msg.text).trimmingCharacters(in: .whitespacesAndNewlines))
+            let prefix = String(cString: msg.prefix)
+            let level = String(cString: msg.level)
+            let text = String(cString: msg.text).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .logMessage("[\(prefix)/\(level)] \(text)")
 
         default:
             return nil
@@ -275,23 +364,6 @@ nonisolated final class MPVClient: @unchecked Sendable {
     }
 }
 
-// MARK: - Vulkan ICD discovery
-
-private extension MPVClient {
-    /// Points the Vulkan loader at the MoltenVK ICD manifest bundled next to `libMoltenVK.dylib`
-    /// in the app's `Frameworks/`. Runs exactly once, before the first Vulkan context is created.
-    /// A no-op in dev builds where the manifest hasn't been bundled (mpv then falls back to the
-    /// system loader's default search, if any).
-    nonisolated static let vulkanICDConfigured: Void = {
-        guard let manifest = Bundle.main.url(forResource: "MoltenVK_icd", withExtension: "json") else { return }
-        // VK_DRIVER_FILES is the current loader variable; VK_ICD_FILENAMES is the legacy alias.
-        setenv("VK_DRIVER_FILES", manifest.path, 1)
-        setenv("VK_ICD_FILENAMES", manifest.path, 1)
-    }()
-
-    nonisolated static func configureVulkanICD() { _ = vulkanICDConfigured }
-}
-
 // MARK: - Errors
 
 nonisolated enum MPVError: Error {
@@ -305,6 +377,17 @@ private extension MPVClient {
     nonisolated func scheduleDrain() {
         queue.async { [weak self] in self?.drainEvents() }
     }
+}
+
+/// Resolves an OpenGL function pointer by name for libmpv's `get_proc_address`. Looks symbols
+/// up in the system OpenGL framework, the approach mpv's own macOS examples use. Capture-free
+/// so it can be passed as a C function pointer.
+private nonisolated func mpvGLProcAddress(_ name: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer? {
+    guard let name,
+          let framework = CFBundleGetBundleWithIdentifier("com.apple.opengl" as CFString)
+    else { return nil }
+    let symbol = String(cString: name) as CFString
+    return CFBundleGetFunctionPointerForName(framework, symbol)
 }
 
 /// Variadic `mpv_command` shim: builds the `NULL`-terminated `argv` libmpv expects.

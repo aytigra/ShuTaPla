@@ -44,7 +44,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// The view the video engine renders into, once a video has played. `nil` until
     /// then (or when the visual channel is audio-configured, as in tests).
-    var videoRenderView: MPVMetalView? { (videoEngine as? VideoPlaybackEngine)?.renderView }
+    var videoRenderView: MPVVideoView? { (videoEngine as? VideoPlaybackEngine)?.renderView }
 
     private let bookmarkService: BookmarkService
     private let defaultSlideshowInterval: () -> TimeInterval

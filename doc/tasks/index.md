@@ -232,9 +232,9 @@ Thumbnail generation and the gallery view mode.
 
 ---
 
-## Task 9 — mpv integration (MPVClient, MPVMetalView) ✅
+## Task 9 — mpv integration (MPVClient, MPVVideoView) ✅
 
-**Status: complete.** The C-to-Swift bridge for libmpv and the Metal rendering surface.
+**Status: complete.** The C-to-Swift bridge for libmpv and the embedded video surface. The video render path is the libmpv OpenGL render API (see Task 11.1 for the design and rationale).
 
 **Deliverables:**
 - `MPV/Cmpv/` — a Clang module (`module.modulemap` + `shim.h`) exposing libmpv's C API to Swift as `import Cmpv`. A module rather than an Objective-C bridging header so `@testable import` consumers resolve it cleanly under explicit modules. Discovered via `SWIFT_INCLUDE_PATHS`; the mpv headers it pulls in resolve through `HEADER_SEARCH_PATHS` (the Homebrew mpv keg).
@@ -244,10 +244,11 @@ Thumbnail generation and the gallery view mode.
   - `loadFile(_:startingAt:)`, `play`, `pause`, `stop`, `seek(to:)`, `seek(by:)`, `volume` get/set, `isLooping` get/set.
   - `mpv_observe_property` for time-pos, duration, pause, and eof-reached (the natural-end trigger under `keep-open=yes`).
   - `mpv_set_wakeup_callback` (capture-free C closure) → serial drain → `AsyncStream<MPVEvent>`, single consumer.
-  - Audio vs. video via `Configuration` (`--vo=null` vs. `--vo=gpu-next`); optional `wid` passed at init for video embedding.
-- `MPVMetalView.swift` — `NSView` subclass backed by a `CAMetalLayer` (EDR enabled); mpv renders into it through Vulkan/MoltenVK via the view's `wid`. Keeps the drawable size in step with backing scale on resize/display change.
-- "Bundle mpv" build phase (`Scripts/bundle-mpv.sh`) — copies libmpv and its full dependency closure plus MoltenVK into `Contents/Frameworks/`, rewrites all install names to `@rpath`, writes the MoltenVK Vulkan ICD manifest into `Resources/`, and re-signs each dylib with the app's identity (passes library validation under the hardened runtime). `MPVClient` points the Vulkan loader at the bundled ICD via `VK_DRIVER_FILES`. The app links libmpv from the keg (`-lmpv`, `LIBRARY_SEARCH_PATHS`); the shipped bundle carries its own signed copies and needs no Homebrew at runtime.
-- mpv configured with `--vo=gpu-next --gpu-api=vulkan --gpu-context=moltenvk`, `target-colorspace-hint=yes`, `keep-open=yes`, `idle=yes`.
+  - Audio vs. video via `Configuration` (`--vo=null` vs. `--vo=libmpv`); the video instance's render context is attached after init (see below).
+  - Render-context lifecycle for embedded video: `createRenderContext` (OpenGL render API, `get_proc_address` via the system OpenGL framework), `render`/`reportSwap` on the GL draw thread, and `freeRenderContext` (before handle teardown).
+- `MPVVideoView.swift` — `NSView` backed by an `MPVOpenGLLayer` (`CAOpenGLLayer`, EDR enabled). The layer creates the `mpv_render_context` once its CGL context exists, redraws on mpv's render-update callback, and renders each frame into the framebuffer CoreAnimation bound.
+- "Bundle mpv" build phase (`Scripts/bundle-mpv.sh`) — copies libmpv and its dependency closure into `Contents/Frameworks/`, rewrites all install names to `@rpath`, and re-signs each dylib with the app's identity (passes library validation under the hardened runtime). The app links libmpv from the keg (`-lmpv`, `LIBRARY_SEARCH_PATHS`); the shipped bundle carries its own signed copies and needs no Homebrew at runtime.
+- mpv configured with `--vo=libmpv`, `hwdec=auto-safe`, `target-colorspace-hint=yes`, `keep-open=yes`, `idle=yes`.
 
 **Testable:** `MPVClientTests` drives a real libmpv instance via mpv's libavfilter virtual sources (`av://lavfi:…`), so no media fixture or subprocess is needed inside the sandboxed test host. 6 tests, all passing:
 - MPVClient creates and destroys a handle without crashing.
@@ -257,7 +258,7 @@ Thumbnail generation and the gallery view mode.
 - Volume get/set round-trips.
 - Natural end emits `endFile(.eof)` (via eof-reached).
 
-Visual frame rendering is verified once the player views host `MPVMetalView` (Tasks 11–12).
+Visual frame rendering is verified once the player views host `MPVVideoView` (Tasks 11–12).
 
 ---
 
@@ -265,7 +266,7 @@ Visual frame rendering is verified once the player views host `MPVMetalView` (Ta
 
 **Status: complete.** The three `@MainActor @Observable` engines, with a `PlaybackSource` seam for navigation; build clean, 9 `PlaybackEngineTests` passing (plus the `SendableImage` extraction below leaving the 4 `ThumbnailServiceTests` green).
 
-`VideoPlaybackEngine` and `AudioPlaybackEngine` share all logic in a base `MPVPlaybackEngine` — both own one `MPVClient` and expose the same surface, differing only in configuration (video renders into an embedded `MPVMetalView`, created first so its `wid` reaches the client at init; audio uses `--vo=null`). The base consumes the client's `AsyncStream<MPVEvent>` on the main actor and writes its observable state directly: `currentTime`/`duration` from `time-pos`/`duration`, `isPlaying` from `pause`, plus `currentFile`, `isLooping`, and `volume` (0–100, forwarded to the client). `load`/`play`/`pause`/`stop`/`seek(to:)`/`seek(by:)`, `setLooping`/`toggleLoop`, and `advanceToNext`/`returnToPrevious`; an `eof-reached` event advances (looping replays inside mpv, so it never reaches the handler). `load` takes a URL (file path or protocol resource); a string overload drives libavfilter sources in tests.
+`VideoPlaybackEngine` and `AudioPlaybackEngine` share all logic in a base `MPVPlaybackEngine` — both own one `MPVClient` and expose the same surface, differing only in configuration (video renders into an embedded `MPVVideoView` through the libmpv OpenGL render API; audio uses `--vo=null`). The base consumes the client's `AsyncStream<MPVEvent>` on the main actor and writes its observable state directly: `currentTime`/`duration` from `time-pos`/`duration`, `isPlaying` from `pause`, plus `currentFile`, `isLooping`, and `volume` (0–100, forwarded to the client). `load`/`play`/`pause`/`stop`/`seek(to:)`/`seek(by:)`, `setLooping`/`toggleLoop`, and `advanceToNext`/`returnToPrevious`; an `eof-reached` event advances (looping replays inside mpv, so it never reaches the handler). `load` takes a URL (file path or protocol resource); a string overload drives libavfilter sources in tests.
 
 `ImagePlaybackEngine` has no mpv instance: it decodes the current image off the main actor with `CGImageSource` (`kCGImageSourceShouldAllowFloat` for HDR), publishes `currentImage`, and resets `transform` (an `ImageTransform` of pan offset + zoom scale) to identity on every file change and fit-mode cycle. `cycleFitMode` runs fit → cover → original → fit; an async-`Task` slideshow timer advances on each interval. Pan/zoom gesture wiring lands with `ImagePlayerView` (Task 11).
 
@@ -273,7 +274,7 @@ The `PlaybackSource` protocol (`fileAfter`/`fileBefore`/`url(for:)`) is the seam
 
 **Deliverables:**
 - `MPVPlaybackEngine.swift` — shared base: owns MPVClient, consumes events, exposes `currentTime`, `duration`, `isPlaying`, `isLooping`, `currentFile`, `volume` as observable state; `load`, `advanceToNext`, `returnToPrevious`, `seek(to:)`, `seek(by:)`, `setLooping`/`toggleLoop`, EOF → advance
-- `VideoPlaybackEngine.swift` — base + an embedded `MPVMetalView` (`.video` config)
+- `VideoPlaybackEngine.swift` — base + an embedded `MPVVideoView` (`.video` config)
 - `AudioPlaybackEngine.swift` — base with the `--vo=null` `.audio` config
 - `ImagePlaybackEngine.swift` — loads images via `CGImageSource` off-main, publishes `currentImage`, `fitMode`, `transform` (+ the `ImageTransform` type), async slideshow timer, `cycleFitMode` (fit → cover → original)
 - `PlaybackSource.swift` — navigation/URL-resolution seam the engines hold weakly
@@ -283,7 +284,7 @@ The `PlaybackSource` protocol (`fileAfter`/`fileBefore`/`url(for:)`) is the seam
 **Testable:**
 - mpv engine (via `AudioPlaybackEngine`, window-free): load → `isPlaying` true and `currentTime` advances; `eof-reached` → `advanceToNext` queries the source (mock); loop toggle reaches mpv's `loop-file`; seek moves `currentTime`; `volume` forwards to the client; `stop` clears state
 - ImagePlaybackEngine: load image → `currentImage` published, `transform` at identity; fit-mode cycle fit → cover → original → fit and resets the transform; slideshow fires after the interval and advances via the source
-- Video engine shares the base implementation (verified through the audio engine); its frame output is verified once the player views host `MPVMetalView` (Tasks 11–12)
+- Video engine shares the base implementation (verified through the audio engine); its frame output is verified once the player views host `MPVVideoView` (Tasks 11–12)
 
 ---
 
@@ -291,11 +292,11 @@ The `PlaybackSource` protocol (`fileAfter`/`fileBefore`/`url(for:)`) is the seam
 
 **Status: complete.** The `@MainActor @Observable` `PlaybackCoordinator` orchestrates the three engines and is their `PlaybackSource`; the fullscreen Player shell switches between video and image and hosts the pause overlay. Build clean; 6 `PlaybackCoordinatorTests` passing, with the existing 9 `PlaybackEngineTests` and 22 `AppStateTests` still green (the latter through a shared `Playlist.playbackSequence`).
 
-The coordinator owns one shared visual channel (video XOR image) and one independent audio channel. `play(_:startingAt:)` starts a playlist on its channel — starting a visual playlist stops whichever visual playlist was playing and resets it to Stopped; audio runs alongside. Each playlist's Stopped/Playing/Paused is mirrored to `Playlist.playbackState`. Per-playlist `pause`/`unpause`/`togglePause` set the playlist's own state. **Suppression** (`suppress()`/`unsuppress()`, `isSuppressed`) is a transient halt over both channels that never touches the persisted states; lifting it resumes only the playlists in their own `.playing` state, leaving Paused ones paused. The mpv engines are built on first use (injectable factories — tests substitute the window-free audio engine for the video slot to avoid Vulkan), so an images-only or audio-only session never spins up an unused libmpv instance.
+The coordinator owns one shared visual channel (video XOR image) and one independent audio channel. `play(_:startingAt:)` starts a playlist on its channel — starting a visual playlist stops whichever visual playlist was playing and resets it to Stopped; audio runs alongside. Each playlist's Stopped/Playing/Paused is mirrored to `Playlist.playbackState`. Per-playlist `pause`/`unpause`/`togglePause` set the playlist's own state. **Suppression** (`suppress()`/`unsuppress()`, `isSuppressed`) is a transient halt over both channels that never touches the persisted states; lifting it resumes only the playlists in their own `.playing` state, leaving Paused ones paused. The mpv engines are built on first use (injectable factories — tests substitute the window-free audio engine for the video slot to avoid a GL context), so an images-only or audio-only session never spins up an unused libmpv instance.
 
 As `PlaybackSource`, the coordinator resolves the next/previous file from the current file's owning playlist `playbackSequence` (playable files matching the persisted tag filter, in `sortOrder`), wrapping past the last to the first and before the first to the last; `url(for:)` resolves through the folder's reference-counted scoped-access session, opened when a playlist starts and released when it stops. Playback order follows the active filter and is never reshuffled. `Playlist.playbackSequence` lives on the model so `AppState.computeFilteredFiles` (no service filter) and the coordinator share one rule; the wrap-around index math is an `Array.cyclicSuccessor/cyclicPredecessor` extension reused by the test source double.
 
-`PlayerView` is the fullscreen container: it shows `VideoPlayerView` (hosts the engine's `MPVMetalView` via `NSViewRepresentable`) or `ImagePlayerView` (fit/cover/original sizing with live pan/zoom committed into `ImageTransform`) per `visualKind`, drives the window into fullscreen through a `FullscreenView` bridge while mounted (animated polish is Task 18), and overlays `PauseOverlay` (opaque cover, Unpause + Stop) while suppressed. Basic keys are handled inline — `[p]`/`[esc]` suppress, `[space]` ends suppression or advances — with the full routing chain and the hover overlays deferred to Tasks 12–14.
+`PlayerView` is the fullscreen container: it shows `VideoPlayerView` (hosts the engine's `MPVVideoView` via `NSViewRepresentable`) or `ImagePlayerView` (fit/cover/original sizing with live pan/zoom committed into `ImageTransform`) per `visualKind`, drives the window into fullscreen through a `FullscreenView` bridge while mounted (animated polish is Task 18), and overlays `PauseOverlay` (opaque cover, Unpause + Stop) while suppressed. Basic keys are handled inline — `[p]`/`[esc]` suppress, `[space]` ends suppression or advances — with the full routing chain and the hover overlays deferred to Tasks 12–14.
 
 **Deliverables:**
 - `PlaybackCoordinator.swift` — owns all three engines, enforces mutual exclusivity (one video XOR image, plus one audio), `play(playlist:)`, `stop(playlist:)`, per-playlist pause/unpause
@@ -303,7 +304,7 @@ As `PlaybackSource`, the coordinator resolves the next/previous file from the cu
 - Per-playlist Stopped/Playing/Paused mirrored to `Playlist.playbackState`; making another playlist of the same kind active resets the previous one to Stopped
 - Advance/previous with wrap-around: past the last file wraps to the first, previous from the first wraps to the last (applies to the filtered sequence when a filter is active); order is never reshuffled by playback
 - `PlayerView.swift` — fullscreen container, switches between `VideoPlayerView` and `ImagePlayerView` based on active playlist type
-- `VideoPlayerView.swift` — hosts `MPVMetalView` via `NSViewRepresentable`
+- `VideoPlayerView.swift` — hosts `MPVVideoView` via `NSViewRepresentable`
 - `ImagePlayerView.swift` — image display with pan/zoom gestures
 - `Extensions/Playlist+Playback.swift` (`playbackSequence`) and `Extensions/Array+Cyclic.swift` (`cyclicSuccessor`/`cyclicPredecessor`) — the shared playback-order and wrap-around helpers
 - Fullscreen transition: `NSWindow.toggleFullScreen` via the `Shared/FullscreenView.swift` NSView bridge on entering/exiting player mode
@@ -319,6 +320,36 @@ As `PlaybackSource`, the coordinator resolves the next/previous file from the cu
 - Advance past last file wraps to first; previous from first wraps to last; filtered sequence wraps within matches
 - Player view enters fullscreen, shows correct content for video vs. image
 - Pause overlay appears on `[p]`, Unpause ends suppression, Stop returns to manager
+
+---
+
+## Task 11.1 — Video rendering rewrite: libmpv OpenGL render API ✅
+
+**Status: complete (code landed; builds clean, all unit tests green). Visual playback and HDR/EDR output remain to be confirmed on-device.** Task 11's coordinator/player shell and the image path were unaffected; this replaced only how *video* frames reach the screen.
+
+**Why.** Task 9's rendering design — mpv drawing into a `CAMetalLayer`-backed `MPVMetalView` via the view's `wid` — does not work on macOS: **mpv does not support `--wid` window embedding on macOS** (the manpage documents `--wid` for X11/win32/Android only). Confirmed at runtime: with our `wid` set, mpv 0.41 ignores it, auto-probes a GPU context (our `--gpu-context=moltenvk` is also stale — the valid contexts are `macvk`/`displayvk`/`auto`), picks `macvk`, and **creates its own `NSWindow`** (logs show it calling `-[NSWindow frame]` on an internal `swift.Window` from its `vo` thread). Symptoms: a separate titled mpv window over our black fullscreen, the Dock icon flipping to mpv, and video never appearing in our view (audio, a separate engine, plays fine).
+
+**Decision.** Embed video through the **libmpv render API** (`--vo=libmpv` + `mpv_render_context_create`), so the app owns the surface and mpv never makes a window. The only render-API types are OpenGL (`render_gl.h`) and software (`MPV_RENDER_API_TYPE_SW`); there is no Metal/Vulkan type. Use **`MPV_RENDER_API_TYPE_OPENGL`** — IINA's proven approach: GPU-accelerated, keeps VideoToolbox hardware decode, smooth at 4K, and HDR/EDR-capable (see below). The render API uses mpv's `gpu` renderer (libplacebo `gpu-next` is not exposed through libmpv — an accepted quality nuance). OpenGL is deprecated on macOS (since 10.14) but still present through macOS 27 with no removal announced; on Apple Silicon it runs over Metal.
+
+This **superseded the rendering/HDR/bundling specifics of Task 9 and Task 18 and the architecture doc** (`doc/architecture.md` §"Rendering pipeline", §HDR, §"Build and distribution", and the video-surface notes), which were updated to the render-API design.
+
+**Already landed (prep, keep):**
+- mpv diagnostics surfaced to the console: `mpv_request_log_messages(handle, "v")` in `MPVClient.init`, log events carry `[prefix/level]`, and `MPVPlaybackEngine` prints them. Invaluable for verifying the render path; consider gating behind a debug flag before shipping.
+- `Shared/FullscreenView.swift` hardened to drive the fullscreen toggle off `viewDidMoveToWindow` on a clean run-loop turn (fixes a reentrant-layout fault) — unrelated to rendering, stays.
+
+**What landed:**
+- `MPVClient.swift` — video path is `vo=libmpv` (`Configuration.VideoOutput.embedded`); `gpu-next`/`gpu-api`/`gpu-context`/`wid` and the Vulkan-ICD env setup are gone. Render-context lifecycle added: `createRenderContext(updateCallback:)` (`MPV_RENDER_API_TYPE_OPENGL` + `mpv_opengl_init_params`, `get_proc_address` resolving symbols from the system OpenGL framework via `CFBundleGetFunctionPointerForName`), `render(fbo:width:height:)` (into an `mpv_opengl_fbo`, `FLIP_Y`), `reportSwap`, and `freeRenderContext`. These run directly on the GL draw thread, decoupled from the `mpv_handle`'s serial queue (the render API is designed for that); `shutdown()` frees the render context before `mpv_terminate_destroy`.
+- `MPV/MPVVideoView.swift` (replaces `MPVMetalView.swift`) — an `NSView` backed by `MPVOpenGLLayer`, a `nonisolated CAOpenGLLayer`. It owns an **explicit CGL context created up front** (headless, in `createContext()`); `attach(_:)` makes that context current and creates the render context against it, so the context exists before the first file's VO is initialised (otherwise mpv reports "No render context set" and the first file plays audio-only). The same context is served back to CoreAnimation via `copyCGLContext(forPixelFormat:)`. The render-update callback marks the layer for display, and `draw(inCGLContext:…)` queries the bound framebuffer, calls `render`, flushes via `super.draw`, then `reportSwap`.
+- `VideoPlaybackEngine.swift` / `MPVPlaybackEngine.swift` — `wid` plumbing dropped; the engine creates the client (`vo=libmpv`) and the view, then `view.attach(client)`. Engine observable surface unchanged, so the coordinator and `VideoPlayerView` are untouched above the seam.
+- `VideoPlayerView.swift` / `PlaybackCoordinator.videoRenderView` — host/expose `MPVVideoView`.
+- `MPV/Cmpv/shim.h` — added `#include <mpv/render_gl.h>` for the OpenGL render types.
+- HDR/EDR: `MPVOpenGLLayer` requests a floating-point backbuffer (`kCGLPFAColorFloat`, 64-bit), sets `wantsExtendedDynamicRangeContent = true` and an extended-sRGB `colorspace`, paired with mpv's `--target-colorspace-hint=yes`. Mastering-display luminance metadata needs a Metal layer — accepted limitation. Per-file HDR-vs-SDR gating and brightness tuning remain to verify on an EDR display (folded into Task 18).
+- `Scripts/bundle-mpv.sh` — MoltenVK, the ICD manifest, and the `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` setup removed; the dependency walk bundles only what libmpv links.
+- `doc/architecture.md` and the Task 9 / Task 18 notes updated to the render-API design.
+
+**Verification:**
+- Build clean; `MPVClientTests` / `PlaybackEngineTests` / `PlaybackCoordinatorTests` all green (21 tests) — they use the window-free `vo=null` audio path and assert on bookkeeping, so they host no GL context. ✅
+- **On-device (pending):** open a video → renders **inside** the app's fullscreen view, **no separate mpv window**, **no Dock-icon change** (the original failure mode); advancing/cycling keeps rendering in place; audio-only and image-only sessions still never spin up the video engine; HDR clip on an EDR display shows extended dynamic range while SDR renders normally.
 
 ---
 
@@ -470,7 +501,7 @@ Edge cases around fullscreen, single-window enforcement, and HDR support.
 - `NSWindow+Fullscreen.swift` — fullscreen helpers, animated transitions
 - Window close vs. quit behavior: closing hides window, Dock click reopens
 - Fullscreen entry/exit synced with player mode transitions
-- HDR video: mpv `--target-colorspace-hint=yes`, `CAMetalLayer.wantsExtendedDynamicRangeContent = true`
+- HDR video: mpv `--target-colorspace-hint=yes`, `MPVOpenGLLayer` EDR (float backbuffer, `wantsExtendedDynamicRangeContent = true`, extended-sRGB colorspace) — landed in Task 11.1; tune/verify on an EDR display here
 - HDR images: `CGImageSource` with `kCGImageSourceShouldAllowFloat`, EDR-capable layer
 - Single-window enforcement (`.commands { CommandGroup(replacing: .newItem) {} }`)
 
@@ -531,6 +562,8 @@ Task 1 ─── Data Models
   │                       └── Task 10 ── Playback Engines
   │                             │
   │                             └── Task 11 ── Coordinator + Player Shell
+  │                                   │
+  │                                   ├── Task 11.1 ─ Video Render Rewrite (OpenGL render API)
   │                                   │
   │                                   ├── Task 12 ── Hotkeys
   │                                   │

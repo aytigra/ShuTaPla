@@ -61,10 +61,11 @@ class MPVPlaybackEngine {
 
     // MARK: - Lifecycle
 
-    /// Creates the engine and begins consuming its client's events. `wid` is the
-    /// host view pointer for embedded video output; `nil` for audio (and tests).
-    init(configuration: MPVClient.Configuration, wid: UnsafeMutableRawPointer? = nil) throws {
-        self.client = try MPVClient(configuration: configuration, wid: wid)
+    /// Creates the engine and begins consuming its client's events. Embedded video attaches
+    /// its render surface after construction (see `VideoPlaybackEngine`); audio and tests use
+    /// the window-free `vo=null` client as-is.
+    init(configuration: MPVClient.Configuration) throws {
+        self.client = try MPVClient(configuration: configuration)
         self.volume = configuration.initialVolume
         observeEvents()
     }
@@ -168,7 +169,9 @@ class MPVPlaybackEngine {
             // Natural end. With looping on mpv replays internally and never reaches
             // here, so this is unconditionally an advance.
             advanceToNext()
-        case .endFile, .fileLoaded, .shutdown, .logMessage:
+        case .logMessage(let text):
+            print("mpv \(text)")
+        case .endFile, .fileLoaded, .shutdown:
             break
         }
     }
