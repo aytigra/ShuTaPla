@@ -38,6 +38,7 @@ struct ShuTaPlaApp: App {
         WindowGroup {
             RootView()
                 .environment(appState)
+                .environment(appState.coordinator)
                 .environment(thumbnailService)
                 .frame(minWidth: 800, minHeight: 600)
         }

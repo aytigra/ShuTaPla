@@ -57,6 +57,10 @@ final class AppState {
     private let fileSystem: FileSystemProviding
     let bookmarkService: BookmarkService
 
+    /// Drives actual playback: owns the engines, enforces channel exclusivity, and
+    /// resolves file URLs through `bookmarkService`. Injected into the player views.
+    let coordinator: PlaybackCoordinator
+
     private(set) var appStateModel: AppStateModel
     private(set) var globalSettings: GlobalSettings
 
@@ -112,7 +116,12 @@ final class AppState {
         self.fileSystem = fileSystem
         self.bookmarkService = bookmarkService
         self.appStateModel = AppStateModel.fetchOrCreate(in: modelContext)
-        self.globalSettings = GlobalSettings.fetchOrCreate(in: modelContext)
+        let settings = GlobalSettings.fetchOrCreate(in: modelContext)
+        self.globalSettings = settings
+        self.coordinator = PlaybackCoordinator(
+            bookmarkService: bookmarkService,
+            defaultSlideshowInterval: { settings.defaultSlideshowInterval }
+        )
 
         // Welcome until at least one playlist exists. Player mode is only ever
         // entered at runtime (Task 16 handles resume), never restored here.
@@ -542,13 +551,22 @@ final class AppState {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    /// Temporary playback entry point until the PlaybackCoordinator (Task 11).
-    /// Records the starting file and switches the window to Player mode.
+    /// Starts a playlist playing through the coordinator. Visual playlists take the
+    /// window into Player mode; an audio playlist plays in place (its overlay UI
+    /// arrives in Task 15) and does not change mode.
     func beginPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
-        if let file { playlist.currentFileID = file.id }
         activate(playlist)
         selectedPlaylist = playlist
-        mode = .player
+        coordinator.play(playlist, startingAt: file)
+        if playlist.mediaType != .audio { mode = .player }
+    }
+
+    /// Stops the visual playlist and returns the window to Manager mode (the pause
+    /// overlay's Stop, and the temporary Back control).
+    func stopAndExitPlayer() {
+        if let visual = coordinator.visualPlaylist { coordinator.stop(visual) }
+        coordinator.unsuppress()
+        mode = .manager
     }
 
     // MARK: - Tag editing
@@ -694,18 +712,9 @@ final class AppState {
             }
         }
 
-        let playable = playlist.files.filter { !$0.isSkipped }.sorted(by: byOrder)
-        let filter = playlist.filterState
-        guard !filter.isEmpty else { return playable }
-
-        let selected = Set(filter.selectedTags.map { $0.lowercased() })
-        return playable.filter { file in
-            let fileTags = Set(file.tags.map { $0.lowercased() })
-            switch filter.filterMode {
-            case .and: return selected.isSubset(of: fileTags)
-            case .or: return !selected.isDisjoint(with: fileTags)
-            }
-        }
+        // No service filter: playback order (playable files matching the persisted
+        // tag filter) is exactly what the file list shows.
+        return playlist.playbackSequence
     }
 
     private func tagFields(for fileName: String) -> ([String], TaggingStatus) {

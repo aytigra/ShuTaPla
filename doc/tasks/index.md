@@ -287,9 +287,15 @@ The `PlaybackSource` protocol (`fileAfter`/`fileBefore`/`url(for:)`) is the seam
 
 ---
 
-## Task 11 — PlaybackCoordinator and basic Player mode
+## Task 11 — PlaybackCoordinator and basic Player mode  ✅
 
-Orchestration of engines and the player view shell.
+**Status: complete.** The `@MainActor @Observable` `PlaybackCoordinator` orchestrates the three engines and is their `PlaybackSource`; the fullscreen Player shell switches between video and image and hosts the pause overlay. Build clean; 6 `PlaybackCoordinatorTests` passing, with the existing 9 `PlaybackEngineTests` and 22 `AppStateTests` still green (the latter through a shared `Playlist.playbackSequence`).
+
+The coordinator owns one shared visual channel (video XOR image) and one independent audio channel. `play(_:startingAt:)` starts a playlist on its channel — starting a visual playlist stops whichever visual playlist was playing and resets it to Stopped; audio runs alongside. Each playlist's Stopped/Playing/Paused is mirrored to `Playlist.playbackState`. Per-playlist `pause`/`unpause`/`togglePause` set the playlist's own state. **Suppression** (`suppress()`/`unsuppress()`, `isSuppressed`) is a transient halt over both channels that never touches the persisted states; lifting it resumes only the playlists in their own `.playing` state, leaving Paused ones paused. The mpv engines are built on first use (injectable factories — tests substitute the window-free audio engine for the video slot to avoid Vulkan), so an images-only or audio-only session never spins up an unused libmpv instance.
+
+As `PlaybackSource`, the coordinator resolves the next/previous file from the current file's owning playlist `playbackSequence` (playable files matching the persisted tag filter, in `sortOrder`), wrapping past the last to the first and before the first to the last; `url(for:)` resolves through the folder's reference-counted scoped-access session, opened when a playlist starts and released when it stops. Playback order follows the active filter and is never reshuffled. `Playlist.playbackSequence` lives on the model so `AppState.computeFilteredFiles` (no service filter) and the coordinator share one rule; the wrap-around index math is an `Array.cyclicSuccessor/cyclicPredecessor` extension reused by the test source double.
+
+`PlayerView` is the fullscreen container: it shows `VideoPlayerView` (hosts the engine's `MPVMetalView` via `NSViewRepresentable`) or `ImagePlayerView` (fit/cover/original sizing with live pan/zoom committed into `ImageTransform`) per `visualKind`, drives the window into fullscreen through a `FullscreenView` bridge while mounted (animated polish is Task 18), and overlays `PauseOverlay` (opaque cover, Unpause + Stop) while suppressed. Basic keys are handled inline — `[p]`/`[esc]` suppress, `[space]` ends suppression or advances — with the full routing chain and the hover overlays deferred to Tasks 12–14.
 
 **Deliverables:**
 - `PlaybackCoordinator.swift` — owns all three engines, enforces mutual exclusivity (one video XOR image, plus one audio), `play(playlist:)`, `stop(playlist:)`, per-playlist pause/unpause
@@ -299,7 +305,8 @@ Orchestration of engines and the player view shell.
 - `PlayerView.swift` — fullscreen container, switches between `VideoPlayerView` and `ImagePlayerView` based on active playlist type
 - `VideoPlayerView.swift` — hosts `MPVMetalView` via `NSViewRepresentable`
 - `ImagePlayerView.swift` — image display with pan/zoom gestures
-- Fullscreen transition: `NSWindow.toggleFullScreen` via NSView bridge on entering/exiting player mode
+- `Extensions/Playlist+Playback.swift` (`playbackSequence`) and `Extensions/Array+Cyclic.swift` (`cyclicSuccessor`/`cyclicPredecessor`) — the shared playback-order and wrap-around helpers
+- Fullscreen transition: `NSWindow.toggleFullScreen` via the `Shared/FullscreenView.swift` NSView bridge on entering/exiting player mode
 - `PauseOverlay.swift` — opaque overlay (covers everything) with Unpause and Stop buttons
 - `[p]`/`[esc]` activates suppression and shows the pause overlay (halts all playback, including audio); Unpause ends it — Playing playlists continue, Paused playlists stay paused
 - Basic `[p]` suppression and `[space]` end-suppression/next

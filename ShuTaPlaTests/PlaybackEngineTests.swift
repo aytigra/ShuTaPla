@@ -190,20 +190,14 @@ final class MockPlaybackSource: PlaybackSource {
 
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {
         fileAfterCalls += 1
-        guard !files.isEmpty else { return nil }
-        guard let current, let index = files.firstIndex(where: { $0.id == current.id }) else {
-            return files.first
-        }
-        return files[(index + 1) % files.count]
+        guard let current else { return files.first }
+        return files.cyclicSuccessor { $0.id == current.id }
     }
 
     func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? {
         fileBeforeCalls += 1
-        guard !files.isEmpty else { return nil }
-        guard let current, let index = files.firstIndex(where: { $0.id == current.id }) else {
-            return files.last
-        }
-        return files[(index - 1 + files.count) % files.count]
+        guard let current else { return files.last }
+        return files.cyclicPredecessor { $0.id == current.id }
     }
 
     func url(for file: PlaylistFile) -> URL? { urlByID[file.id] }
