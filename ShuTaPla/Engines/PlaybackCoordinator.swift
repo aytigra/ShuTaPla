@@ -230,6 +230,37 @@ final class PlaybackCoordinator: PlaybackSource {
         }
     }
 
+    // MARK: - Loop & seek
+
+    /// Whether the visual channel's current file is looping (video only; images
+    /// never loop). Read by the player controls and the loop hotkey's tests.
+    var isVisualLooping: Bool {
+        visualKind == .video ? (videoEngine?.isLooping ?? false) : false
+    }
+
+    /// Whether the audio channel's current file is looping.
+    var isAudioLooping: Bool { audioEngine?.isLooping ?? false }
+
+    /// Toggles looping on the file playing on `playlist`'s channel. Images have no
+    /// timeline, so it's a no-op for the visual-image channel.
+    func toggleLoop(_ playlist: Playlist) {
+        switch channel(of: playlist) {
+        case .visualVideo: videoEngine?.toggleLoop()
+        case .audio: audioEngine?.toggleLoop()
+        case .visualImage, nil: break
+        }
+    }
+
+    /// Seeks the file on `playlist`'s channel by `delta` seconds (the ±3s hotkeys).
+    /// Video and audio only.
+    func seek(_ playlist: Playlist, by delta: TimeInterval) {
+        switch channel(of: playlist) {
+        case .visualVideo: videoEngine?.seek(by: delta)
+        case .audio: audioEngine?.seek(by: delta)
+        case .visualImage, nil: break
+        }
+    }
+
     // MARK: - PlaybackSource
 
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {

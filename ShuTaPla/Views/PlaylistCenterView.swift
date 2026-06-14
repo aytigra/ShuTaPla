@@ -41,6 +41,13 @@ struct PlaylistCenterView: View {
                 ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
             }
         }
+        .onChange(of: appState.deleteRequest) {
+            // The Manager [delete] hotkey routes here; reuse the same confirmation.
+            if let request = appState.deleteRequest {
+                deleteCandidates = request.files
+                appState.deleteRequest = nil
+            }
+        }
         .confirmationDialog(
             deleteTitle,
             isPresented: Binding(get: { !deleteCandidates.isEmpty }, set: { if !$0 { deleteCandidates = [] } }),

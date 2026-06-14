@@ -353,7 +353,11 @@ This **superseded the rendering/HDR/bundling specifics of Task 9 and Task 18 and
 
 ---
 
-## Task 12 — HotkeyRouter and player hotkeys
+## Task 12 — HotkeyRouter and player hotkeys ✅
+
+**Status: complete (code landed; builds clean, 17 router tests + 43 prior tests green).** `HotkeyRouter` (`Engines/HotkeyRouter.swift`) owns one app-wide `NSEvent` local monitor (`.keyDown` + `.flagsChanged`) installed by `RootView`. Each key is decoded to a `Hotkey` (special keys by `keyCode`, letters by character; Right Option tracked from `.flagsChanged` keyCode 61) and run through one priority chain: focused text field swallows everything → mode dispatch. Player mode: `[esc]` chain (close overlay → suppress → close window), `[p]` suppression toggle, then key-context routing — `[space]`/arrows/`[l]`/`[right option]±arrows` go to the visual player or, when the audio overlay holds key context, to the audio playlist. Manager mode: `[esc]` (cancel in-flight re-scan or close window), `[delete]` (raises the existing center-panel trash confirmation via `AppState.deleteRequest`); arrows pass through to the file list unless audio holds key context. Overlay state/actions are read through `HotkeyOverlayContext`, backed by `NoOverlayContext` until the `OverlayManager` (Task 13) and audio overlay (Task 15) supply the real one. `PlaybackCoordinator` gained `toggleLoop(_:)`/`seek(_:by:)` and `isVisualLooping`/`isAudioLooping`. `PlayerView` dropped its interim `onKeyPress`. Also fixed a latent `MPVClient` shutdown use-after-free (a wakeup-scheduled drain could run `mpv_wait_event` after `mpv_terminate_destroy`) with a queue-only `isTerminated` gate.
+
+**What's deferred to Tasks 13–15:** the overlay branches (`[tab]`/`[arrow up]` open Files & Tags, `[arrow down]` reveal/expand audio, arrow-up close audio) route through `HotkeyOverlayContext` but are inert until those managers land.
 
 Global key event handling and routing.
 

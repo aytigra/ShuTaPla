@@ -29,6 +29,14 @@ struct PendingPlaylist {
     let scan: ScanResult
 }
 
+/// A pending request to confirm trashing a set of files, raised by the Manager
+/// `[delete]` hotkey. Identity (not contents) drives the panel's `onChange`.
+struct FileDeleteRequest: Identifiable, Equatable {
+    let id = UUID()
+    let files: [PlaylistFile]
+    static func == (lhs: FileDeleteRequest, rhs: FileDeleteRequest) -> Bool { lhs.id == rhs.id }
+}
+
 /// A folder being scanned into a new playlist, shown optimistically in the
 /// sidebar (with a spinner) until the finished playlist replaces it.
 struct ImportingPlaylist: Identifiable {
@@ -84,6 +92,11 @@ final class AppState {
     /// File-list selection in the Manager center panel, by file ID. Cleared when
     /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
+
+    /// Set by the Manager-mode `[delete]` hotkey to ask the center panel to confirm
+    /// trashing these files; the panel consumes it and clears it back to `nil`. The
+    /// `id` makes two consecutive same-sized requests distinct so the panel re-fires.
+    var deleteRequest: FileDeleteRequest?
 
     /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
     /// While set it overrides the selected playlist's persisted tag filter; it is
@@ -559,6 +572,26 @@ final class AppState {
         selectedPlaylist = playlist
         coordinator.play(playlist, startingAt: file)
         if playlist.mediaType != .audio { mode = .player }
+    }
+
+    /// Cancels a running background re-scan — the only cancellable Manager operation.
+    /// Returns whether something was in flight, so the `[esc]` hotkey closes the
+    /// window only when nothing was.
+    func cancelInProgressOperation() -> Bool {
+        guard !busyPlaylistIDs.isEmpty else { return false }
+        updateTask?.cancel()
+        updateTask = nil
+        return true
+    }
+
+    /// Requests confirmation to trash the current file-list selection (Manager
+    /// `[delete]`). Returns whether there was anything selected to delete.
+    @discardableResult
+    func requestDeleteSelectedFiles() -> Bool {
+        let files = filteredFiles.filter { selectedFileIDs.contains($0.id) }
+        guard !files.isEmpty else { return false }
+        deleteRequest = FileDeleteRequest(files: files)
+        return true
     }
 
     /// Stops the visual playlist and returns the window to Manager mode (the pause

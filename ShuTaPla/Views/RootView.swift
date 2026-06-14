@@ -10,15 +10,23 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
+    @State private var hotkeyRouter = HotkeyRouter()
 
     var body: some View {
-        switch appState.mode {
-        case .welcome:
-            WelcomeView()
-        case .manager:
-            ManagerView()
-        case .player:
-            PlayerView()
+        Group {
+            switch appState.mode {
+            case .welcome:
+                WelcomeView()
+            case .manager:
+                ManagerView()
+            case .player:
+                PlayerView()
+            }
         }
+        .onAppear {
+            hotkeyRouter.appState = appState
+            hotkeyRouter.startMonitoring()
+        }
+        .onDisappear { hotkeyRouter.stopMonitoring() }
     }
 }

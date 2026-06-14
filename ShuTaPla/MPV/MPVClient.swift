@@ -58,6 +58,12 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// when the render context is created; reads it to ask the GL layer for a redraw.
     private nonisolated(unsafe) var renderUpdate: (() -> Void)?
 
+    /// Set once, on `queue`, when the handle is being destroyed. A wakeup can schedule a drain
+    /// that lands on `queue` after `shutdown` has destroyed the handle; gating both the drain
+    /// and `shutdown` itself on this flag (all on the serial queue) prevents that use-after-free
+    /// and makes `shutdown` idempotent.
+    private nonisolated(unsafe) var isTerminated = false
+
     /// The single event stream for this instance. Consume it once from the owning engine.
     let events: AsyncStream<MPVEvent>
 
@@ -130,6 +136,8 @@ nonisolated final class MPVClient: @unchecked Sendable {
     func shutdown() {
         freeRenderContext()
         queue.async {
+            guard !self.isTerminated else { return }
+            self.isTerminated = true
             mpv_set_wakeup_callback(self.handle, nil, nil)
             self.continuation.finish()
             mpv_terminate_destroy(self.handle)
@@ -276,6 +284,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     /// Scheduled by the wakeup callback; drains all pending events on `queue`.
     fileprivate func drainEvents() {
+        guard !isTerminated else { return }   // handle already destroyed by shutdown
         while true {
             guard let raw = mpv_wait_event(handle, 0) else { break }
             let event = raw.pointee
