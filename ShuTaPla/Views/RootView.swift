@@ -11,6 +11,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppState.self) private var appState
     @State private var hotkeyRouter = HotkeyRouter()
+    @State private var overlayManager = OverlayManager()
 
     var body: some View {
         Group {
@@ -23,8 +24,10 @@ struct RootView: View {
                 PlayerView()
             }
         }
+        .environment(overlayManager)
         .onAppear {
             hotkeyRouter.appState = appState
+            hotkeyRouter.overlayContext = overlayManager
             hotkeyRouter.startMonitoring()
         }
         .onDisappear { hotkeyRouter.stopMonitoring() }

@@ -383,7 +383,11 @@ Global key event handling and routing.
 
 ---
 
-## Task 13 — OverlayManager and hover zones
+## Task 13 — OverlayManager and hover zones ✅
+
+**Status: complete (code landed; builds clean, 12 overlay tests + 144 unit tests green).** `OverlayManager` (`State/OverlayManager.swift`) is `@MainActor @Observable`, holding a flat `Set<Overlay>` whose `show(_:)`/`hide(_:)` run inside `withAnimation` over a pure exclusivity mutation: Extended audio is exclusive, Files & Tags closes compact audio + hover overlays, compact audio sits atop Files & Tags, hover overlays (playlists / bottom controls) are suppressed while Files & Tags or Extended audio is open, and the pause overlay clears everything. It also owns **key context** via `audioFullyRevealed` (set by the audio overlay once its slide-in completes, cleared whenever no audio overlay is active) and conforms to `HotkeyRouter`'s `HotkeyOverlayContext`, so the router's overlay/audio branches are now live. `HoverZone` (`Views/Shared/HoverZone.swift`) is an `NSTrackingArea` bridge (`.activeAlways` + `.inVisibleRect`, reliable at screen edges in fullscreen) firing enter/exit callbacks. `RootView` creates the manager, injects it into the environment, and wires it as the router's overlay context; `PlayerView` mounts thin top/left/bottom edge `HoverZone`s that drive compact-audio / playlists / bottom-controls reveals.
+
+**What's deferred to Task 14:** the overlay *content* views (`PlaybackControlsBar`, `PlaylistsOverlay`, Files & Tags) and their `.overlay()/.transition(.move(edge:))` composition reading `OverlayManager.active`. Until then the hover zones change overlay state with no on-screen content, and the cursor-enter/exit firing and animated transitions are verified visually (not unit-tested). The audio overlay's `audioDidFullyReveal()` reveal-completion call is wired in Task 15.
 
 Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 
