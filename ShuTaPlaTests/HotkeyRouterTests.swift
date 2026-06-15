@@ -284,16 +284,16 @@ import AppKit
         #expect(router.route(.delete, rightOption: false))
         #expect(appState.playerDeleteCandidate != nil)
 
-        // While the confirmation is up the dialog holds key context: transport keys are
-        // swallowed and have no effect.
+        // While the confirmation is up the alert owns the keyboard: `[enter]`/`[esc]` pass
+        // through to its buttons and every other key is swallowed so transport can't run.
+        let arrowRight = keyEvent(keyCode: 124)
+        #expect(router.handle(arrowRight) == nil)
         let current = image.currentFileID
-        #expect(router.route(.arrowRight, rightOption: false))
         #expect(image.currentFileID == current)
         #expect(appState.playerDeleteCandidate != nil)
 
-        // `[esc]` cancels the confirmation (without suppressing playback).
-        #expect(router.route(.escape, rightOption: false))
-        #expect(appState.playerDeleteCandidate == nil)
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)      // passed to the alert's Cancel button
         #expect(!appState.coordinator.isSuppressed)
     }
 
@@ -527,13 +527,41 @@ import AppKit
         #expect(router.route(.delete, rightOption: false))
         #expect(appState.pendingManagerDelete.count == 1)
 
-        // While the confirmation is up it holds key context: `[esc]` cancels it (rather
-        // than closing the window), and the close spy is untouched.
-        let closeSpy = CloseSpy()
-        let router2 = makeRouter(appState, overlay: MockOverlay(), closeSpy: closeSpy)
-        #expect(router2.route(.escape, rightOption: false))
-        #expect(appState.pendingManagerDelete.isEmpty)
-        #expect(closeSpy.count == 0)
+        // While the confirmation is up the alert owns the keyboard: `[esc]` passes through
+        // to its Cancel button (the idle-esc chain doesn't run), and other keys are
+        // swallowed so the list can't act behind it.
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)
+        #expect(router.handle(keyEvent(keyCode: 49)) == nil)   // [space] swallowed
+    }
+
+    @Test func tagRemovalConfirmationPassesEnterEscToTheAlertAndSwallowsTheRest() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp4", "2.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["1.mp4", "2.mp4"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .manager
+        appState.selectedPlaylist = video
+        appState.recomputeFilteredFiles()
+        // A file is selected, so an unguarded `[enter]` would otherwise play it.
+        appState.selectedFileIDs = Set(appState.filteredFiles.prefix(1).map(\.id))
+        defer { appState.coordinator.shutdown() }
+
+        // The alert owns its keys: while it's up, `[enter]`/`[esc]` pass through to it
+        // (handled natively by its default/cancel buttons) rather than being routed —
+        // so the player is never entered — and every other key is swallowed.
+        appState.pendingTagRemoval = "beach"
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        let enter = keyEvent(keyCode: 36)
+        #expect(router.handle(enter) === enter)         // passed through to the alert
+        #expect(appState.mode == .manager)              // not routed to playSelectedFile
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)             // passed through to the alert
+
+        #expect(router.handle(keyEvent(keyCode: 49)) == nil)   // [space] swallowed behind it
     }
 
     // MARK: - Helpers

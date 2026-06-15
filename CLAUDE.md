@@ -15,6 +15,10 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 **Extract reusable logic into type extensions.** When a piece of logic is a general operation on a standard type (e.g. an array reordering that mirrors SwiftUI's `move(fromOffsets:toOffset:)`), add it as a type extension in `Extensions/` rather than inlining the body at the call site — even when the motivation is to avoid an import (e.g. SwiftUI in the state layer). Keeps call sites readable, makes the helper reusable and testable on its own, and matches familiar standard-library/SwiftUI naming.
 
+**Don't stack a `count: 1` and `count: 2` tap gesture on the same view.** SwiftUI can't fire the single-tap handler until the system double-click interval elapses (to rule out a second click), so single-click actions like row selection lag ~0.5s. Use one `onTapGesture` and branch on the underlying event's click count instead — `if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { …double… } else { …single… }`. A lone `count: 1` gesture fires immediately on mouse-up; a double-click fires it again with `clickCount == 2`. The file list/gallery rows do this.
+
+**`HotkeyRouter` owns bare keyboard input, not the responder chain.** Its app-wide `NSEvent` monitor intercepts keys before any SwiftUI `.alert`, so a modal's own button shortcuts never fire and bare keys leak to whatever the router routes them to. Register each new modal with the router (an `AppState` flag) so it **passes `[enter]`/`[esc]` through** to the modal — which handles them natively via its default/cancel buttons — and swallows the rest; mirror `pendingTagRemoval`. Don't instead route those keys to the flag's confirm/cancel methods: dismissing a system modal from the monitor lags behind the dialog's event-tracking loop. Focused text fields are already exempt via the router's text-input guard.
+
 ## Claude Code configuration
 
 This project uses `~/.claude-ios/` as the Claude Code configuration directory (not the default `~/.claude/`). MCP servers, skills, settings, and memory are all stored there.

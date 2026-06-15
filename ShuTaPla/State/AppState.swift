@@ -92,17 +92,27 @@ final class AppState {
 
     /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
     /// a row's Delete command). While non-empty the center panel shows the confirmation
-    /// dialog and the `HotkeyRouter` holds key context for it (`[enter]` confirms,
-    /// `[esc]` cancels, everything else is swallowed so nothing rings the bell).
+    /// alert, which owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
+    /// default/cancel buttons and swallows every other key.
     var pendingManagerDelete: [PlaylistFile] = []
 
     /// A user-facing message when a Manager trash confirmation fails, surfaced by the
     /// center panel's alert.
     var managerDeleteError: String?
 
+    /// The playlist tag awaiting a remove-from-all-files confirmation in the Manager
+    /// tag-management panel. While non-nil the panel shows the confirmation alert, which
+    /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its default/cancel
+    /// buttons and swallows every other key.
+    var pendingTagRemoval: String?
+
+    /// A user-facing message when a playlist-wide tag removal fails, surfaced by the
+    /// tag-management panel's alert.
+    var tagRemovalError: String?
+
     /// The file the Player-mode `[delete]` hotkey is asking to trash. While non-nil the
-    /// player shows a confirmation dialog and the `HotkeyRouter` holds key context for it
-    /// (`[enter]` confirms, `[esc]` cancels, everything else is swallowed).
+    /// player shows a confirmation alert, which owns the keyboard: the `HotkeyRouter` passes
+    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
     var playerDeleteCandidate: PlaylistFile?
 
     /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
@@ -627,6 +637,22 @@ final class AppState {
         pendingManagerDelete = []
         guard !targets.isEmpty else { return }
         Task { if let error = await deleteFiles(targets) { managerDeleteError = error } }
+    }
+
+    /// Dismisses the playlist-wide tag-removal confirmation without removing anything.
+    func cancelTagRemoval() {
+        pendingTagRemoval = nil
+    }
+
+    /// Removes the pending tag from every file in the selected playlist, surfacing any
+    /// failure through `tagRemovalError`.
+    func confirmTagRemoval() {
+        guard let tag = pendingTagRemoval, let playlist = selectedPlaylist else {
+            pendingTagRemoval = nil
+            return
+        }
+        pendingTagRemoval = nil
+        Task { if let error = await removeTagAcrossPlaylist(playlist, tag: tag) { tagRemovalError = error } }
     }
 
     /// Live column count of the Manager gallery grid, reported by `FileGalleryView`

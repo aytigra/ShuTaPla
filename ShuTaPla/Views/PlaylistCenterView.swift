@@ -40,17 +40,17 @@ struct PlaylistCenterView: View {
                 ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
             }
         }
-        .confirmationDialog(
+        .alert(
             deleteTitle,
             isPresented: Binding(
                 get: { !appState.pendingManagerDelete.isEmpty },
                 set: { if !$0 { appState.cancelManagerDelete() } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("Move to Trash", role: .destructive) { appState.confirmManagerDelete() }
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { appState.cancelManagerDelete() }
+                .keyboardShortcut(.cancelAction)
         }
         .alert(
             "Something went wrong",

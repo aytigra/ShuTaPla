@@ -61,18 +61,18 @@ struct PlayerView: View {
         .onChange(of: overlays.isFilesTagsOpen) { _, open in
             open ? coordinator.haltVisualForOverlay() : coordinator.resumeVisualForOverlay()
         }
-        .confirmationDialog(
+        .alert(
             "Move to Trash?",
             isPresented: Binding(
                 get: { appState.playerDeleteCandidate != nil },
                 set: { if !$0 { appState.cancelPlayerDelete() } }
             ),
-            titleVisibility: .visible,
             presenting: appState.playerDeleteCandidate
         ) { file in
             Button("Move to Trash", role: .destructive) { appState.confirmPlayerDelete() }
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { appState.cancelPlayerDelete() }
+                .keyboardShortcut(.cancelAction)
         } message: { file in
             Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
         }

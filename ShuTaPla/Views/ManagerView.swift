@@ -15,6 +15,7 @@ struct ManagerView: View {
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showInspector = true
+    @State private var managingTags = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -24,12 +25,23 @@ struct ManagerView: View {
             PlaylistCenterView()
                 .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                 .inspector(isPresented: $showInspector) {
-                    TagSidebar()
+                    TagSidebar(managingTags: $managingTags)
                         .inspectorColumnWidth(min: 220, ideal: 280, max: 380)
                 }
         }
         .toolbar {
-            ToolbarItem {
+            ToolbarItemGroup {
+                Button {
+                    // Entering management is meaningless with the panel hidden, so reveal it.
+                    if !managingTags { showInspector = true }
+                    managingTags.toggle()
+                } label: {
+                    Label("Manage Tags", systemImage: "tag")
+                        .symbolVariant(managingTags ? .fill : .none)
+                }
+                .disabled(appState.selectedPlaylist == nil)
+                .help(managingTags ? "Edit selected files' tags" : "Manage playlist tags")
+
                 Button {
                     showInspector.toggle()
                 } label: {

@@ -79,8 +79,10 @@ struct FileGalleryView: View {
             onCommitRename: { commitRename(file) },
             onCancelRename: { renamingID = nil }
         )
-        .onTapGesture(count: 2) { appState.beginPlayback(of: playlist, startingAt: file) }
-        .onTapGesture { handleClick(file) }
+        // A single tap gesture branching on the event's click count: attaching a
+        // separate `count: 2` gesture would force SwiftUI to delay the single click
+        // until the double-click interval elapses, making selection feel laggy.
+        .onTapGesture { handleTap(file) }
         .contextMenu {
             Button("Rename") { beginRename(file) }
             Button("Show in Finder") { appState.revealInFinder(file) }
@@ -98,6 +100,15 @@ struct FileGalleryView: View {
     }
 
     // MARK: - Selection
+
+    /// A double-click plays the file; a single click adjusts the selection.
+    private func handleTap(_ file: PlaylistFile) {
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+            appState.beginPlayback(of: playlist, startingAt: file)
+        } else {
+            handleClick(file)
+        }
+    }
 
     private func handleClick(_ file: PlaylistFile) {
         FileSelection.apply(

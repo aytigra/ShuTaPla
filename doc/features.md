@@ -129,7 +129,7 @@ In Manager mode, the window content is laid out as panels — no overlays are us
 
 - **Left collapsible panel** — Playlists. Shows video and image playlists in separate sections with full management controls (create, rename, delete, reorder). At the top, a collapsed "Audio" section acts as a visual hint; pressing it reveals the extended audio overlay (see Audio Player). Selecting a playlist here opens it in Stopped state in the Manager view. A playlist with a background re-scan in progress shows a spinner in place of its file count; deleting a large playlist clears the selection at once and the row shows a red progress spinner while its files are cleaned out in the background, staying visible until removal completes.
 - **Center** — playlist header (name, Play button, Reshuffle / Update controls, list/gallery toggle for image/video playlists), filtering controls (tag multi-select, AND/OR switch, saved multi-tag searches), counter notices for untagged / invalid tagging / skipped files (each activates its service filter — see Service filters), file list respecting the active filter.
-- **Right collapsible panel** — Tag management for the file(s) currently selected in the center list. Same multi-select tag input described under Tag editing UI.
+- **Right collapsible panel** — Tag management, shown in one of two modes selected from a toolbar button next to the panel's show/hide control. The default mode edits the tags of the file(s) currently selected in the center list (the same multi-select tag input described under Tag editing UI); its heading reflects the selection — **File Tags** for a single file, **Common Tags** for a multi-selection. The toolbar button switches the panel into **Manage Tags** mode (see Playlist-wide tag operations) and back; entering it reveals the panel if it was hidden.
 
 ### File list view modes
 
@@ -152,12 +152,12 @@ The choice is persisted per playlist. Audio playlists always use list view.
 
 ### Playlist-wide tag operations
 
-In addition to per-file and per-selection tag editing, Manager mode exposes operations that act on **every file in the playlist**:
+In addition to per-file and per-selection tag editing, Manager mode exposes operations that act on **every file in the playlist** — letting tags be curated without selecting or opening any file. The right panel's **Manage Tags** mode lists every tag in the playlist with its file count; each row offers:
 
-- **Rename a tag** across all files that have it.
-- **Remove a tag** from all files that have it.
+- **Rename a tag** across all files that have it — inline editing in a field that takes focus immediately, confirmed with `[enter]` and cancelled with `[esc]`.
+- **Remove a tag** from all files that have it. Because this renames files on disk and can't be undone, it asks for confirmation first.
 
-Both operations rename the underlying files on disk to match.
+Both operations rename the underlying files on disk to match. The same two operations are also available from the context menu of any selected filter chip.
 
 ## Tag system
 

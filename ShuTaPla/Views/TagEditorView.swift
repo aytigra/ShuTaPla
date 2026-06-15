@@ -21,7 +21,7 @@ struct TagEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Tags").font(.headline)
+            Text(title).font(.headline)
             content
         }
         .padding(12)
@@ -114,6 +114,16 @@ struct TagEditorView: View {
     }
 
     // MARK: - Derived
+
+    /// Reflects how many files the editor targets: one file's own tags, or the
+    /// tags shared across a multi-selection.
+    private var title: String {
+        switch files.count {
+        case 0: return "Tags"
+        case 1: return "File Tags"
+        default: return "Common Tags"
+        }
+    }
 
     private var editableFiles: [PlaylistFile] {
         files.filter { $0.taggingStatus != .invalid }

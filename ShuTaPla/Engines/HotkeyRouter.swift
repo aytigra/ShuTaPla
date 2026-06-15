@@ -119,6 +119,15 @@ final class HotkeyRouter {
 
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
+    /// Whether a modal confirmation dialog (Manager trash, player trash, or playlist tag
+    /// removal) is up and owns the keyboard.
+    private var hasBlockingConfirmation: Bool {
+        guard let appState else { return false }
+        return !appState.pendingManagerDelete.isEmpty
+            || appState.playerDeleteCandidate != nil
+            || appState.pendingTagRemoval != nil
+    }
+
     // MARK: - Monitor lifecycle
 
     /// Installs the app-wide key monitor. Idempotent.
@@ -159,6 +168,18 @@ final class HotkeyRouter {
         // A focused text field types; the router never intercepts it.
         if isTextInputActive() { return event }
 
+        // A confirmation dialog is a modal that owns `[enter]`/`[esc]` natively. Pass
+        // those through so its own default/cancel buttons fire instantly; consuming them
+        // here would both route them elsewhere (e.g. `[enter]` to the file list) and lag
+        // the dismissal behind the dialog's event-tracking loop. Other keys are swallowed
+        // so nothing acts behind it.
+        if hasBlockingConfirmation {
+            switch Hotkey(event: event) {
+            case .enter, .escape: return event
+            default: return nil
+            }
+        }
+
         if let key = Hotkey(event: event), route(key, rightOption: rightOptionDown) {
             return nil
         }
@@ -166,10 +187,6 @@ final class HotkeyRouter {
         // In the immersive fullscreen player there is nothing for a stray key to do
         // and nowhere for it to go, so swallow it rather than let it ring the bell.
         if appState?.mode == .player { return nil }
-
-        // A Manager trash confirmation likewise holds key context: swallow any key it
-        // didn't act on so the dialog stays silent.
-        if !(appState?.pendingManagerDelete.isEmpty ?? true) { return nil }
         return event
     }
 
@@ -190,17 +207,6 @@ final class HotkeyRouter {
 
     private func routePlayer(_ key: Hotkey, rightOption: Bool) -> Bool {
         guard let appState, let coordinator else { return false }
-
-        // A delete confirmation holds key context until it closes: `[enter]` confirms,
-        // `[esc]` cancels, and every other key is swallowed so transport can't run behind it.
-        if appState.playerDeleteCandidate != nil {
-            switch key {
-            case .enter: appState.confirmPlayerDelete()
-            case .escape: appState.cancelPlayerDelete()
-            default: break
-            }
-            return true
-        }
 
         // `[esc]` — its priority chain runs regardless of which target holds key context.
         if key == .escape {
@@ -281,17 +287,6 @@ final class HotkeyRouter {
     }
 
     private func routeManager(_ key: Hotkey, rightOption: Bool) -> Bool {
-        // A trash confirmation holds key context until it closes: `[enter]` confirms,
-        // `[esc]` cancels, and every other key is swallowed.
-        if let appState, !appState.pendingManagerDelete.isEmpty {
-            switch key {
-            case .enter: appState.confirmManagerDelete()
-            case .escape: appState.cancelManagerDelete()
-            default: break
-            }
-            return true
-        }
-
         // A top-edge-hover audio overlay can take key context in Manager too; otherwise
         // arrows are left for the file list.
         if overlayContext.audioHoldsKeyContext {
