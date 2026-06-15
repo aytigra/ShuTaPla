@@ -201,4 +201,108 @@ import SwiftData
         #expect(coordinator.fileAfter(sequence[0]) === sequence[1])
         #expect(coordinator.fileAfter(sequence[1]) === sequence[0])   // wraps within matches
     }
+
+    // MARK: - Player controls surface (Task 14)
+
+    @Test func setVolumePersistsAndClamps() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["i.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.setVolume(image, to: 0.4)
+        #expect(abs(coordinator.playbackVolume(for: image) - 0.4) < 0.0001)
+        coordinator.setVolume(image, to: 1.5)             // above range
+        #expect(image.preferences.volume == 1.0)
+        coordinator.setVolume(image, to: -0.2)            // below range
+        #expect(image.preferences.volume == 0.0)
+    }
+
+    @Test func slideshowPreferencesPersist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["i.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        // Not the active visual channel, so no live timer starts — only the preference.
+        coordinator.setSlideshowEnabled(image, true)
+        #expect(image.preferences.slideshowEnabled)
+        coordinator.setSlideshowInterval(image, 12)
+        #expect(image.preferences.slideshowInterval == 12)
+    }
+
+    @Test func reconcileJumpsWhenCurrentFileFilteredOut() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg", "3.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("1.jpg", ["a"]), ("2.jpg", ["b"]), ("3.jpg", ["b"])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        let firstID = coordinator.visualCurrentFile?.id
+
+        // Filter to "b" — the playing "1.jpg" (tagged "a") is excluded, so reconciling
+        // jumps to the first file that still matches.
+        image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        coordinator.reconcileVisualSelection()
+
+        let matching = image.playbackSequence
+        #expect(matching.map(\.fileName) == ["2.jpg", "3.jpg"])
+        #expect(coordinator.visualCurrentFile?.id == matching.first?.id)
+        #expect(coordinator.visualCurrentFile?.id != firstID)
+    }
+
+    @Test func reconcileKeepsCurrentFileWhenStillMatching() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("1.jpg", ["a"]), ("2.jpg", ["b"])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        let currentID = coordinator.visualCurrentFile?.id
+
+        // The playing file still matches the new filter, so reconciling leaves it put.
+        image.filterState = FilterState(selectedTags: ["a"], filterMode: .or)
+        coordinator.reconcileVisualSelection()
+        #expect(coordinator.visualCurrentFile?.id == currentID)
+    }
+
+    @Test func jumpLoadsRequestedFileOnImageChannel() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg", "3.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
+        )
+        try context.save()
+        let files = image.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.jump(image, to: files[2])
+        #expect(image.currentFileID == files[2].id)
+        #expect(coordinator.visualCurrentFile?.id == files[2].id)
+    }
 }

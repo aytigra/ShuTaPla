@@ -626,6 +626,10 @@ User edits tag in UI
 
 Renaming is synchronous and atomic (POSIX rename). The file stays in the same directory; only the name component changes.
 
+**Shared tag control**: `TagTokenField` is the one multiselect-with-autocomplete control behind both the tag editor and the filter. Selected tags render as removable chips inside a bordered field; typing filters a floating dropdown — ranked by match against the typed string (exact, then prefix, then substring) and then by `tagFrequency` — that overlays the controls below it rather than pushing them down (so each call site raises the control's `zIndex` above its following siblings). Arrow-up/down move the dropdown highlight and `[enter]` adds the highlighted row; with the input empty, arrow-left/right step the caret one chip at a time, a quick double-left/right jumps to the first/last chip, and `[delete]` removes the chip at the caret. The static `options(query:knownTags:selected:allowsCreate:)` computes the ranking and is unit-tested directly. `TagEditorView` instantiates it with `allowsCreate: true` (a valid, unused typed string trails the dropdown as a "create" row and adds the tag to the selected file(s) on commit); `FilterBar` with `allowsCreate: false` (search-to-select only, adding to `filterState`). A per-chip menu builder lets the filter host the playlist-wide rename / remove operations on its selected chips.
+
+The text input is a borderless `NSTextField` wrapper (`TokenTextField`), not a SwiftUI `TextField`, so focus and the caret-edge key commands come straight from AppKit — the layer SwiftUI's `@FocusState`/`onKeyPress` miss on an empty field. The field is only inserted once the control is clicked (it never auto-focuses on appear), reports begin/end editing through the delegate, and routes `delete`/arrows/`return`/`esc` via `doCommandBy:` only at the matching caret edge. While focused it runs a local `leftMouseDown` monitor: a click outside the control and its open dropdown resigns focus *without* consuming the event, so a single click elsewhere (another control, a playlist row, empty chrome) both closes the field and lands. The monitor maps the click into the control's coordinate space from the input's own AppKit-window and SwiftUI-global frames.
+
 **Invalid-tagging files**: `TagEditorView` checks the active file's `taggingStatus`. When it is `.invalid`, the chip editor is disabled and replaced with an "invalid tag syntax" message plus a plain filename-rename field; tag add/remove/rename are not offered (they would rewrite the name and could drop the malformed bracket content). The editor re-enables automatically once a rename makes the filename parse as `.valid` or `.untagged`. In a Manager multi-selection, `.invalid` files are excluded from batch tag operations and surfaced for individual fixing.
 
 ### Playlist-wide tag operations
@@ -761,11 +765,16 @@ final class PlaybackCoordinator {
 
 ### Architecture
 
-Key events are captured at the NSWindow level via `NSEvent.addLocalMonitorForEvents(matching: .keyDown)`. This approach:
+Key events are captured app-wide via `NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged])`. This approach:
 - Works in fullscreen (unlike SwiftUI `.onKeyPress` which can lose focus).
 - Intercepts events before they reach SwiftUI's responder chain.
 - Allows the HotkeyRouter to decide routing before any view sees the event.
-- Returning `nil` from the monitor consumes the event — this also keeps `[esc]` from triggering the system's default exit-from-fullscreen behavior, so the esc priority chain stays in control.
+- Returning `nil` from the monitor consumes the event — this also keeps `[esc]` (and arrows) from triggering the system's default exit-from-fullscreen behavior, so the esc priority chain stays in control.
+
+**Consumption semantics.** The monitor closure is `{ [weak self] event in guard let self else { return event }; return self.handle(event) }`. `handle` returns `nil` to consume or the event to pass through; there is deliberately **no `?? event` fallback**, which would resurrect every consumed event and ring the system beep on every handled key. `handle` also:
+- Passes through any **Command/Control** combination untouched, so menu shortcuts (Cmd+Q, Cmd+,) and the like are never hijacked by the bare-key router.
+- Passes through everything while a **text field** is first responder, so focused inputs type normally.
+- In **Player mode**, swallows any leftover bare key that no rule handled — the immersive fullscreen player has nowhere for a stray key to go, so this keeps it from beeping.
 
 ### Routing priority
 
@@ -773,9 +782,14 @@ Key events are captured at the NSWindow level via `NSEvent.addLocalMonitorForEve
 Key event arrives
        │
        ▼
-  1. Is a text field first responder? (tag input, rename field, filter search)
-     YES → pass through to text field. Return nil (event consumed by field).
+  1. Is it a Command/Control combo, or is a text field first responder?
+     YES → return the event (pass through to the menu system / focused field).
      NO  → continue.
+       │
+       ▼
+  1b. Is a trash confirmation open (Player [delete], or the Manager confirmation)?
+     → [enter] confirms (Player: trash + advance), [esc] cancels, all other keys
+       swallowed — the dialog holds key context until it closes, so nothing beeps.
        │
        ▼
   2. Is it [esc]? → Apply esc priority chain:
@@ -798,10 +812,13 @@ Key event arrives
        │
        ▼
   5. Is app in Player mode?
-     YES → player hotkey table ([tab]/[arrow up] open Files & Tags; [arrow down]
-           closes it or reveals Compact audio).
-     NO  → manager hotkey table (arrow up/down = file-list navigation; the audio
-           overlay is opened by hover or the Audio section, not by arrows).
+     YES → player hotkey table ([tab] toggles Files & Tags; [arrow up] opens it
+           but never closes it; [arrow down] closes it or reveals Compact audio;
+           [s] stops to Manager; [delete] raises the trash confirmation).
+     NO  → manager hotkey table (arrows move the file selection — 1-D in the list,
+           2-D in the gallery, stepping a full row on up/down and one cell on
+           left/right; [enter] plays the selected file; the audio overlay is opened
+           by hover or the Audio section, not by arrows).
 ```
 
 ### Modifier key handling
@@ -980,7 +997,7 @@ ShuTaPla/                            (app source)
 │   │   ├── PlaylistCenterView.swift     // header + filter + file list
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
 │   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode
-│   │   ├── FilterBar.swift              // tag filter controls
+│   │   ├── FilterBar.swift              // tag filter controls (TagTokenField, search-only)
 │   │   └── TagSidebar.swift             // right panel
 │   │
 │   ├── Player/
@@ -996,7 +1013,9 @@ ShuTaPla/                            (app source)
 │   │   └── AudioOverlayExtended.swift
 │   │
 │   ├── Shared/
-│   │   ├── TagEditorView.swift          // multi-select chip input
+│   │   ├── TagEditorView.swift          // tag editor (TagTokenField, create-enabled) + invalid-name rename
+│   │   ├── TagTokenField.swift          // shared multiselect-autocomplete tag control
+│   │   ├── FlowLayout.swift             // wrapping chip layout
 │   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
@@ -1070,7 +1089,7 @@ Tests use **Swift Testing** (`import Testing`) for all unit and integration test
 | **FileSystemService** | Integration tests using temporary directories. Create known file structures, scan, verify results. Test rename and trash operations. Use `async` test functions with `await`. |
 | **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, and suppression vs per-playlist pause (`playback = playing && !suppression`). |
 | **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Files & Tags; key context transfers only when fully revealed. |
-| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key list navigation, `[tab]` opens Files & Tags). |
+| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key navigation — 1-D list and 2-D gallery, `[enter]` playing the selected file, `[tab]` toggling Files & Tags, `[s]` stop, and the `[delete]` confirmation holding key context). |
 | **CloudFileService** | Unit tests with a mock providing canned cloud statuses and a recording download requester. Verify status mapping, prefetch requests the next N files in order, on-demand download when playback reaches an in-cloud file, and advance-on-timeout. |
 | **UI** | Manual testing and SwiftUI Previews. Snapshot tests for overlay layouts if needed. |
 

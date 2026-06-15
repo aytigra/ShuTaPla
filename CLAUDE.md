@@ -9,7 +9,7 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 ## Writing rules
 
-**No residue from dismissed alternatives.** When a choice, code, or prose is corrected or replaced, never describe the dismissed version in artifacts (docs, plans, comments, commit messages) — no "it is no longer X", "this does not do Y anymore", "unlike before". Mention the former state only when the current choice is hard to understand without it, and only as an explanation of the current choice.
+**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. This is about meaning, not a banned-word list — phrasings like "no longer", "anymore", "unlike before", "now uses", "still uses", "previously", "was X, is Y" are just symptoms. The test: a reader with no knowledge of the code's history must not be able to tell from a comment that anything ever changed, was added, or was kept. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice.
 
 ## Code conventions
 
@@ -58,5 +58,3 @@ This project uses Xcode **file system synchronized groups** (`PBXFileSystemSynch
 - `doc/` — documentation
 
 **Always create new files inside one of these directories.** Files created outside them (e.g., at the project root) will NOT appear in Xcode unless manually added to `project.pbxproj`.
-
-After creating files from the CLI, switch focus to Xcode so its filesystem watcher picks up the changes.

@@ -410,7 +410,11 @@ Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 
 ---
 
-## Task 14 — Player overlays: bottom controls, Files & Tags, Playlists
+## Task 14 — Player overlays: bottom controls, Files & Tags, Playlists ✅
+
+**Status: complete (code landed; builds clean, 3 new coordinator tests + all unit tests green).** `PlaybackCoordinator` gained a player-controls surface: `visualCurrentFile`/`visualCurrentTime`/`visualDuration`, `jump(_:to:)` (jump without leaving the playlist), `seek(_:to:)` (absolute scrub), `playbackVolume(for:)`/`setVolume(_:to:)` (clamped 0–1, persisted to `preferences.volume`, forwarded to the live engine), and `setSlideshowEnabled(_:_:)`/`setSlideshowInterval(_:_:)` (persisted, live timer when the image channel is active). `PlaybackControlsBar` is the bottom hover bar — prev / play-pause (flips the playlist's own Paused state, never suppression) / stop / next, plus loop + scrubber + volume for video, slideshow toggle + interval menu for image, and a Files & Tags toggle. `FilesTagsOverlayView` slides up from the bottom: a reused `FilterBar` over the filtered file list (double-click → `jump`, per-row rename / reveal / trash-with-confirmation) beside a reused `TagEditorView` bound to the currently playing file only. `PlaylistsOverlay` is the left-hover read-only selector (Video/Image sections + Audio hint that opens extended audio); selecting starts playback immediately. `PlayerView` composes them as edge hover containers where a single `HoverZone` grows from a thin strip to the overlay's full extent so the revealed content stays inside the tracking area (cursor-leave dismisses, moving onto the content does not).
+
+**What's deferred to Task 15:** the top-edge `HoverZone` already drives `.audioCompact`, but the compact/extended audio overlay *content* and the `audioDidFullyReveal()` key-context handoff land in Task 15.
 
 The three major overlays in Player mode.
 
@@ -427,6 +431,41 @@ The three major overlays in Player mode.
 - Files & Tags: file list shows filtered files, double-click jumps player, tag edits rename files
 - Playlists overlay: selecting playlist starts it, audio hint opens extended audio
 - Controls dismiss on mouse leave (via hover zone)
+
+---
+
+## Task 14.1 — Player overlay fixes and refinements  ✅
+
+A correctness-and-polish pass over the Task 13/14 player overlays and the hotkey routing they depend on: stop the system beep, make hover reveals stable, keep overlay/hotkey context coherent, and ensure no player-mode layout survives leaving the player.
+
+**Deliverables:**
+- **No system beep on hotkeys.** Keys the router handles must return `nil` from the local monitor so AppKit doesn't play the "funk"/ding for an unhandled key. Audit every player- and manager-mode branch (especially the arrow keys) — a branch that decodes a key but takes no action must still consume the event rather than fall through to the system.
+- **Manager arrow keys move the selection.** Arrow up/down are heard (beep) but don't move the file-list selection. Route them to the file-list selection model so they navigate both in list and gallery mode, and consume them.
+- **Tag input can be unfocused.** Once the tag input takes focus there's no way to resign it — clicking elsewhere or selecting another control doesn't release first responder. Add an explicit resign path (background tap / focus state binding / esc) so focus can leave the field, re-enabling hotkeys.
+- **Esc in image fullscreen doesn't exit fullscreen.** In image Player mode `[esc]` falls through to AppKit's default "exit full screen". The router must consume `[esc]` through its full priority chain (close overlay → suppress → close window) and never let the system see it.
+- **Bottom controls behave as revealed hidden controls, not a slide-in overlay.** Fade in (not float-up); compact, bottom-center, with margin from the bottom edge (not stretched edge-to-edge). They must dismiss on mouse-leave, and must never persist across a stop/start or after leaving Player mode — no player-mode layout may remain open once the player mode is exited (clear overlay state on stop).
+- **Left playlists overlay opens stably on hover.** It currently oscillates (begins to slide in, probably loses hover, begins to close). Stabilize the hover region so revealing the overlay doesn't move the cursor out of the tracking area — the trigger/reveal hysteresis from the growing-`HoverZone` pattern must keep the cursor inside while it opens.
+- **Pause while Files & Tags is open.** Suppress playback/slideshow advance while the Files & Tags overlay is open, so the player can't jump to the next file while the user is editing tags; resume playing on tag layout close (only if was playing before).
+- **Hide the image pause button when slideshow is off.** For image playlists the play/pause control only makes sense while the slideshow is running — hide (or disable) it when slideshow is off.
+- **"Files & Tags" button has a real hit target.** Give it padding/background so the whole control is clickable, not just the text glyphs.
+- **All playback-control buttons show hover feedback.** Apply a button style that visibly reacts to hover so the controls read as buttons.
+- **`[s]` = stop.** Wire `[s]` in Player mode to stop the visual playlist and exit the player (same as the Stop control).
+- **Files & Tags closes by `[tab]`, `[esc]`, or `[arrow down]` regardless of how it was opened.** Currently it opens on `[tab]` but none of those close it. All three must close it while opened.
+- **Delete confirmation + delete in Player mode.** The delete confirmation dialog confirms on `[enter]` (cancel on `[esc]` already works). `[delete]` works in Player mode too: it raises the confirmation dialog for the current file. In both cases while that dialog is open it holds hotkey context (keys go to the dialog for Esc and Enter) until it closes.
+- **Filter that excludes the current file keeps the player playing.** When a filter applied in the Files & Tags overlay filters out the currently playing file, start playing the next available file in the filtered sequence instead. If the filter leaves no files player shows black background instead of file (since it doesn't have any file to display), show an in-overlay "no files" placeholder without dropping out of Player mode.
+- **Files & Tags header no longer overlaps the back button.** The overlay's "Files & Tags" header overlaps `PlayerView`'s top-leading "Back to Manager" button; resolve the z-overlap.
+
+---
+
+## Task 14.2 — Tag editor and filter redesign (autocomplete multiselect)  ✅
+
+Replace the chips + "add new" + full-tag-list editor with the multiselect-with-autocomplete control the feature spec describes, and give the filter the same control. The two share one component, differing only in whether they can create tags.
+
+**Deliverables:**
+- **Multiselect autocomplete control.** A single reusable input where selected tags render as chips *inside* the field and the cursor moves between/through them (arrow-left/right across chips, delete to remove the chip before the cursor) per the feature-spec interaction. Typing filters a **dropdown** suggestion list that appears on focus; the dropdown scrolls (never renders the full tag set at once) and ranks tags matching the typed string to the top (autocomplete-like).
+- **Tag editor uses it (create allowed).** In the tag editor the control adds tags to the selected file(s); typing a new, valid tag and committing (on [Enter]) creates it (existing add/remove-on-disk + frequency-cache rules unchanged).
+- **Filter uses it (search-only).** The `FilterBar` tag selection uses the same control to add tags to the *filter* rather than to files, with the same autocomplete dropdown — but it cannot create tags (search-to-select only; no commit-new path). AND/OR mode and the rest of the filter bar are unchanged.
+- Shared component lives in `Views/` (or `Views/Shared/`) and is parameterized by an "allow create" flag and the add/remove callbacks, so editor and filter reuse one implementation.
 
 ---
 
@@ -578,6 +617,10 @@ Task 1 ─── Data Models
   │                                   ├── Task 13 ── Overlays + Hover
   │                                   │     │
   │                                   │     └── Task 14 ── Player Overlays
+  │                                   │           │
+  │                                   │           ├── Task 14.1 ─ Overlay Fixes + Refinements
+  │                                   │           │
+  │                                   │           ├── Task 14.2 ─ Tag Editor + Filter Redesign
   │                                   │           │
   │                                   │           └── Task 15 ── Audio Overlay
   │                                   │

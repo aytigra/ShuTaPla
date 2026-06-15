@@ -12,7 +12,6 @@ import SwiftUI
 struct PlaylistCenterView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var deleteCandidates: [PlaylistFile] = []
     @State private var errorMessage: String?
     @State private var isUpdating = false
 
@@ -26,13 +25,13 @@ struct PlaylistCenterView: View {
                     if playlist.preferences.viewMode == .gallery {
                         FileGalleryView(
                             playlist: playlist,
-                            confirmDelete: { deleteCandidates = $0 },
+                            confirmDelete: { appState.pendingManagerDelete = $0 },
                             reportError: { errorMessage = $0 }
                         )
                     } else {
                         FileListView(
                             playlist: playlist,
-                            confirmDelete: { deleteCandidates = $0 },
+                            confirmDelete: { appState.pendingManagerDelete = $0 },
                             reportError: { errorMessage = $0 }
                         )
                     }
@@ -41,26 +40,17 @@ struct PlaylistCenterView: View {
                 ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
             }
         }
-        .onChange(of: appState.deleteRequest) {
-            // The Manager [delete] hotkey routes here; reuse the same confirmation.
-            if let request = appState.deleteRequest {
-                deleteCandidates = request.files
-                appState.deleteRequest = nil
-            }
-        }
         .confirmationDialog(
             deleteTitle,
-            isPresented: Binding(get: { !deleteCandidates.isEmpty }, set: { if !$0 { deleteCandidates = [] } }),
+            isPresented: Binding(
+                get: { !appState.pendingManagerDelete.isEmpty },
+                set: { if !$0 { appState.cancelManagerDelete() } }
+            ),
             titleVisibility: .visible
         ) {
-            Button("Move to Trash", role: .destructive) {
-                let targets = deleteCandidates
-                deleteCandidates = []
-                Task {
-                    if let error = await appState.deleteFiles(targets) { errorMessage = error }
-                }
-            }
-            Button("Cancel", role: .cancel) { deleteCandidates = [] }
+            Button("Move to Trash", role: .destructive) { appState.confirmManagerDelete() }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { appState.cancelManagerDelete() }
         }
         .alert(
             "Something went wrong",
@@ -70,12 +60,21 @@ struct PlaylistCenterView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .alert(
+            "Couldn't move to Trash",
+            isPresented: Binding(get: { appState.managerDeleteError != nil }, set: { if !$0 { appState.managerDeleteError = nil } })
+        ) {
+            Button("OK", role: .cancel) { appState.managerDeleteError = nil }
+        } message: {
+            Text(appState.managerDeleteError ?? "")
+        }
     }
 
     private var deleteTitle: String {
-        deleteCandidates.count == 1
-            ? "Move “\(deleteCandidates[0].fileName)” to the Trash?"
-            : "Move \(deleteCandidates.count) files to the Trash?"
+        let files = appState.pendingManagerDelete
+        return files.count == 1
+            ? "Move “\(files[0].fileName)” to the Trash?"
+            : "Move \(files.count) files to the Trash?"
     }
 
     // MARK: - Header

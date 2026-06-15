@@ -24,17 +24,25 @@ struct FileListView: View {
     @State private var draftName = ""
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(visibleFiles) { file in
-                    row(file)
-                    Divider()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(visibleFiles) { file in
+                        row(file)
+                            .id(file.id)
+                        Divider()
+                    }
                 }
             }
-        }
-        .overlay {
-            if visibleFiles.isEmpty {
-                ContentUnavailableView("No Files", systemImage: "doc")
+            .overlay {
+                if visibleFiles.isEmpty {
+                    ContentUnavailableView("No Files", systemImage: "doc")
+                }
+            }
+            // Keep the keyboard-driven selection (single row) visible as it moves.
+            .onChange(of: appState.selectedFileIDs) { _, ids in
+                guard ids.count == 1, let id = ids.first else { return }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }

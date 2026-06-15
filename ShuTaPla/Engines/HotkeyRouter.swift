@@ -59,7 +59,7 @@ final class NoOverlayContext: HotkeyOverlayContext {
 /// The keys the router acts on, decoded from an `NSEvent` once so the routing logic
 /// is a pure function of key + right-option and is unit-testable without AppKit.
 enum Hotkey: Equatable {
-    case space, escape, tab, p, l, delete
+    case space, escape, tab, enter, p, l, s, delete
     case arrowUp, arrowDown, arrowLeft, arrowRight
 
     /// Decodes a key-down event, or `nil` if it isn't a key the router handles.
@@ -73,6 +73,7 @@ enum Hotkey: Equatable {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "p": self = .p
         case "l": self = .l
+        case "s": self = .s
         default: return nil
         }
     }
@@ -82,6 +83,7 @@ enum Hotkey: Equatable {
         case 49: return .space
         case 53: return .escape
         case 48: return .tab
+        case 36, 76: return .enter          // return / keypad enter
         case 51, 117: return .delete        // delete / forward-delete
         case 123: return .arrowLeft
         case 124: return .arrowRight
@@ -123,7 +125,12 @@ final class HotkeyRouter {
     func startMonitoring() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            self?.handle(event) ?? event
+            // When the router is gone, let the event flow normally; otherwise the
+            // router's decision stands — `nil` consumes (and suppresses the beep),
+            // a returned event passes through. (A `?? event` fallback here would
+            // resurrect every consumed event and beep on every handled key.)
+            guard let self else { return event }
+            return self.handle(event)
         }
     }
 
@@ -141,8 +148,29 @@ final class HotkeyRouter {
             if event.keyCode == 61 { rightOptionDown = event.modifierFlags.contains(.option) }
             return event
         }
-        guard event.type == .keyDown, let key = Hotkey(event: event) else { return event }
-        return route(key, rightOption: rightOptionDown) ? nil : event
+        guard event.type == .keyDown else { return event }
+
+        // Leave Command/Control combinations to the menu system and the responder
+        // chain (Cmd+Q, Cmd+, …); the router only owns bare keys (and Right Option).
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+            return event
+        }
+
+        // A focused text field types; the router never intercepts it.
+        if isTextInputActive() { return event }
+
+        if let key = Hotkey(event: event), route(key, rightOption: rightOptionDown) {
+            return nil
+        }
+
+        // In the immersive fullscreen player there is nothing for a stray key to do
+        // and nowhere for it to go, so swallow it rather than let it ring the bell.
+        if appState?.mode == .player { return nil }
+
+        // A Manager trash confirmation likewise holds key context: swallow any key it
+        // didn't act on so the dialog stays silent.
+        if !(appState?.pendingManagerDelete.isEmpty ?? true) { return nil }
+        return event
     }
 
     // MARK: - Routing
@@ -161,7 +189,18 @@ final class HotkeyRouter {
     }
 
     private func routePlayer(_ key: Hotkey, rightOption: Bool) -> Bool {
-        guard let coordinator else { return false }
+        guard let appState, let coordinator else { return false }
+
+        // A delete confirmation holds key context until it closes: `[enter]` confirms,
+        // `[esc]` cancels, and every other key is swallowed so transport can't run behind it.
+        if appState.playerDeleteCandidate != nil {
+            switch key {
+            case .enter: appState.confirmPlayerDelete()
+            case .escape: appState.cancelPlayerDelete()
+            default: break
+            }
+            return true
+        }
 
         // `[esc]` — its priority chain runs regardless of which target holds key context.
         if key == .escape {
@@ -175,6 +214,17 @@ final class HotkeyRouter {
         if key == .p {
             coordinator.isSuppressed ? coordinator.unsuppress() : coordinator.suppress()
             return true
+        }
+
+        // `[s]` stops the visual playlist and returns to Manager.
+        if key == .s {
+            appState.stopAndExitPlayer()
+            return true
+        }
+
+        // `[delete]` raises the trash confirmation for the playing file.
+        if key == .delete {
+            return appState.requestDeletePlayingFile()
         }
 
         return overlayContext.audioHoldsKeyContext
@@ -195,7 +245,11 @@ final class HotkeyRouter {
             else { coordinator.next(visual) }
         case .arrowRight: coordinator.next(visual)
         case .arrowLeft: coordinator.previous(visual)
-        case .arrowUp, .tab:
+        case .tab:
+            // Toggle: opens Files & Tags, or closes it however it was opened.
+            overlayContext.isFilesTagsOpen ? overlayContext.closeFilesTags() : overlayContext.openFilesTags()
+        case .arrowUp:
+            // Opens Files & Tags, but never closes it (that's Tab / Esc / Down).
             if !overlayContext.isFilesTagsOpen { overlayContext.openFilesTags() }
         case .arrowDown:
             if overlayContext.isFilesTagsOpen { overlayContext.closeFilesTags() }
@@ -227,6 +281,17 @@ final class HotkeyRouter {
     }
 
     private func routeManager(_ key: Hotkey, rightOption: Bool) -> Bool {
+        // A trash confirmation holds key context until it closes: `[enter]` confirms,
+        // `[esc]` cancels, and every other key is swallowed.
+        if let appState, !appState.pendingManagerDelete.isEmpty {
+            switch key {
+            case .enter: appState.confirmManagerDelete()
+            case .escape: appState.cancelManagerDelete()
+            default: break
+            }
+            return true
+        }
+
         // A top-edge-hover audio overlay can take key context in Manager too; otherwise
         // arrows are left for the file list.
         if overlayContext.audioHoldsKeyContext {
@@ -234,13 +299,26 @@ final class HotkeyRouter {
         }
         switch key {
         case .escape:
-            if appState?.cancelInProgressOperation() == true { return true }
-            closeWindow()
+            // Cancel an in-progress operation (rename / tagging) if there is one;
+            // otherwise swallow the key. Manager `[esc]` never closes the window.
+            appState?.cancelInProgressOperation()
             return true
+        case .enter:
+            // Play the selected file (the text-input guard upstream means this only fires
+            // when no field is focused, so a rename's Return still commits the field).
+            return appState?.playSelectedFile() ?? false
         case .delete:
             return appState?.requestDeleteSelectedFiles() ?? false
+        case .arrowUp:
+            return appState?.moveFileSelection(.up) ?? false
+        case .arrowDown:
+            return appState?.moveFileSelection(.down) ?? false
+        case .arrowLeft:
+            return appState?.moveFileSelection(.left) ?? false
+        case .arrowRight:
+            return appState?.moveFileSelection(.right) ?? false
         default:
-            return false        // arrow navigation and the rest fall through to the list
+            return false        // the rest fall through to the list
         }
     }
 

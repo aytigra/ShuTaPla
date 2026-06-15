@@ -3,10 +3,10 @@
 //  ShuTaPla
 //
 //  Tag editor for the current file-list selection. For one or more validly-tagged
-//  files it shows the tags in common as removable chips plus an autocomplete input
-//  (enter to add, arrows to move through suggestions, esc to clear). A lone file
-//  with invalid tagging gets a plain rename field with an explanatory message until
-//  its name parses cleanly; in a multi-selection, invalid files are excluded.
+//  files it shows the tags in common in a `TagTokenField` whose dropdown can create
+//  new tags. A lone file with invalid tagging gets a plain rename field with an
+//  explanatory message until its name parses cleanly; in a multi-selection, invalid
+//  files are excluded.
 //
 
 import SwiftUI
@@ -16,11 +16,8 @@ struct TagEditorView: View {
     let files: [PlaylistFile]
     @Environment(AppState.self) private var appState
 
-    @State private var input = ""
-    @State private var highlighted = 0
     @State private var renameDraft = ""
     @State private var errorMessage: String?
-    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -65,84 +62,14 @@ struct TagEditorView: View {
                     .foregroundStyle(.secondary)
             }
 
-            commonTagChips
-            tagInput
-            suggestionList
-        }
-    }
-
-    @ViewBuilder
-    private var commonTagChips: some View {
-        if commonTags.isEmpty {
-            Text(files.count > 1 ? "No tags in common." : "No tags yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
-            FlowLayout {
-                ForEach(commonTags, id: \.self) { tag in
-                    removableChip(tag)
-                }
-            }
-        }
-    }
-
-    private func removableChip(_ tag: String) -> some View {
-        HStack(spacing: 4) {
-            Text(tag)
-            Button { remove(tag) } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-        }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color.accentColor.opacity(0.18), in: Capsule())
-    }
-
-    private var tagInput: some View {
-        TextField("Add a tag", text: $input)
-            .textFieldStyle(.roundedBorder)
-            .focused($inputFocused)
-            .onSubmit(commit)
-            .onExitCommand { input = ""; highlighted = 0 }
-            .onChange(of: input) { highlighted = 0 }
-            .onMoveCommand { direction in
-                switch direction {
-                case .down where !suggestions.isEmpty:
-                    highlighted = min(highlighted + 1, suggestions.count - 1)
-                case .up:
-                    highlighted = max(highlighted - 1, 0)
-                default:
-                    break
-                }
-            }
-    }
-
-    @ViewBuilder
-    private var suggestionList: some View {
-        if !suggestions.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(Array(suggestions.enumerated()), id: \.element) { index, tag in
-                    Button { add(tag) } label: {
-                        HStack {
-                            Text(tag)
-                            Spacer()
-                            Text("\(playlist.tagFrequency[tag] ?? 0)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(index == highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            TagTokenField(
+                tokens: commonTags,
+                knownTags: playlist.tagFrequency,
+                allowsCreate: true,
+                placeholder: "Add a tag",
+                onAdd: { add($0) },
+                onRemove: { remove($0) }
+            )
         }
     }
 
@@ -174,19 +101,7 @@ struct TagEditorView: View {
 
     // MARK: - Actions
 
-    private func commit() {
-        if !suggestions.isEmpty, highlighted < suggestions.count {
-            add(suggestions[highlighted])
-        } else {
-            let tag = input.trimmingCharacters(in: .whitespaces)
-            guard TagParser.isValidTag(tag) else { return }
-            add(tag)
-        }
-    }
-
     private func add(_ tag: String) {
-        input = ""
-        highlighted = 0
         Task {
             if let error = await appState.addTag(tag, to: editableFiles) { errorMessage = error }
         }
@@ -225,23 +140,5 @@ struct TagEditorView: View {
             common = common.filter { lower.contains($0.lowercased()) }
         }
         return common
-    }
-
-    /// Playlist tags not already in common, ranked by frequency then name, matched
-    /// against the current input.
-    private var suggestions: [String] {
-        let already = Set(commonTags.map { $0.lowercased() })
-        let query = input.trimmingCharacters(in: .whitespaces).lowercased()
-        return playlist.tagFrequency.keys
-            .filter { !already.contains($0.lowercased()) }
-            .filter { query.isEmpty || $0.lowercased().contains(query) }
-            .sorted { a, b in
-                let fa = playlist.tagFrequency[a] ?? 0
-                let fb = playlist.tagFrequency[b] ?? 0
-                if fa != fb { return fa > fb }
-                return a.lowercased() < b.lowercased()
-            }
-            .prefix(8)
-            .map { $0 }
     }
 }

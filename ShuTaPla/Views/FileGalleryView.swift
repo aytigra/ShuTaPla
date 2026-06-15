@@ -23,22 +23,50 @@ struct FileGalleryView: View {
     @State private var renamingID: UUID?
     @State private var draftName = ""
 
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)]
+    private static let minItemWidth: CGFloat = 150
+    private static let gridSpacing: CGFloat = 12
+    private let columns = [GridItem(.adaptive(minimum: minItemWidth, maximum: 220), spacing: gridSpacing)]
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(visibleFiles) { file in
-                    cell(file)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
+                    ForEach(visibleFiles) { file in
+                        cell(file)
+                            .id(file.id)
+                    }
+                }
+                .padding(Self.gridSpacing)
+            }
+            .overlay {
+                if visibleFiles.isEmpty {
+                    ContentUnavailableView("No Files", systemImage: "doc")
                 }
             }
-            .padding(12)
-        }
-        .overlay {
-            if visibleFiles.isEmpty {
-                ContentUnavailableView("No Files", systemImage: "doc")
+            // Track the live column count so keyboard arrows can navigate in 2D.
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { appState.fileGridColumns = Self.columnCount(for: geo.size.width) }
+                        .onChange(of: geo.size.width) { _, width in
+                            appState.fileGridColumns = Self.columnCount(for: width)
+                        }
+                }
+            }
+            // Keep the keyboard-driven selection (single cell) visible as it moves.
+            .onChange(of: appState.selectedFileIDs) { _, ids in
+                guard ids.count == 1, let id = ids.first else { return }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
             }
         }
+    }
+
+    /// Mirrors `LazyVGrid`'s adaptive packing: as many `minItemWidth` columns as fit
+    /// in the padded width, separated by `gridSpacing`.
+    static func columnCount(for width: CGFloat) -> Int {
+        let available = width - gridSpacing * 2          // outer padding
+        guard available > 0 else { return 1 }
+        return max(1, Int((available + gridSpacing) / (minItemWidth + gridSpacing)))
     }
 
     private func cell(_ file: PlaylistFile) -> some View {

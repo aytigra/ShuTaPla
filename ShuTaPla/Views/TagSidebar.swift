@@ -16,7 +16,9 @@ struct TagSidebar: View {
         if let playlist = appState.selectedPlaylist {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Above the editor so the filter's floating tag dropdown overlays it.
                     FilterBar(playlist: playlist)
+                        .zIndex(1)
                     Divider()
                     TagEditorView(playlist: playlist, files: selectedFiles(in: playlist))
                     Spacer(minLength: 0)

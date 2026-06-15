@@ -20,6 +20,11 @@ enum AppMode {
     case player    // fullscreen playback
 }
 
+/// A directional step for keyboard navigation of the Manager file grid.
+enum MoveDirection {
+    case up, down, left, right
+}
+
 /// A scanned folder awaiting a media-type decision because no type dominated it
 /// (a Mixed folder). The view presents the choice and calls back with the type.
 struct PendingPlaylist {
@@ -27,14 +32,6 @@ struct PendingPlaylist {
     let bookmark: Data
     let folderPath: String
     let scan: ScanResult
-}
-
-/// A pending request to confirm trashing a set of files, raised by the Manager
-/// `[delete]` hotkey. Identity (not contents) drives the panel's `onChange`.
-struct FileDeleteRequest: Identifiable, Equatable {
-    let id = UUID()
-    let files: [PlaylistFile]
-    static func == (lhs: FileDeleteRequest, rhs: FileDeleteRequest) -> Bool { lhs.id == rhs.id }
 }
 
 /// A folder being scanned into a new playlist, shown optimistically in the
@@ -93,10 +90,20 @@ final class AppState {
     /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
 
-    /// Set by the Manager-mode `[delete]` hotkey to ask the center panel to confirm
-    /// trashing these files; the panel consumes it and clears it back to `nil`. The
-    /// `id` makes two consecutive same-sized requests distinct so the panel re-fires.
-    var deleteRequest: FileDeleteRequest?
+    /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
+    /// a row's Delete command). While non-empty the center panel shows the confirmation
+    /// dialog and the `HotkeyRouter` holds key context for it (`[enter]` confirms,
+    /// `[esc]` cancels, everything else is swallowed so nothing rings the bell).
+    var pendingManagerDelete: [PlaylistFile] = []
+
+    /// A user-facing message when a Manager trash confirmation fails, surfaced by the
+    /// center panel's alert.
+    var managerDeleteError: String?
+
+    /// The file the Player-mode `[delete]` hotkey is asking to trash. While non-nil the
+    /// player shows a confirmation dialog and the `HotkeyRouter` holds key context for it
+    /// (`[enter]` confirms, `[esc]` cancels, everything else is swallowed).
+    var playerDeleteCandidate: PlaylistFile?
 
     /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
     /// While set it overrides the selected playlist's persisted tag filter; it is
@@ -568,15 +575,29 @@ final class AppState {
     /// window into Player mode; an audio playlist plays in place (its overlay UI
     /// arrives in Task 15) and does not change mode.
     func beginPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
+        if selectedPlaylist !== playlist { selectedFileIDs = [] }
         activate(playlist)
         selectedPlaylist = playlist
+        activeServiceFilter = nil           // service filters don't carry across playlists
+        recomputeFilteredFiles()            // so Manager and Files & Tags show this playlist
         coordinator.play(playlist, startingAt: file)
         if playlist.mediaType != .audio { mode = .player }
     }
 
+    /// Plays the Manager file-list selection (the `[enter]` hotkey): begins playback of
+    /// the selected playlist starting at the first selected file. Returns whether there
+    /// was a selection to play, so the key only consumes when it acts.
+    @discardableResult
+    func playSelectedFile() -> Bool {
+        guard let playlist = selectedPlaylist,
+              let file = filteredFiles.first(where: { selectedFileIDs.contains($0.id) }) else { return false }
+        beginPlayback(of: playlist, startingAt: file)
+        return true
+    }
+
     /// Cancels a running background re-scan — the only cancellable Manager operation.
-    /// Returns whether something was in flight, so the `[esc]` hotkey closes the
-    /// window only when nothing was.
+    /// Returns whether something was in flight (the Manager `[esc]` hotkey consumes the
+    /// key either way).
     func cancelInProgressOperation() -> Bool {
         guard !busyPlaylistIDs.isEmpty else { return false }
         updateTask?.cancel()
@@ -590,15 +611,92 @@ final class AppState {
     func requestDeleteSelectedFiles() -> Bool {
         let files = filteredFiles.filter { selectedFileIDs.contains($0.id) }
         guard !files.isEmpty else { return false }
-        deleteRequest = FileDeleteRequest(files: files)
+        pendingManagerDelete = files
         return true
     }
 
+    /// Dismisses the Manager trash confirmation without trashing anything.
+    func cancelManagerDelete() {
+        pendingManagerDelete = []
+    }
+
+    /// Trashes the files pending in the Manager confirmation, surfacing any failure
+    /// through `managerDeleteError`.
+    func confirmManagerDelete() {
+        let targets = pendingManagerDelete
+        pendingManagerDelete = []
+        guard !targets.isEmpty else { return }
+        Task { if let error = await deleteFiles(targets) { managerDeleteError = error } }
+    }
+
+    /// Live column count of the Manager gallery grid, reported by `FileGalleryView`
+    /// as it lays out, so keyboard navigation can step in 2D. The list is one column.
+    var fileGridColumns: Int = 1
+
+    /// Moves the Manager file-list selection one step in `direction` through
+    /// `filteredFiles`, collapsing any multi-selection to a single row. In list mode
+    /// it is a vertical 1-D walk; in gallery mode left/right step by one and up/down
+    /// step by a full row. Returns whether the key was consumed (so no system beep).
+    @discardableResult
+    func moveFileSelection(_ direction: MoveDirection) -> Bool {
+        let files = filteredFiles
+        guard !files.isEmpty else { return false }
+
+        let gallery = selectedPlaylist?.preferences.viewMode == .gallery
+        let columns = gallery ? max(1, fileGridColumns) : 1
+        let step: Int
+        switch direction {
+        case .up: step = -columns
+        case .down: step = columns
+        case .left: step = gallery ? -1 : 0      // no horizontal axis in the list
+        case .right: step = gallery ? 1 : 0
+        }
+
+        let selected = files.indices.filter { selectedFileIDs.contains(files[$0].id) }
+        if let edge = (step >= 0 ? selected.max() : selected.min()) {
+            let target = edge + step
+            // Stay within bounds; ignore a move that would fall off the grid (still
+            // consumed, so the key never beeps).
+            if target >= 0, target < files.count {
+                selectedFileIDs = [files[target].id]
+            }
+        } else {
+            selectedFileIDs = [files[step >= 0 ? 0 : files.count - 1].id]
+        }
+        return true
+    }
+
+    /// Requests confirmation to trash the file currently playing on the visual channel
+    /// (Player `[delete]`). Returns whether there was a file to delete.
+    @discardableResult
+    func requestDeletePlayingFile() -> Bool {
+        guard let file = coordinator.visualCurrentFile else { return false }
+        playerDeleteCandidate = file
+        return true
+    }
+
+    /// Dismisses the Player delete confirmation without trashing anything.
+    func cancelPlayerDelete() {
+        playerDeleteCandidate = nil
+    }
+
+    /// Trashes the file pending in the Player delete confirmation and advances the
+    /// player to the next still-available file in the playlist.
+    func confirmPlayerDelete() {
+        guard let file = playerDeleteCandidate else { return }
+        playerDeleteCandidate = nil
+        Task {
+            _ = await deleteFiles([file])
+            coordinator.reconcileVisualSelection()
+        }
+    }
+
     /// Stops the visual playlist and returns the window to Manager mode (the pause
-    /// overlay's Stop, and the temporary Back control).
+    /// overlay's Stop, the `[s]`/`[delete]`-after exits, and the Back control).
     func stopAndExitPlayer() {
         if let visual = coordinator.visualPlaylist { coordinator.stop(visual) }
         coordinator.unsuppress()
+        playerDeleteCandidate = nil
         mode = .manager
     }
 
@@ -659,6 +757,7 @@ final class AppState {
     func toggleServiceFilter(_ filter: ServiceFilter) {
         activeServiceFilter = (activeServiceFilter == filter) ? nil : filter
         recomputeFilteredFiles()
+        reconcilePlayerSelection()
     }
 
     /// Adds or removes a tag from the selected playlist's tag filter. Editing the
@@ -674,6 +773,7 @@ final class AppState {
         }
         playlist.filterState.selectedTags = tags
         recomputeFilteredFiles()
+        reconcilePlayerSelection()
     }
 
     /// Sets the AND/OR operator on the selected playlist's tag filter.
@@ -681,6 +781,7 @@ final class AppState {
         guard let playlist = selectedPlaylist else { return }
         playlist.filterState.filterMode = mode
         recomputeFilteredFiles()
+        reconcilePlayerSelection()
     }
 
     /// Clears the selected playlist's tag filter.
@@ -688,6 +789,7 @@ final class AppState {
         guard let playlist = selectedPlaylist else { return }
         playlist.filterState.selectedTags = []
         recomputeFilteredFiles()
+        reconcilePlayerSelection()
     }
 
     /// Remembers the current tag filter as a saved search (most-recent first,
@@ -706,6 +808,7 @@ final class AppState {
         playlist.filterState.filterMode = search.mode
         promote(search, in: playlist)
         recomputeFilteredFiles()
+        reconcilePlayerSelection()
     }
 
     /// Removes a saved search from the recents.
@@ -728,6 +831,13 @@ final class AppState {
 
     private func recomputeIfSelected(_ playlist: Playlist) {
         if playlist === selectedPlaylist { recomputeFilteredFiles() }
+    }
+
+    /// After a filter change in Player mode, keeps the player on a file that still
+    /// matches: if the playing file was filtered out, the coordinator jumps to the
+    /// first remaining file (or none, leaving the player on a placeholder).
+    private func reconcilePlayerSelection() {
+        if mode == .player { coordinator.reconcileVisualSelection() }
     }
 
     private func computeFilteredFiles(for playlist: Playlist) -> [PlaylistFile] {

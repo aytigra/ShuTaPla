@@ -102,6 +102,8 @@ import AppKit
         #expect(Hotkey(event: keyEvent(keyCode: 49)) == .space)
         #expect(Hotkey(event: keyEvent(keyCode: 53)) == .escape)
         #expect(Hotkey(event: keyEvent(keyCode: 48)) == .tab)
+        #expect(Hotkey(event: keyEvent(keyCode: 36)) == .enter)
+        #expect(Hotkey(event: keyEvent(keyCode: 76)) == .enter)
         #expect(Hotkey(event: keyEvent(keyCode: 51)) == .delete)
         #expect(Hotkey(event: keyEvent(keyCode: 123)) == .arrowLeft)
         #expect(Hotkey(event: keyEvent(keyCode: 124)) == .arrowRight)
@@ -235,6 +237,66 @@ import AppKit
         #expect(overlay.openFilesTagsCalls == 1)
     }
 
+    @Test func tabClosesFilesAndTagsWhenOpen() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        overlay.isFilesTagsOpen = true
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.tab, rightOption: false))
+        #expect(overlay.closeFilesTagsCalls == 1)
+    }
+
+    @Test func sStopsAndExitsPlayer() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+        #expect(router.route(.s, rightOption: false))
+        #expect(appState.mode == .manager)
+        #expect(appState.coordinator.visualPlaylist == nil)
+    }
+
+    @Test func deleteRaisesPlayerConfirmationAndHoldsContext() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+        #expect(router.route(.delete, rightOption: false))
+        #expect(appState.playerDeleteCandidate != nil)
+
+        // While the confirmation is up the dialog holds key context: transport keys are
+        // swallowed and have no effect.
+        let current = image.currentFileID
+        #expect(router.route(.arrowRight, rightOption: false))
+        #expect(image.currentFileID == current)
+        #expect(appState.playerDeleteCandidate != nil)
+
+        // `[esc]` cancels the confirmation (without suppressing playback).
+        #expect(router.route(.escape, rightOption: false))
+        #expect(appState.playerDeleteCandidate == nil)
+        #expect(!appState.coordinator.isSuppressed)
+    }
+
     @Test func loopTogglesOnAudioChannel() throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -337,31 +399,114 @@ import AppKit
 
     // MARK: - Manager mode
 
-    @Test func managerArrowsPassThroughToFileList() throws {
+    @Test func managerArrowsMoveFileSelection() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let folder = try makeFolder(["1.mp4"])
-        makePlaylist(.video, folder: folder, files: ["1.mp4"], in: context)
+        let folder = try makeFolder(["1.mp4", "2.mp4", "3.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["1.mp4", "2.mp4", "3.mp4"], in: context)
         let appState = makeAppState(context)
         appState.mode = .manager
+        // Select directly (not via `select(_:)`, which launches an un-awaited re-scan task
+        // that would outlive the in-memory container and trap on a torn-down model).
+        appState.selectedPlaylist = video
+        appState.recomputeFilteredFiles()
+        defer { appState.coordinator.shutdown() }
+
+        let files = appState.filteredFiles
+        #expect(files.count == 3)
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        // With nothing selected, the first arrow-down lands on the first row and is consumed.
+        #expect(router.route(.arrowDown, rightOption: false))
+        #expect(appState.selectedFileIDs == [files[0].id])
+
+        #expect(router.route(.arrowDown, rightOption: false))
+        #expect(appState.selectedFileIDs == [files[1].id])
+
+        #expect(router.route(.arrowUp, rightOption: false))
+        #expect(appState.selectedFileIDs == [files[0].id])
+    }
+
+    @Test func galleryArrowsNavigateInTwoDimensions() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let names = (1...6).map { "\($0).jpg" }
+        let folder = try makeFolder(names)
+        let image = makePlaylist(.image, folder: folder, files: names, in: context)
+        image.preferences.viewMode = .gallery
+        let appState = makeAppState(context)
+        appState.mode = .manager
+        appState.selectedPlaylist = image
+        appState.recomputeFilteredFiles()
+        appState.fileGridColumns = 3
+        defer { appState.coordinator.shutdown() }
+
+        let files = appState.filteredFiles
+        #expect(files.count == 6)
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        #expect(router.route(.arrowRight, rightOption: false))   // nothing selected → first
+        #expect(appState.selectedFileIDs == [files[0].id])
+        #expect(router.route(.arrowRight, rightOption: false))   // step right by one
+        #expect(appState.selectedFileIDs == [files[1].id])
+        #expect(router.route(.arrowDown, rightOption: false))    // down a row (+3 columns)
+        #expect(appState.selectedFileIDs == [files[4].id])
+        #expect(router.route(.arrowUp, rightOption: false))      // up a row (-3 columns)
+        #expect(appState.selectedFileIDs == [files[1].id])
+        #expect(router.route(.arrowLeft, rightOption: false))    // step left by one
+        #expect(appState.selectedFileIDs == [files[0].id])
+    }
+
+    @Test func managerEnterPlaysSelectedFile() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg", "3.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg", "3.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .manager
+        appState.selectedPlaylist = image
+        appState.recomputeFilteredFiles()
+        defer { appState.coordinator.shutdown() }
+
+        let files = appState.filteredFiles
+        appState.selectedFileIDs = [files[1].id]
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+        #expect(router.route(.enter, rightOption: false))
+        #expect(appState.mode == .player)
+        #expect(appState.coordinator.visualPlaylist === image)
+        #expect(appState.coordinator.visualCurrentFile?.id == files[1].id)
+    }
+
+    @Test func managerEnterDoesNothingWithoutSelection() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .manager
+        appState.selectedPlaylist = image
+        appState.recomputeFilteredFiles()
         defer { appState.coordinator.shutdown() }
 
         let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
-        #expect(!router.route(.arrowUp, rightOption: false))     // left for the list
-        #expect(!router.route(.arrowDown, rightOption: false))
+        #expect(!router.route(.enter, rightOption: false))   // nothing to play → passes through
+        #expect(appState.mode == .manager)
     }
 
-    @Test func managerEscClosesWindowWhenIdle() throws {
+    @Test func managerEscIsConsumedButLeavesWindowOpenWhenIdle() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let appState = makeAppState(context)
         appState.mode = .manager
         defer { appState.coordinator.shutdown() }
 
+        // Idle Manager `[esc]` is swallowed (no beep) but never closes the window.
         let closeSpy = CloseSpy()
         let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: closeSpy)
         #expect(router.route(.escape, rightOption: false))
-        #expect(closeSpy.count == 1)
+        #expect(closeSpy.count == 0)
     }
 
     @Test func managerDeleteRequestsConfirmationForSelection() throws {
@@ -380,7 +525,15 @@ import AppKit
 
         let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
         #expect(router.route(.delete, rightOption: false))
-        #expect(appState.deleteRequest?.files.count == 1)
+        #expect(appState.pendingManagerDelete.count == 1)
+
+        // While the confirmation is up it holds key context: `[esc]` cancels it (rather
+        // than closing the window), and the close spy is untouched.
+        let closeSpy = CloseSpy()
+        let router2 = makeRouter(appState, overlay: MockOverlay(), closeSpy: closeSpy)
+        #expect(router2.route(.escape, rightOption: false))
+        #expect(appState.pendingManagerDelete.isEmpty)
+        #expect(closeSpy.count == 0)
     }
 
     // MARK: - Helpers

@@ -157,6 +157,7 @@ final class PlaybackCoordinator: PlaybackSource {
         endFolderAccess(for: playlist.id)
         visualPlaylist = nil
         visualKind = nil
+        visualHaltedForOverlay = false
     }
 
     private func stopAudio() {
@@ -259,6 +260,110 @@ final class PlaybackCoordinator: PlaybackSource {
         case .audio: audioEngine?.seek(by: delta)
         case .visualImage, nil: break
         }
+    }
+
+    // MARK: - Player controls surface
+
+    /// The file the active visual channel is showing (video or image). The player
+    /// controls and Files & Tags overlay anchor on it.
+    var visualCurrentFile: PlaylistFile? {
+        visualKind == .image ? imageEngine.currentFile : videoEngine?.currentFile
+    }
+
+    /// Visual playback position/duration in seconds. Images have no timeline, so both
+    /// are 0 for the image channel.
+    var visualCurrentTime: TimeInterval { visualKind == .video ? (videoEngine?.currentTime ?? 0) : 0 }
+    var visualDuration: TimeInterval { visualKind == .video ? (videoEngine?.duration ?? 0) : 0 }
+
+    /// Plays `file` on `playlist`'s channel right away: lifts a global pause, clears the
+    /// playlist's own pause, then jumps to it. The "play this one now" intent behind a
+    /// double-click in the Files & Tags overlay.
+    func playNow(_ playlist: Playlist, file: PlaylistFile) {
+        if isSuppressed { unsuppress() }
+        if playlist.playbackState == .paused { unpause(playlist) }
+        jump(playlist, to: file)
+    }
+
+    /// Jumps `playlist` to a specific file without leaving it, loading it on whichever
+    /// channel the playlist occupies.
+    func jump(_ playlist: Playlist, to file: PlaylistFile) {
+        guard let folder = folderURLByPlaylist[playlist.id] else { return }
+        let url = folder.appending(path: file.relativePath)
+        playlist.currentFileID = file.id
+        switch channel(of: playlist) {
+        case .visualImage: imageEngine.load(file, at: url)
+        case .visualVideo: videoEngine?.load(file, at: url)
+        case .audio: audioEngine?.load(file, at: url)
+        case nil: break
+        }
+    }
+
+    /// After a filter (or a deletion) reshapes the playback sequence, if the visual
+    /// channel's current file is no longer in it, jump to the first remaining file.
+    /// When nothing remains, the channel is left as-is so the player can show a
+    /// "no files" placeholder rather than dropping out of Player mode.
+    func reconcileVisualSelection() {
+        guard let playlist = visualPlaylist else { return }
+        let sequence = playlist.playbackSequence
+        if let current = visualCurrentFile, sequence.contains(where: { $0.id == current.id }) { return }
+        if let first = sequence.first { jump(playlist, to: first) }
+    }
+
+    /// Transiently halts the visual channel's advancement (slideshow timer / video)
+    /// while a non-suppressing overlay edits its files, without changing persisted
+    /// state or showing the pause overlay. Balanced by `resumeVisualForOverlay()`.
+    private(set) var visualHaltedForOverlay = false
+
+    func haltVisualForOverlay() {
+        guard !visualHaltedForOverlay, !isSuppressed, let visual = visualPlaylist else { return }
+        visualHaltedForOverlay = true
+        suspend(visual)
+    }
+
+    func resumeVisualForOverlay() {
+        guard visualHaltedForOverlay, let visual = visualPlaylist else { return }
+        visualHaltedForOverlay = false
+        if !isSuppressed, visual.playbackState == .playing { resume(visual) }
+    }
+
+    /// Seeks `playlist`'s channel to an absolute position (the scrub bar). Video/audio only.
+    func seek(_ playlist: Playlist, to seconds: TimeInterval) {
+        switch channel(of: playlist) {
+        case .visualVideo: videoEngine?.seek(to: seconds)
+        case .audio: audioEngine?.seek(to: seconds)
+        case .visualImage, nil: break
+        }
+    }
+
+    /// The playlist's persisted output level (0.0–1.0).
+    func playbackVolume(for playlist: Playlist) -> Double { Double(playlist.preferences.volume) }
+
+    /// Sets and persists `playlist`'s volume (0.0–1.0), forwarding to its live engine.
+    func setVolume(_ playlist: Playlist, to value: Double) {
+        let clamped = min(max(value, 0), 1)
+        playlist.preferences.volume = Float(clamped)
+        switch channel(of: playlist) {
+        case .visualVideo: videoEngine?.volume = clamped * 100
+        case .audio: audioEngine?.volume = clamped * 100
+        case .visualImage, nil: break
+        }
+    }
+
+    /// Enables/disables and persists the slideshow for an image `playlist`, starting or
+    /// stopping the live timer when it is the active visual channel and not suppressed.
+    func setSlideshowEnabled(_ playlist: Playlist, _ enabled: Bool) {
+        playlist.preferences.slideshowEnabled = enabled
+        guard channel(of: playlist) == .visualImage else { return }
+        if enabled, !isSuppressed { applySlideshow(for: playlist) }
+        else { imageEngine.stopSlideshow() }
+    }
+
+    /// Sets and persists the slideshow interval for an image `playlist`, restarting a
+    /// running timer at the new cadence.
+    func setSlideshowInterval(_ playlist: Playlist, _ interval: TimeInterval) {
+        playlist.preferences.slideshowInterval = interval
+        guard channel(of: playlist) == .visualImage else { return }
+        imageEngine.slideshowInterval = interval
     }
 
     // MARK: - PlaybackSource

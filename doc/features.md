@@ -212,14 +212,15 @@ When the selected or active file has **invalid tagging**, the chip editor is not
 
 ### Tag input hotkeys
 
-When the tag input is focused, all keys are captured by the tag editor and do not trigger player or overlay actions.
+The input does not take focus on its own — clicking the field opens it for editing; clicking outside it (or `[esc]`) gives focus up. While it is focused, all keys are captured by the tag editor and do not trigger player or overlay actions.
 
 | Key | Action |
 |-----|--------|
-| `[arrow left]` / `[arrow right]` | Move the cursor between tag chips |
-| `[delete]` | Remove the tag chip to the left of the cursor |
+| `[arrow left]` / `[arrow right]` | Move the selection one chip left / right (with the input empty) |
+| double `[arrow left]` / `[arrow right]` | Jump the selection to the first / last chip |
+| `[arrow up]` / `[arrow down]` | Move through the dropdown suggestions |
+| `[delete]` | Remove the selected tag chip (or, with none selected, the last one) |
 | `[enter]` | Confirm the highlighted dropdown option, or add the typed string as a new tag |
-| `[arrow up]` / `[arrow down]` | Navigate dropdown options |
 | `[esc]` | Unfocus the tag input (does not close the overlay or pause) |
 
 Adding, removing, or renaming a tag immediately renames the underlying file on disk. The playlist's reference is updated in place so play position is not lost.
@@ -233,6 +234,8 @@ The filter UI appears in the center section of Manager mode and in the Files & T
 ### Current scope
 
 For the first version, each playlist's filter is a single flat multi-select of tags plus an **AND / OR** switch that applies to the whole selection. The filter is **per playlist** — not a single app-wide setting — so each playlist's current combination of selected tags and AND/OR mode is its own.
+
+Tags are picked with the same multiselect-autocomplete control as the tag editor — selected tags as chips, a typed-into dropdown of matching tags — but in search-only mode: it adds existing tags to the filter and cannot create new ones.
 
 ### Service filters
 
@@ -251,7 +254,7 @@ Filtering affects playback: files that don't match are silently skipped during p
 - Each playlist remembers its current filter selection across playlist switches, so returning to a playlist restores its filter.
 - **Search history** is playlist-scoped and split into two parts:
   - **Multi-tag searches** (two or more tags in either AND or OR mode) are remembered as saved searches, listed for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination. The list keeps the 10 most recent unique searches — re-applying an already-saved combination moves it to the top instead of adding a duplicate; an entry can be removed manually.
-  - **Single-tag filters** are not stored as separate entries; instead, frequently used tags float to the top of the tag list within that playlist.
+  - **Single-tag filters** are not stored as separate entries; instead, frequently used tags float to the top of the autocomplete dropdown within that playlist.
 
 ### Future direction (not in scope yet)
 
@@ -263,11 +266,12 @@ Per-search AND/OR toggling and grouped expressions (e.g. `A AND B AND (C OR D)`)
 
 `[esc]` has context-dependent behavior, evaluated in this priority order:
 
+0. **A trash confirmation is open** (the Player `[delete]` dialog or the Manager delete dialog) → cancels it. `[enter]` confirms it. While it is open it holds key context: every other key is ignored, so nothing rings the system bell.
 1. **Tag input is focused** → unfocuses the tag input. No other effect.
 2. **An overlay is open** (Files & Tags overlay, Playlists overlay, audio overlay opened by hotkey) → closes the topmost overlay. Playback continues.
 3. **Playing (no overlays open)** → activates suppression and shows the pause overlay. The window stays open.
 4. **Suppressed (pause overlay shown, no other overlays)** → closes the window. The app keeps running. Suppression stays active while the window is closed; opening the window again lifts it, and Playing playlists continue.
-5. **Stopped / Manager mode** → if in the middle of some operation (renaming, dialog, tagging) - cancels operation, otherwise closes the window. Opening it again returns to the stopped state.
+5. **Stopped / Manager mode** → if in the middle of some operation (renaming, dialog, tagging) - cancels operation, otherwise has no effect (the window stays open).
 
 The bottom playback controls bar and the pause overlay are not considered "overlays" for Esc purposes — the bar dismisses itself when the cursor leaves, and the pause overlay is governed by rules 3–4 (pressing `[esc]` while it is shown closes the window).
 
@@ -287,15 +291,19 @@ While the player holds key context:
 | `[space]` | Unpause (when paused). Next file (when playing). |
 | `[arrow right]` | Next file in active playlist |
 | `[arrow left]` | Previous file in active playlist |
-| `[arrow up]` / `[tab]` | Open the Files & Tags overlay if it is closed. If it is already open, no effect (use `[arrow down]` or `[esc]` to close it). |
+| `[tab]` | Toggle the Files & Tags overlay: opens it when closed, closes it when open (however it was opened). |
+| `[arrow up]` | Open the Files & Tags overlay if it is closed. If it is already open, no effect (use `[tab]`, `[arrow down]`, or `[esc]` to close it). |
 | `[arrow down]` | If the Files & Tags overlay is open: close it. Otherwise: reveal the audio overlay (Hidden → Compact). |
 | `[p]` | Activate suppression and show the pause overlay (halts all playback, including audio) |
+| `[s]` | Stop the visual playlist and return to Manager mode |
 | `[esc]` | Close overlay → suppress (if playing) → close window (if suppressed). See Esc behavior above. |
-| `[delete]` | Move the active file to the system Trash |
+| `[delete]` | Ask to move the active file to the system Trash (a confirmation dialog appears; see below) |
 | `[shift]` | Cycle image fit modes: Fit → Cover → Original (image playlists only) |
 | `[l]` | Toggle loop on the current file (video only here) |
 | `[right option] + [arrow left]` | Seek −3 s (video only here) |
 | `[right option] + [arrow right]` | Seek +3 s (video only here) |
+
+The `[delete]` confirmation dialog **holds key context until it closes**: `[enter]` confirms (trashes the file and advances to the next still-available file), `[esc]` cancels, and all other keys are ignored while it is shown. After a delete, if the playing file was the one removed, playback advances to the next remaining file.
 
 **When the audio overlay holds key context** (revealed as Compact or Extended), arrow keys, `[space]`, `[l]`, and seek act on the audio playlist instead:
 
@@ -315,9 +323,13 @@ In Manager mode (Stopped state), most playback hotkeys are inactive. The followi
 
 | Key | Action |
 |-----|--------|
-| any `[arrow]` | Move the selection in the center file list (standard list/gallery navigation). |
+| `[arrow up]` / `[arrow down]` | Move the file selection. In the list this steps one row; in the gallery it steps a full row up/down. Collapses any multi-selection to a single item and scrolls it into view. |
+| `[arrow left]` / `[arrow right]` | In the gallery, step the selection one cell left/right. In the list there is no horizontal axis (the keys are consumed without effect). |
+| `[enter]` | Play the selected file (enters Player mode starting from it), the keyboard equivalent of double-clicking it. Inactive while a text field (rename, tag input) is focused, where `[enter]` commits that field instead. With nothing selected the key passes through. |
 | `[esc]` | Close the window |
-| `[delete]` | Move selected file(s) to the system Trash |
+| `[delete]` | Ask to move selected file(s) to the system Trash (a confirmation dialog appears) |
+
+Arrow keys are consumed by the file-list/gallery navigation, so they never ring the system beep. The Manager delete confirmation holds key context: `[enter]` confirms, `[esc]` cancels, and other keys are ignored while it is shown.
 
 In Manager mode the compact audio overlay is opened only by hovering the top edge — never by arrow keys, so arrow keys stay free for file-list navigation. Once it is fully revealed it takes key context (see Key context above): arrow keys then drive the audio overlay/track, and `[arrow up]` closes it back to Hidden, returning navigation to the file list. The extended audio overlay also opens directly by pressing the "Audio" section in the left panel.
 
@@ -325,11 +337,11 @@ In Manager mode the compact audio overlay is opened only by hovering the top edg
 
 Overlays in Player mode follow exclusivity and dismissal rules:
 
-- **Files & Tags overlay** — while open, hover triggers for the left edge (Playlists) and bottom edge (playback controls) are suppressed. Compact audio can still appear on top (via top-edge hover), while compact audio is presented `[arrow down]` both expands audio to extended overlay and closes files & tags overlay.
+- **Files & Tags overlay** — while open, hover triggers for the left edge (Playlists) and the bottom playback controls are suppressed. Compact audio can still appear on top (via top-edge hover); while compact audio is presented, `[arrow down]` both expands audio to the extended overlay and closes the Files & Tags overlay. **While the Files & Tags overlay is open, the visual playlist's playback/slideshow is paused** so it cannot advance to the next file while tags are being edited; it resumes when the overlay closes (a playlist the user had paused stays paused).
 - **Extended audio overlay** — exclusive with all other overlays. Opening it closes the Files & Tags overlay and the Playlists overlay. All hover triggers are suppressed while it is shown.
 - **Compact audio overlay** — closes automatically when any other hotkey-triggered overlay opens (Files & Tags via `[arrow up]`/`[tab]`, or Extended audio via `[arrow down]`).
-- **Playlists overlay** (left hover) — closes on mouse leave. Also closes immediately if any overlay opens via hotkey.
-- **Bottom playback controls** — auto-dismiss on mouse leave. Hover trigger is suppressed while the Files & Tags overlay is open.
+- **Playlists overlay** (left hover) — opened by hovering the left edge; fades in and dismisses on mouse leave. Also closes immediately if any overlay opens via hotkey.
+- **Bottom playback controls** — compact and bottom-centered. They live in place but stay transparent until the cursor hovers their footprint, then fade in; they fade out and auto-dismiss when the cursor leaves. They never persist across a stop/start, and are hidden while the Files & Tags overlay is open or while suppressed. There is no on-screen "Back to Manager" button — leave Player mode with `[s]`, the pause overlay's **Stop**, or `[esc]`.
 
 ### Pause overlay
 
@@ -356,7 +368,7 @@ The video player plays files from the active video playlist one after another in
 
 - **Top edge** — slides in the compact audio overlay (auto-closes when the cursor leaves; see Audio Player for details).
 - **Left edge** — slides in the Playlists overlay for quick playlist switching. Selecting a playlist starts playing it immediately.
-- **Bottom area** — reveals video playback controls: previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Files & Tags overlay.
+- **Bottom-center** — a compact playback controls bar lives here, transparent until the cursor hovers its footprint, then fades in: previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Files & Tags overlay. Each control shows a hover highlight; the bar fades out when the cursor leaves.
 
 ### Files & Tags overlay
 
@@ -364,12 +376,12 @@ Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playba
 
 The overlay is a **simplified** view meant for quick file switching and single-file operations during playback — not the full management surface that Manager mode provides. It has two sections:
 
-1. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery).
+1. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery). If a filter change excludes the currently playing file, the player jumps to the first file that still matches; if nothing matches, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
 2. **Tag management** — tag editor for the **currently active file** only (same UI as described in Tag editing UI).
 
 Per-file actions in the list act on a single file:
 
-- **Double-click** — jump the player to this file.
+- **Double-click** — play this file: the player switches to it, resumes if it was paused, and the overlay dismisses so playback continues unobstructed.
 - **Rename** the file on disk (the playlist updates in place).
 - **Delete** the file (moves it to the system Trash and removes it from the playlist).
 - **Show in Finder**.
@@ -402,7 +414,7 @@ Slideshow interval is configurable both globally (default 10s) and per playlist;
 
 - **Top edge** — slides in the compact audio overlay (same behavior as video player).
 - **Left edge** — slides in the Playlists overlay for quick playlist switching.
-- **Bottom area** — reveals image playback controls: previous, play/pause, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Files & Tags overlay.
+- **Bottom-center** — a compact playback controls bar (same hover-to-reveal behavior as the video player): previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Files & Tags overlay. A play/pause button appears only while a slideshow is running (a still image has nothing to pause).
 
 The Files & Tags overlay works identically to the video player's (see above).
 

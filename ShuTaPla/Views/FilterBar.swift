@@ -2,10 +2,10 @@
 //  FilterBar.swift
 //  ShuTaPla
 //
-//  The filter controls in the Manager tag panel: an AND/OR tag cloud over the
-//  playlist's tags, the saved-search recents, and a banner shown while a service
-//  filter (from the center-panel counter notices) overrides the tag filter.
-//  Each tag chip also hosts the playlist-wide rename / remove operations.
+//  The filter controls in the Manager tag panel: an AND/OR `TagTokenField` whose
+//  chips are the selected filter tags, the saved-search recents, and a banner shown
+//  while a service filter (from the center-panel counter notices) overrides the tag
+//  filter. Each selected chip also hosts the playlist-wide rename / remove operations.
 //
 
 import SwiftUI
@@ -34,7 +34,10 @@ struct FilterBar: View {
                 serviceBanner(service)
             } else {
                 modePicker
-                tagCloud
+                tagField
+                if let tag = renamingTag {
+                    renameRow(tag)
+                }
                 Divider()
                 savedSearches
             }
@@ -81,47 +84,15 @@ struct FilterBar: View {
         .disabled(playlist.tagFrequency.isEmpty)
     }
 
-    @ViewBuilder
-    private var tagCloud: some View {
-        if playlist.tagFrequency.isEmpty {
-            Text("No tags in this playlist yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
-            FlowLayout {
-                ForEach(sortedTags, id: \.self) { tag in
-                    filterChip(tag)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func filterChip(_ tag: String) -> some View {
-        if renamingTag == tag {
-            TextField("Tag", text: $renameDraft)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 110)
-                .onSubmit { commitTagRename(tag) }
-                .onExitCommand { renamingTag = nil }
-        } else {
-            let selected = playlist.filterState.selectedTags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-            Button { appState.toggleFilterTag(tag) } label: {
-                HStack(spacing: 4) {
-                    Text(tag)
-                    Text("\(playlist.tagFrequency[tag] ?? 0)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    selected ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12),
-                    in: Capsule()
-                )
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
+    private var tagField: some View {
+        TagTokenField(
+            tokens: playlist.filterState.selectedTags,
+            knownTags: playlist.tagFrequency,
+            allowsCreate: false,
+            placeholder: "Filter by tag",
+            onAdd: { appState.toggleFilterTag($0) },
+            onRemove: { appState.toggleFilterTag($0) },
+            chipMenu: { tag in
                 Button("Rename Tag…") {
                     renameDraft = tag
                     renamingTag = tag
@@ -134,6 +105,18 @@ struct FilterBar: View {
                     }
                 }
             }
+        )
+    }
+
+    private func renameRow(_ tag: String) -> some View {
+        HStack(spacing: 6) {
+            TextField("Tag", text: $renameDraft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { commitTagRename(tag) }
+                .onExitCommand { renamingTag = nil }
+            Button("Rename") { commitTagRename(tag) }
+            Button("Cancel") { renamingTag = nil }
+                .buttonStyle(.borderless)
         }
     }
 
@@ -145,15 +128,6 @@ struct FilterBar: View {
             if let error = await appState.renameTagAcrossPlaylist(playlist, from: oldTag, to: new) {
                 errorMessage = error
             }
-        }
-    }
-
-    private var sortedTags: [String] {
-        playlist.tagFrequency.keys.sorted { a, b in
-            let fa = playlist.tagFrequency[a] ?? 0
-            let fb = playlist.tagFrequency[b] ?? 0
-            if fa != fb { return fa > fb }
-            return a.lowercased() < b.lowercased()
         }
     }
 
