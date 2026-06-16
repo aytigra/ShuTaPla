@@ -96,6 +96,21 @@ struct ModelTests {
         #expect(try context.fetch(FetchDescriptor<AppStateModel>()).count == 1)
     }
 
+    @Test func appStateFetchOrCreateCollapsesDuplicates() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        // Two rows somehow exist (e.g. a race before the first save). fetchOrCreate
+        // returns one and prunes the extras so later reads are deterministic.
+        context.insert(AppStateModel())
+        context.insert(AppStateModel())
+        try context.save()
+
+        _ = AppStateModel.fetchOrCreate(in: context)
+
+        #expect(try context.fetch(FetchDescriptor<AppStateModel>()).count == 1)
+    }
+
     @Test func globalSettingsSingletonReturnsSameInstance() throws {
         let container = try makeContainer()
         let context = container.mainContext

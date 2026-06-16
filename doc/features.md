@@ -154,10 +154,10 @@ The choice is persisted per playlist. Audio playlists always use list view.
 
 In addition to per-file and per-selection tag editing, Manager mode exposes operations that act on **every file in the playlist** — letting tags be curated without selecting or opening any file. The right panel's **Manage Tags** mode lists every tag in the playlist with its file count; each row offers:
 
-- **Rename a tag** across all files that have it — inline editing in a field that takes focus immediately, confirmed with `[enter]` and cancelled with `[esc]`.
+- **Rename a tag** across all files that have it — inline editing in a field that takes focus immediately, confirmed with `[enter]` and cancelled with `[esc]`. Renaming onto a tag that already exists is refused with a message rather than silently merging the two.
 - **Remove a tag** from all files that have it. Because this renames files on disk and can't be undone, it asks for confirmation first.
 
-Both operations rename the underlying files on disk to match. The same two operations are also available from the context menu of any selected filter chip.
+Both operations rename the underlying files on disk to match. When removing the last tag would leave a file with an empty name (a name that is only its bracket group), the file is renamed to a placeholder base instead of an empty/hidden name.
 
 ## Tag system
 

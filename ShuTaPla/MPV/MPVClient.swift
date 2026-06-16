@@ -45,6 +45,13 @@ nonisolated final class MPVClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.aytigra.ShuTaPla.mpv")
     private let continuation: AsyncStream<MPVEvent>.Continuation
 
+    /// Serializes use of `renderContext` across the threads that touch it: the
+    /// `CAOpenGLLayer` draw thread (`render`/`reportSwap`) and whichever thread frees
+    /// it (`freeRenderContext`, on shutdown). It makes a free wait for an in-progress
+    /// render to finish and makes a render starting after a free see a `nil` context,
+    /// so the draw thread can never render into a freed context.
+    private let renderLock = NSLock()
+
     /// The libmpv render context for embedded video, or `nil` until the GL view creates it
     /// (and for the audio/`vo=null` instances, which never do).
     ///
@@ -123,11 +130,13 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
         // Route mpv's wakeups onto our serial drain. The callback fires on an mpv-internal
         // thread; it must be a capture-free literal closure to form a C function pointer, so it
-        // recovers `self` from the registered `ctx` and only schedules a drain.
+        // recovers `self` from the registered `ctx` and only schedules a drain. `ctx` holds a
+        // retain (released in `shutdown`) so a wakeup already in flight on the mpv thread can
+        // never resolve a freed instance — the worst case is a leak if `shutdown` is skipped.
         mpv_set_wakeup_callback(handle, { ctx in
             guard let ctx else { return }
             Unmanaged<MPVClient>.fromOpaque(ctx).takeUnretainedValue().scheduleDrain()
-        }, Unmanaged.passUnretained(self).toOpaque())
+        }, Unmanaged.passRetained(self).toOpaque())
     }
 
     /// Tears the instance down: frees the render context (must happen before the handle is
@@ -139,6 +148,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
             guard !self.isTerminated else { return }
             self.isTerminated = true
             mpv_set_wakeup_callback(self.handle, nil, nil)
+            // Balance the retain handed to the wakeup `ctx` in `init`. The enclosing
+            // closure keeps its own strong reference for the rest of this block.
+            Unmanaged.passUnretained(self).release()
             self.continuation.finish()
             mpv_terminate_destroy(self.handle)
         }
@@ -185,6 +197,8 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// layer) at the given pixel size. Call on the GL draw thread with the context current.
     /// A no-op for the audio/`vo=null` instances, which have no render context.
     func render(fbo: Int32, width: Int32, height: Int32) {
+        renderLock.lock()
+        defer { renderLock.unlock() }
         guard let renderContext else { return }
         var target = mpv_opengl_fbo(fbo: fbo, w: width, h: height, internal_format: 0)
         var flipY: CInt = 1   // GL's origin is bottom-left; flip to match the layer.
@@ -205,12 +219,16 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// Tells mpv the buffer was presented, so it can pace presentation timing. Call after the
     /// layer flushes its drawable.
     func reportSwap() {
+        renderLock.lock()
+        defer { renderLock.unlock() }
         if let renderContext { mpv_render_context_report_swap(renderContext) }
     }
 
     /// Detaches the update callback and frees the render context. Idempotent. Must run before
     /// `mpv_terminate_destroy`; `shutdown()` calls it for that reason.
     func freeRenderContext() {
+        renderLock.lock()
+        defer { renderLock.unlock() }
         guard let renderContext else { return }
         mpv_render_context_set_update_callback(renderContext, nil, nil)
         mpv_render_context_free(renderContext)
@@ -255,6 +273,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
     var volume: Double {
         get {
             queue.sync {
+                guard !isTerminated else { return 0 }   // handle already destroyed by shutdown
                 var value: Double = 0
                 mpv_get_property(self.handle, "volume", MPV_FORMAT_DOUBLE, &value)
                 return value
@@ -267,6 +286,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
     var isLooping: Bool {
         get {
             queue.sync {
+                guard !isTerminated else { return false }   // handle already destroyed by shutdown
                 guard let raw = mpv_get_property_string(self.handle, "loop-file") else { return false }
                 defer { mpv_free(raw) }
                 let value = String(cString: raw)

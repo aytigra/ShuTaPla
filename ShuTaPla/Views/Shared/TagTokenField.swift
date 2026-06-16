@@ -82,7 +82,7 @@ struct TagTokenField<ChipMenu: View>: View {
 
     private var field: some View {
         FlowLayout {
-            ForEach(Array(tokens.enumerated()), id: \.element) { index, tag in
+            ForEach(Array(tokens.enumerated()), id: \.offset) { index, tag in
                 chip(tag, index: index)
             }
             inputSlot

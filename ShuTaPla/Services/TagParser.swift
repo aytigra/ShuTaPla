@@ -22,6 +22,10 @@ nonisolated enum TagParser {
     /// Minimum length for a valid tag token.
     static let minTagLength = 3
 
+    /// Base name given to a file whose name an edit would otherwise leave empty —
+    /// e.g. removing the only tag from a name that is just its bracket group.
+    static let placeholderName = "Untitled"
+
     // MARK: - Validation
 
     /// A tag is letters, digits, or underscore (ASCII), at least `minTagLength`.
@@ -61,10 +65,10 @@ nonisolated enum TagParser {
         case .invalid:
             return fileName
         case .untagged:
-            return assemble(base: writeTags([tag], inBase: base), ext: ext)
+            return safeCandidate(assemble(base: writeTags([tag], inBase: base), ext: ext), fallback: fileName)
         case .valid(let tags):
             if tags.contains(where: { sameTag($0, tag) }) { return fileName }
-            return assemble(base: writeTags(tags + [tag], inBase: base), ext: ext)
+            return safeCandidate(assemble(base: writeTags(tags + [tag], inBase: base), ext: ext), fallback: fileName)
         }
     }
 
@@ -181,6 +185,15 @@ nonisolated enum TagParser {
         a.caseInsensitiveCompare(b) == .orderedSame
     }
 
+    /// Keeps `candidate` unless it would re-parse as invalid tagging — which happens
+    /// when the original name carried a stray unmatched bracket that, once a tag
+    /// bracket is appended, reads as a second group. In that case the original name
+    /// is returned so an edit never flips a file into invalid tagging.
+    private static func safeCandidate(_ candidate: String, fallback: String) -> String {
+        if case .invalid = parseTags(from: candidate) { return fallback }
+        return candidate
+    }
+
     /// Case-insensitive de-duplication preserving order and first-seen casing.
     private static func dedupe(_ tags: [String]) -> [String] {
         var seen = Set<String>()
@@ -192,6 +205,7 @@ nonisolated enum TagParser {
     }
 
     private static func assemble(base: String, ext: String) -> String {
-        ext.isEmpty ? base : base + "." + ext
+        let named = base.trimmingCharacters(in: .whitespaces).isEmpty ? placeholderName : base
+        return ext.isEmpty ? named : named + "." + ext
     }
 }

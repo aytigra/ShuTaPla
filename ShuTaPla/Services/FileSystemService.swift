@@ -99,7 +99,9 @@ actor FileSystemService {
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         let fm = FileManager.default
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
+        // Reject empty, path-separated, and dot/hidden names (a leading dot covers
+        // ".", "..", and extension-only names like ".mp4" that have no base).
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("."), !trimmed.contains("/") else {
             throw FileSystemError.invalidName
         }
         guard fm.fileExists(atPath: url.path) else { throw FileSystemError.fileNotFound }

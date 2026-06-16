@@ -121,6 +121,7 @@ class MPVPlaybackEngine {
               let next = source.fileAfter(currentFile),
               let url = source.url(for: next) else { return false }
         load(next, at: url)
+        source.engineDidAdvance(to: next)
         return true
     }
 
@@ -132,6 +133,7 @@ class MPVPlaybackEngine {
               let previous = source.fileBefore(currentFile),
               let url = source.url(for: previous) else { return false }
         load(previous, at: url)
+        source.engineDidAdvance(to: previous)
         return true
     }
 

@@ -388,6 +388,8 @@ final class AppState {
         busyPlaylistIDs.insert(playlist.id)
         defer { busyPlaylistIDs.remove(playlist.id) }
 
+        refreshStaleBookmark(for: playlist)
+
         let known = Set(playlist.files.map(\.relativePath))
         let delta: UpdateDelta
         do {
@@ -402,11 +404,29 @@ final class AppState {
         apply(delta, to: playlist)
     }
 
+    /// Re-creates and re-persists a playlist's folder bookmark when macOS reports it
+    /// stale (the folder moved or was renamed), so scoped access survives the next
+    /// launch. A no-op when the bookmark resolves cleanly or can't be re-created.
+    private func refreshStaleBookmark(for playlist: Playlist) {
+        guard let resolved = try? BookmarkService.resolve(playlist.folderBookmark), resolved.isStale,
+              let refreshed = try? BookmarkService.makeBookmark(for: resolved.url) else { return }
+        playlist.folderBookmark = refreshed
+    }
+
     private func apply(_ delta: UpdateDelta, to playlist: Playlist) {
         guard !delta.added.isEmpty || !delta.removedRelativePaths.isEmpty else { return }
 
         let removed = Set(delta.removedRelativePaths)
         let toRemove = playlist.files.filter { removed.contains($0.relativePath) }
+        // Drop pending references to these files before deleting the models, so a
+        // delete confirmation raised over a file the re-scan just pruned can't act on
+        // (and dereference) a destroyed model when the user confirms.
+        let removedIDs = Set(toRemove.map(\.id))
+        pendingManagerDelete.removeAll { removedIDs.contains($0.id) }
+        if let candidate = playerDeleteCandidate, removedIDs.contains(candidate.id) {
+            playerDeleteCandidate = nil
+        }
+        selectedFileIDs.subtract(removedIDs)
         for file in toRemove {
             file.playlist = nil  // detach so playlist.files updates synchronously
             modelContext.delete(file)
@@ -678,6 +698,10 @@ final class AppState {
         case .right: step = gallery ? 1 : 0
         }
 
+        // A horizontal key in the single-column list has no axis to move along; consume
+        // it (so it never beeps) without disturbing the selection.
+        guard step != 0 else { return true }
+
         let selected = files.indices.filter { selectedFileIDs.contains(files[$0].id) }
         if let edge = (step >= 0 ? selected.max() : selected.min()) {
             let target = edge + step
@@ -742,10 +766,16 @@ final class AppState {
         await editTags(files) { TagParser.removeTag(tag, from: $0) }
     }
 
-    /// Renames a tag across every file in the playlist that carries it.
+    /// Renames a tag across every file in the playlist that carries it. Renaming onto
+    /// another existing tag (a different tag that differs only in spelling/casing) is
+    /// refused with a message rather than silently merging the two.
     @discardableResult
     func renameTagAcrossPlaylist(_ playlist: Playlist, from oldTag: String, to newTag: String) async -> String? {
-        await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
+        let collides = playlist.tagFrequency.keys.contains {
+            $0.caseInsensitiveCompare(newTag) == .orderedSame && $0.caseInsensitiveCompare(oldTag) != .orderedSame
+        }
+        if collides { return "A tag named “\(newTag)” already exists." }
+        return await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
     }
 
     /// Removes a tag from every file in the playlist that carries it.

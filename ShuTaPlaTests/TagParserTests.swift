@@ -96,6 +96,18 @@ struct TagParserTests {
         #expect(TagParser.addTag("beach", to: "[a] [b].jpg") == "[a] [b].jpg")
     }
 
+    @Test func addToNameWithStrayOpenBracketIsNoOp() {
+        // A stray "[" would make the appended bracket read as a second, nested group
+        // (invalid); the original name is kept rather than corrupting the file's status.
+        #expect(TagParser.addTag("abc", to: "a [ b.mp4") == "a [ b.mp4")
+    }
+
+    @Test func addToNameWithStrayCloseBracketAppendsNormally() {
+        // A stray "]" is a harmless literal: the appended bracket is still the only
+        // group, so the file becomes validly tagged rather than corrupted.
+        #expect(TagParser.addTag("abc", to: "price ] drop.png") == "price ] drop [abc].png")
+    }
+
     // MARK: - Remove
 
     @Test func removeOneOfSeveral() {
@@ -116,6 +128,13 @@ struct TagParserTests {
 
     @Test func removeAbsentTagIsNoOp() {
         #expect(TagParser.removeTag("sand", from: "sunset [beach].jpg") == "sunset [beach].jpg")
+    }
+
+    @Test func removeLastTagFromBracketOnlyNameUsesPlaceholder() {
+        // The name is just its bracket group, so removing the only tag would leave an
+        // empty (dot) name; a placeholder base is substituted instead.
+        #expect(TagParser.removeTag("beach", from: "[beach].jpg") == "Untitled.jpg")
+        #expect(TagParser.removeTag("beach", from: "[beach]") == "Untitled")
     }
 
     // MARK: - Rename

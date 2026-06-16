@@ -114,6 +114,18 @@ import Foundation
         #expect(abs(client.volume - 80) < 0.5)
     }
 
+    @Test func propertyReadAfterShutdownDoesNotTouchDestroyedHandle() throws {
+        let client = try MPVClient(configuration: .audio)
+        client.volume = 50
+        client.shutdown()
+
+        // The getter's `queue.sync` runs after shutdown's `queue.async` destroy on the
+        // same serial queue; the `isTerminated` guard returns a default instead of
+        // reading the freed handle.
+        #expect(client.volume == 0)
+        #expect(client.isLooping == false)
+    }
+
     @Test func endOfFileEmittedAtNaturalEnd() async throws {
         let client = try MPVClient(configuration: .audio)
         defer { client.shutdown() }

@@ -155,6 +155,30 @@ import AppKit
         #expect(engine.fitMode == .fit)
     }
 
+    @Test func advanceNotifiesSourceOfTheLandedFile() throws {
+        // The unattended advance paths (end-of-file, slideshow) drive the engine's
+        // advanceToNext directly, so it must report the file it lands on — that is the
+        // only channel that keeps the persisted current-file pointer in step.
+        let url = try writeTempImage()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("1")
+        let second = makeFile("2")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = ImagePlaybackEngine()
+        engine.source = source
+        engine.load(first, at: url)
+
+        #expect(engine.advanceToNext())
+        #expect(source.advancedTo == [second.id])
+
+        #expect(engine.returnToPrevious())
+        #expect(source.advancedTo == [second.id, first.id])
+    }
+
     @Test func slideshowAdvancesAfterInterval() async throws {
         let url = try writeTempImage()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -185,6 +209,7 @@ final class MockPlaybackSource: PlaybackSource {
     var urlByID: [UUID: URL] = [:]
     private(set) var fileAfterCalls = 0
     private(set) var fileBeforeCalls = 0
+    private(set) var advancedTo: [UUID] = []
 
     init(files: [PlaylistFile] = []) { self.files = files }
 
@@ -201,4 +226,6 @@ final class MockPlaybackSource: PlaybackSource {
     }
 
     func url(for file: PlaylistFile) -> URL? { urlByID[file.id] }
+
+    func engineDidAdvance(to file: PlaylistFile) { advancedTo.append(file.id) }
 }

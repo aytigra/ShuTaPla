@@ -151,6 +151,7 @@ private struct GalleryCell: View {
 
     @Environment(ThumbnailService.self) private var thumbnails
     @State private var image: NSImage?
+    @FocusState private var renameFocused: Bool
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
     private let maxPixelSize = 440
@@ -205,6 +206,8 @@ private struct GalleryCell: View {
         if isRenaming {
             TextField("Name", text: $draftName)
                 .textFieldStyle(.roundedBorder)
+                .focused($renameFocused)
+                .onAppear { renameFocused = true }
                 .onSubmit(onCommitRename)
                 .onExitCommand(perform: onCancelRename)
         } else {

@@ -24,12 +24,14 @@ final class AppStateModel {
 
     init() {}
 
-    /// Returns the single instance, creating and inserting it on first launch.
+    /// Returns the single instance, creating and inserting it on first launch. If
+    /// duplicates ever exist, the extras are pruned so the singleton stays unique
+    /// and later reads are deterministic.
     static func fetchOrCreate(in context: ModelContext) -> AppStateModel {
-        var descriptor = FetchDescriptor<AppStateModel>()
-        descriptor.fetchLimit = 1
-        if let existing = try? context.fetch(descriptor).first {
-            return existing
+        let all = (try? context.fetch(FetchDescriptor<AppStateModel>())) ?? []
+        if let first = all.first {
+            for extra in all.dropFirst() { context.delete(extra) }
+            return first
         }
         let created = AppStateModel()
         context.insert(created)

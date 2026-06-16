@@ -542,6 +542,70 @@ struct AppStateTests {
         await appState.updateTask?.value
     }
 
+    @Test func renameTagOntoExistingTagIsRefused() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b [shore].mp4", tags: ["shore"], status: .valid, order: 1, to: playlist, in: context)
+        playlist.tagFrequency = ["beach": 1, "shore": 1]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        // "shore" already exists as a distinct tag, so the rename is refused with a
+        // message and no file is touched (rather than silently merging the two).
+        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+
+        #expect(error != nil)
+        #expect(a.fileName == "a [beach].mp4")
+    }
+
+    @Test func horizontalArrowInListIsConsumedWithoutChangingSelection() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", order: 0, to: playlist, in: context)
+        addFile("b.mp4", order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = playlist
+        appState.recomputeFilteredFiles()
+
+        // List view (one column), nothing selected: a left/right key has no axis to
+        // move along, so it is swallowed (no beep) without selecting a file.
+        let consumed = appState.moveFileSelection(.left)
+
+        #expect(consumed)
+        #expect(appState.selectedFileIDs.isEmpty)
+    }
+
+    @Test func rescanRemovalClearsPendingDeleteForThatFile() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a.mp4", order: 0, to: playlist, in: context)
+        let stub = StubFileSystem(
+            result: emptyResult,
+            delta: UpdateDelta(added: [], removedRelativePaths: ["a.mp4"])
+        )
+        let appState = AppState(modelContext: context, fileSystem: stub)
+        appState.selectedPlaylist = playlist
+        appState.pendingManagerDelete = [a]
+
+        // The re-scan prunes "a.mp4"; the pending delete that targeted it must be
+        // cleared so confirming can't dereference the destroyed model.
+        await appState.update(playlist)
+
+        #expect(appState.pendingManagerDelete.isEmpty)
+    }
+
     private var emptyResult: ScanResult {
         ScanResult(files: [], counts: [:], dominantType: nil)
     }

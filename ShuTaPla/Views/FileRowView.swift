@@ -16,11 +16,15 @@ struct FileRowView: View {
     let onCommitRename: () -> Void
     let onCancelRename: () -> Void
 
+    @FocusState private var renameFocused: Bool
+
     var body: some View {
         Group {
             if isRenaming {
                 TextField("Name", text: $draftName)
                     .textFieldStyle(.roundedBorder)
+                    .focused($renameFocused)
+                    .onAppear { renameFocused = true }
                     .onSubmit(onCommitRename)
                     .onExitCommand(perform: onCancelRename)
             } else {

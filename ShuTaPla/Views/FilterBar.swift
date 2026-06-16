@@ -5,7 +5,7 @@
 //  The filter controls in the Manager tag panel: an AND/OR `TagTokenField` whose
 //  chips are the selected filter tags, the saved-search recents, and a banner shown
 //  while a service filter (from the center-panel counter notices) overrides the tag
-//  filter. Each selected chip also hosts the playlist-wide rename / remove operations.
+//  filter. Playlist-wide tag rename / remove lives in `PlaylistTagsView`.
 //
 
 import SwiftUI
@@ -13,10 +13,6 @@ import SwiftUI
 struct FilterBar: View {
     let playlist: Playlist
     @Environment(AppState.self) private var appState
-
-    @State private var renamingTag: String?
-    @State private var renameDraft = ""
-    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -35,22 +31,11 @@ struct FilterBar: View {
             } else {
                 modePicker
                 tagField
-                if let tag = renamingTag {
-                    renameRow(tag)
-                }
                 Divider()
                 savedSearches
             }
         }
         .padding(12)
-        .alert(
-            "Tag change failed",
-            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
     }
 
     // MARK: - Service filter banner
@@ -91,44 +76,8 @@ struct FilterBar: View {
             allowsCreate: false,
             placeholder: "Filter by tag",
             onAdd: { appState.toggleFilterTag($0) },
-            onRemove: { appState.toggleFilterTag($0) },
-            chipMenu: { tag in
-                Button("Rename Tag…") {
-                    renameDraft = tag
-                    renamingTag = tag
-                }
-                Button("Remove From All Files", role: .destructive) {
-                    Task {
-                        if let error = await appState.removeTagAcrossPlaylist(playlist, tag: tag) {
-                            errorMessage = error
-                        }
-                    }
-                }
-            }
+            onRemove: { appState.toggleFilterTag($0) }
         )
-    }
-
-    private func renameRow(_ tag: String) -> some View {
-        HStack(spacing: 6) {
-            TextField("Tag", text: $renameDraft)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { commitTagRename(tag) }
-                .onExitCommand { renamingTag = nil }
-            Button("Rename") { commitTagRename(tag) }
-            Button("Cancel") { renamingTag = nil }
-                .buttonStyle(.borderless)
-        }
-    }
-
-    private func commitTagRename(_ oldTag: String) {
-        let new = renameDraft.trimmingCharacters(in: .whitespaces)
-        renamingTag = nil
-        guard TagParser.isValidTag(new), new.caseInsensitiveCompare(oldTag) != .orderedSame else { return }
-        Task {
-            if let error = await appState.renameTagAcrossPlaylist(playlist, from: oldTag, to: new) {
-                errorMessage = error
-            }
-        }
     }
 
     // MARK: - Saved searches
@@ -149,7 +98,7 @@ struct FilterBar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(Array(playlist.savedSearches.enumerated()), id: \.offset) { _, search in
+                ForEach(playlist.savedSearches, id: \.self) { search in
                     savedSearchRow(search)
                 }
             }

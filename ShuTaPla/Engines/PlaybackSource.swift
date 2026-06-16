@@ -27,4 +27,10 @@ protocol PlaybackSource: AnyObject {
     /// A URL the engine can load `file` from, with folder access already arranged,
     /// or `nil` when it can't be resolved (e.g. a stale bookmark or a missing file).
     func url(for file: PlaylistFile) -> URL?
+
+    /// Called whenever the engine moves to `file` through its own advance/previous —
+    /// including the unattended paths (natural end-of-file, slideshow tick) that don't
+    /// pass back through the coordinator — so the source can sync its persisted
+    /// current-file pointer to what is actually playing.
+    func engineDidAdvance(to file: PlaylistFile)
 }

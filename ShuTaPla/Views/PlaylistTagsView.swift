@@ -137,7 +137,13 @@ struct PlaylistTagsView: View {
     private func commitRename(_ oldTag: String) {
         let new = renameDraft.trimmingCharacters(in: .whitespaces)
         renamingTag = nil
-        guard TagParser.isValidTag(new), new.caseInsensitiveCompare(oldTag) != .orderedSame else { return }
+        // An empty entry or an unchanged name just closes the editor; a non-empty but
+        // malformed entry is reported rather than silently dropped.
+        guard !new.isEmpty, new.caseInsensitiveCompare(oldTag) != .orderedSame else { return }
+        guard TagParser.isValidTag(new) else {
+            errorMessage = "“\(new)” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters)."
+            return
+        }
         Task {
             if let error = await appState.renameTagAcrossPlaylist(playlist, from: oldTag, to: new) {
                 errorMessage = error

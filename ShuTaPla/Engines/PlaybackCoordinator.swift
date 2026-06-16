@@ -216,16 +216,16 @@ final class PlaybackCoordinator: PlaybackSource {
     func previous(_ playlist: Playlist) { advance(playlist, forward: false) }
 
     private func advance(_ playlist: Playlist, forward: Bool) {
+        // Each engine reports the file it lands on through `engineDidAdvance(to:)`,
+        // which syncs `currentFileID` — the same path the unattended end-of-file and
+        // slideshow advances take, so there is one place that records the move.
         switch channel(of: playlist) {
         case .visualImage:
             forward ? imageEngine.advanceToNext() : imageEngine.returnToPrevious()
-            playlist.currentFileID = imageEngine.currentFile?.id ?? playlist.currentFileID
         case .visualVideo:
             forward ? videoEngine?.advanceToNext() : videoEngine?.returnToPrevious()
-            playlist.currentFileID = videoEngine?.currentFile?.id ?? playlist.currentFileID
         case .audio:
             forward ? audioEngine?.advanceToNext() : audioEngine?.returnToPrevious()
-            playlist.currentFileID = audioEngine?.currentFile?.id ?? playlist.currentFileID
         case nil:
             break
         }
@@ -381,6 +381,10 @@ final class PlaybackCoordinator: PlaybackSource {
     func url(for file: PlaylistFile) -> URL? {
         guard let playlist = file.playlist, let folder = folderURLByPlaylist[playlist.id] else { return nil }
         return folder.appending(path: file.relativePath)
+    }
+
+    func engineDidAdvance(to file: PlaylistFile) {
+        file.playlist?.currentFileID = file.id
     }
 
     // MARK: - Channel routing
