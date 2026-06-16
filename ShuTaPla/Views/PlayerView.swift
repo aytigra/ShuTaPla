@@ -47,6 +47,7 @@ struct PlayerView: View {
             }
         }
         .background(FullscreenView())
+        .background(CursorAutoHider(isActive: cursorShouldAutoHide))
         .overlay(alignment: .leading) { playlistsContainer }
         .overlay(alignment: .bottom) { bottomControlsContainer }
         .overlay(alignment: .top) { topAudioHoverStrip }
@@ -98,7 +99,14 @@ struct PlayerView: View {
     /// Whether the visual playlist's filtered playback sequence is empty.
     private var visualHasNoFiles: Bool {
         guard let visual = coordinator.visualPlaylist else { return false }
-        return visual.playbackSequence.isEmpty
+        return !visual.hasPlaybackFiles
+    }
+
+    /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is
+    /// playing, nothing is suppressing it, and no overlay is on screen to interact with.
+    private var cursorShouldAutoHide: Bool {
+        guard let visual = coordinator.visualPlaylist else { return false }
+        return visual.playbackState == .playing && !coordinator.isSuppressed && overlays.active.isEmpty
     }
 
     // MARK: - Hover containers

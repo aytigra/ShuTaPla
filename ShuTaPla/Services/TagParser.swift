@@ -52,6 +52,17 @@ nonisolated enum TagParser {
         return tokens.allSatisfy(isValidTag) ? .valid(tokens) : .invalid
     }
 
+    /// Parses `fileName` and projects the result onto the two fields a
+    /// `PlaylistFile` stores: its tag tokens and tagging status. The single
+    /// rule the scanner and on-disk rename both use to fill those fields.
+    static func fields(for fileName: String) -> ([String], TaggingStatus) {
+        switch parseTags(from: fileName) {
+        case .valid(let tags): return (tags, .valid)
+        case .untagged:        return ([], .untagged)
+        case .invalid:         return ([], .invalid)
+        }
+    }
+
     // MARK: - Editing
 
     /// Adds a tag. No-op if the tag is invalid, the file is invalid-tagged, or
@@ -181,7 +192,8 @@ nonisolated enum TagParser {
 
     // MARK: - Helpers
 
-    private static func sameTag(_ a: String, _ b: String) -> Bool {
+    /// Case-insensitive tag equality — the one rule for "these name the same tag".
+    static func sameTag(_ a: String, _ b: String) -> Bool {
         a.caseInsensitiveCompare(b) == .orderedSame
     }
 

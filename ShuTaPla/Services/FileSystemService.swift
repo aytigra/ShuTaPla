@@ -179,7 +179,7 @@ actor FileSystemService {
             guard let type = AppConstants.mediaType(forExtension: fileURL.pathExtension) else { continue }
 
             let fileName = fileURL.lastPathComponent
-            let (tags, status) = tagFields(from: TagParser.parseTags(from: fileName))
+            let (tags, status) = TagParser.fields(for: fileName)
             files.append(ScannedFile(
                 relativePath: relativePath(of: fileURL, under: rootPath),
                 fileName: fileName,
@@ -225,14 +225,6 @@ actor FileSystemService {
         var rel = String(full.dropFirst(rootPath.count))
         if rel.hasPrefix("/") { rel.removeFirst() }
         return rel
-    }
-
-    private nonisolated static func tagFields(from result: TagParseResult) -> ([String], TaggingStatus) {
-        switch result {
-        case .valid(let tags): return (tags, .valid)
-        case .untagged:        return ([], .untagged)
-        case .invalid:         return ([], .invalid)
-        }
     }
 
     private nonisolated static func cloudStatus(for url: URL) -> CloudStatus {

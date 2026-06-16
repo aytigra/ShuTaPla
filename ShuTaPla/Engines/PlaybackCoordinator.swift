@@ -296,6 +296,12 @@ final class PlaybackCoordinator: PlaybackSource {
         case .audio: audioEngine?.load(file, at: url)
         case nil: break
         }
+        // `load` starts the new file playing; if the visual channel is halted for an
+        // overlay (e.g. a filter change inside Files & Tags reshaped the sequence) or
+        // globally suppressed, re-halt it so the jump doesn't resume playback behind it.
+        if visualPlaylist === playlist, visualHaltedForOverlay || isSuppressed {
+            suspend(playlist)
+        }
     }
 
     /// After a filter (or a deletion) reshapes the playback sequence, if the visual

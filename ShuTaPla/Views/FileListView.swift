@@ -44,6 +44,13 @@ struct FileListView: View {
                 guard ids.count == 1, let id = ids.first else { return }
                 withAnimation { proxy.scrollTo(id, anchor: .center) }
             }
+            // Returning from the player selects the last-played file before this view
+            // mounts, so `onChange` never fires for it. Defer past the first layout pass
+            // so the lazy stack has realized rows for `scrollTo` to land on.
+            .onAppear {
+                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
+                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
+            }
         }
     }
 

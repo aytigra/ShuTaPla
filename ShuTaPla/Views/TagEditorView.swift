@@ -14,6 +14,9 @@ import SwiftUI
 struct TagEditorView: View {
     let playlist: Playlist
     let files: [PlaylistFile]
+    /// Focuses the tag input as soon as the editor appears. The Files & Tags overlay
+    /// turns this on; the Manager tag panel leaves it off.
+    var autoFocus: Bool = false
     @Environment(AppState.self) private var appState
 
     @State private var renameDraft = ""
@@ -67,6 +70,7 @@ struct TagEditorView: View {
                 knownTags: playlist.tagFrequency,
                 allowsCreate: true,
                 placeholder: "Add a tag",
+                autoFocus: autoFocus,
                 onAdd: { add($0) },
                 onRemove: { remove($0) }
             )

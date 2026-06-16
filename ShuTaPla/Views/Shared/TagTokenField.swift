@@ -49,6 +49,10 @@ struct TagTokenField<ChipMenu: View>: View {
     let knownTags: [String: Int]
     let allowsCreate: Bool
     let placeholder: String
+    /// When true the field begins editing (and focuses its input) as soon as it
+    /// appears, instead of waiting for a click. The filter bar leaves it off; the
+    /// Files & Tags overlay turns it on so the caret lands in the tag input.
+    var autoFocus: Bool = false
     let onAdd: (String) -> Void
     let onRemove: (String) -> Void
     @ViewBuilder let chipMenu: (String) -> ChipMenu
@@ -66,6 +70,7 @@ struct TagTokenField<ChipMenu: View>: View {
 
     var body: some View {
         field
+            .onAppear { if autoFocus { beginEditing() } }
             // Integer bounds so successive sub-pixel measurements settle rather than
             // cycling (which SwiftUI faults on).
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global).integral } action: { controlFrame = $0 }
@@ -161,12 +166,17 @@ struct TagTokenField<ChipMenu: View>: View {
     }
 
     private var dropdown: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-                    optionRow(option, index: index)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                        optionRow(option, index: index)
+                            .id(index)
+                    }
                 }
             }
+            // Follow the arrow-key highlight so it never moves past the visible rows.
+            .onChange(of: highlighted) { _, index in proxy.scrollTo(index, anchor: .center) }
         }
         .frame(maxWidth: .infinity)
         .frame(height: CGFloat(min(options.count, 6)) * rowHeight)
@@ -354,6 +364,7 @@ extension TagTokenField where ChipMenu == EmptyView {
         knownTags: [String: Int],
         allowsCreate: Bool,
         placeholder: String,
+        autoFocus: Bool = false,
         onAdd: @escaping (String) -> Void,
         onRemove: @escaping (String) -> Void
     ) {
@@ -362,6 +373,7 @@ extension TagTokenField where ChipMenu == EmptyView {
             knownTags: knownTags,
             allowsCreate: allowsCreate,
             placeholder: placeholder,
+            autoFocus: autoFocus,
             onAdd: onAdd,
             onRemove: onRemove,
             chipMenu: { _ in EmptyView() }

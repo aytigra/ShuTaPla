@@ -38,14 +38,13 @@ final class OverlayManager: HotkeyOverlayContext {
     /// it begins to appear.
     private(set) var audioFullyRevealed = false
 
-    /// Closable overlays in topmost-first order; `[esc]`/`closeTopmostOverlay()` walk this.
+    /// Closable overlays in topmost-first order — the ones the user explicitly opened;
+    /// `[esc]`/`closeTopmostOverlay()` and `isAnyOverlayOpen` consider exactly these.
+    /// Bottom controls are passive hover chrome and aren't closed by `[esc]`.
     private static let closablePriority: [Overlay] =
         [.audioExtended, .filesTags, .audioCompact, .playlistsSidebar]
 
-    /// The overlays `[esc]` and `isAnyOverlayOpen` consider — the ones the user explicitly
-    /// opened. Bottom controls are passive hover chrome and aren't closed by `[esc]`.
-    private static let closableSet: Set<Overlay> =
-        [.audioExtended, .filesTags, .audioCompact, .playlistsSidebar]
+    private static let closableSet = Set(closablePriority)
 
     private static let audioSet: Set<Overlay> = [.audioCompact, .audioExtended]
 

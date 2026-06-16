@@ -34,9 +34,10 @@ struct FilesTagsOverlayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black.opacity(0.3))
-        .background(.ultraThinMaterial)
-        // A dark frosted panel keeps the light text legible over the player behind it.
+        // A solid translucent panel (no live blur) keeps the light text legible over the
+        // player while staying cheap to composite, so animating it in/out doesn't stall
+        // the video's redraw on the main thread.
+        .background(Color.black.opacity(0.92))
         .environment(\.colorScheme, .dark)
         // A click on empty chrome resigns the tag field so it can be unfocused
         // anywhere, not just by tabbing to another control.
@@ -103,12 +104,20 @@ struct FilesTagsOverlayView: View {
     }
 
     private var fileList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(appState.filteredFiles) { file in
-                    row(file)
-                    Divider()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(appState.filteredFiles) { file in
+                        row(file)
+                            .id(file.id)
+                        Divider()
+                    }
                 }
+            }
+            // Open onto the file that's playing, so the list isn't scrolled to the top
+            // away from the current file.
+            .onAppear {
+                if let id = coordinator.visualCurrentFile?.id { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }
@@ -132,7 +141,7 @@ struct FilesTagsOverlayView: View {
             Button("Rename") { beginRename(file) }
             Button("Show in Finder") { appState.revealInFinder(file) }
             Divider()
-            Button("Delete", role: .destructive) { appState.playerDeleteCandidate = file }
+            Button("Delete", role: .destructive) { appState.requestPlayerDelete(file) }
         }
     }
 
@@ -149,7 +158,7 @@ struct FilesTagsOverlayView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                 Divider().padding(.top, 8)
-                TagEditorView(playlist: playlist, files: [current])
+                TagEditorView(playlist: playlist, files: [current], autoFocus: true)
                 Spacer(minLength: 0)
             }
         } else {

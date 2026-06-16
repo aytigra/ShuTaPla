@@ -25,13 +25,13 @@ struct PlaylistCenterView: View {
                     if playlist.preferences.viewMode == .gallery {
                         FileGalleryView(
                             playlist: playlist,
-                            confirmDelete: { appState.pendingManagerDelete = $0 },
+                            confirmDelete: { appState.requestManagerDelete($0) },
                             reportError: { errorMessage = $0 }
                         )
                     } else {
                         FileListView(
                             playlist: playlist,
-                            confirmDelete: { appState.pendingManagerDelete = $0 },
+                            confirmDelete: { appState.requestManagerDelete($0) },
                             reportError: { errorMessage = $0 }
                         )
                     }
@@ -142,9 +142,9 @@ struct PlaylistCenterView: View {
     /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
-        let untagged = playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .untagged }.count
-        let invalid = playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .invalid }.count
-        let skipped = playlist.files.filter(\.isSkipped).count
+        let untagged = playlist.files(matching: .untagged).count
+        let invalid = playlist.files(matching: .invalidTagging).count
+        let skipped = playlist.files(matching: .skipped).count
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {

@@ -66,8 +66,8 @@ final class AppState {
     /// resolves file URLs through `bookmarkService`. Injected into the player views.
     let coordinator: PlaybackCoordinator
 
-    private(set) var appStateModel: AppStateModel
-    private(set) var globalSettings: GlobalSettings
+    let appStateModel: AppStateModel
+    let globalSettings: GlobalSettings
 
     var mode: AppMode
 
@@ -507,7 +507,7 @@ final class AppState {
         let parent = (file.relativePath as NSString).deletingLastPathComponent
         file.fileName = finalName
         file.relativePath = parent.isEmpty ? finalName : "\(parent)/\(finalName)"
-        let (tags, status) = tagFields(for: finalName)
+        let (tags, status) = TagParser.fields(for: finalName)
         file.tags = tags
         file.taggingStatus = status
         return nil
@@ -645,6 +645,13 @@ final class AppState {
         return true
     }
 
+    /// Requests confirmation to trash a specific set of Manager files (a file row's
+    /// Delete command). Routes through AppState so `pendingManagerDelete` stays state
+    /// it owns and prunes when a re-scan removes a referenced file.
+    func requestManagerDelete(_ files: [PlaylistFile]) {
+        pendingManagerDelete = files
+    }
+
     /// Dismisses the Manager trash confirmation without trashing anything.
     func cancelManagerDelete() {
         pendingManagerDelete = []
@@ -725,6 +732,13 @@ final class AppState {
         return true
     }
 
+    /// Requests confirmation to trash a specific file from the Files & Tags overlay.
+    /// Routes through AppState so `playerDeleteCandidate` stays state it owns and
+    /// prunes when a re-scan removes the file.
+    func requestPlayerDelete(_ file: PlaylistFile) {
+        playerDeleteCandidate = file
+    }
+
     /// Dismisses the Player delete confirmation without trashing anything.
     func cancelPlayerDelete() {
         playerDeleteCandidate = nil
@@ -744,9 +758,18 @@ final class AppState {
     /// Stops the visual playlist and returns the window to Manager mode (the pause
     /// overlay's Stop, the `[s]`/`[delete]`-after exits, and the Back control).
     func stopAndExitPlayer() {
-        if let visual = coordinator.visualPlaylist { coordinator.stop(visual) }
+        let visual = coordinator.visualPlaylist
+        // Remember the file that was on screen so Manager reopens with it selected and
+        // scrolled into view, rather than at the top.
+        let lastFileID = coordinator.visualCurrentFile?.id
+        if let visual { coordinator.stop(visual) }
         coordinator.unsuppress()
         playerDeleteCandidate = nil
+        if let visual {
+            selectedPlaylist = visual
+            recomputeFilteredFiles()
+        }
+        if let lastFileID { selectedFileIDs = [lastFileID] }
         mode = .manager
     }
 
@@ -772,7 +795,7 @@ final class AppState {
     @discardableResult
     func renameTagAcrossPlaylist(_ playlist: Playlist, from oldTag: String, to newTag: String) async -> String? {
         let collides = playlist.tagFrequency.keys.contains {
-            $0.caseInsensitiveCompare(newTag) == .orderedSame && $0.caseInsensitiveCompare(oldTag) != .orderedSame
+            TagParser.sameTag($0, newTag) && !TagParser.sameTag($0, oldTag)
         }
         if collides { return "A tag named “\(newTag)” already exists." }
         return await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
@@ -812,8 +835,7 @@ final class AppState {
     /// while active, override the playlist's tag filter.
     func toggleServiceFilter(_ filter: ServiceFilter) {
         activeServiceFilter = (activeServiceFilter == filter) ? nil : filter
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
+        filterDidChange()
     }
 
     /// Adds or removes a tag from the selected playlist's tag filter. Editing the
@@ -822,30 +844,27 @@ final class AppState {
         guard let playlist = selectedPlaylist else { return }
         activeServiceFilter = nil
         var tags = playlist.filterState.selectedTags
-        if let index = tags.firstIndex(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+        if let index = tags.firstIndex(where: { TagParser.sameTag($0, tag) }) {
             tags.remove(at: index)
         } else {
             tags.append(tag)
         }
         playlist.filterState.selectedTags = tags
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
+        filterDidChange()
     }
 
     /// Sets the AND/OR operator on the selected playlist's tag filter.
     func setFilterMode(_ mode: FilterMode) {
         guard let playlist = selectedPlaylist else { return }
         playlist.filterState.filterMode = mode
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
+        filterDidChange()
     }
 
     /// Clears the selected playlist's tag filter.
     func clearTagFilter() {
         guard let playlist = selectedPlaylist else { return }
         playlist.filterState.selectedTags = []
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
+        filterDidChange()
     }
 
     /// Remembers the current tag filter as a saved search (most-recent first,
@@ -863,8 +882,7 @@ final class AppState {
         playlist.filterState.selectedTags = search.tags
         playlist.filterState.filterMode = search.mode
         promote(search, in: playlist)
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
+        filterDidChange()
     }
 
     /// Removes a saved search from the recents.
@@ -889,6 +907,13 @@ final class AppState {
         if playlist === selectedPlaylist { recomputeFilteredFiles() }
     }
 
+    /// Shared epilogue for tag/service filter mutations: refresh the cached file
+    /// list and, in Player mode, keep the player on a file that still matches.
+    private func filterDidChange() {
+        recomputeFilteredFiles()
+        reconcilePlayerSelection()
+    }
+
     /// After a filter change in Player mode, keeps the player on a file that still
     /// matches: if the playing file was filtered out, the coordinator jumps to the
     /// first remaining file (or none, leaving the player on a placeholder).
@@ -897,31 +922,14 @@ final class AppState {
     }
 
     private func computeFilteredFiles(for playlist: Playlist) -> [PlaylistFile] {
-        let byOrder: (PlaylistFile, PlaylistFile) -> Bool = { $0.sortOrder < $1.sortOrder }
-
         // A service filter, while active, replaces the tag filter entirely.
         if let service = activeServiceFilter {
-            switch service {
-            case .untagged:
-                return playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .untagged }.sorted(by: byOrder)
-            case .invalidTagging:
-                return playlist.files.filter { !$0.isSkipped && $0.taggingStatus == .invalid }.sorted(by: byOrder)
-            case .skipped:
-                return playlist.files.filter(\.isSkipped).sorted(by: byOrder)
-            }
+            return playlist.files(matching: service)
         }
 
         // No service filter: playback order (playable files matching the persisted
         // tag filter) is exactly what the file list shows.
         return playlist.playbackSequence
-    }
-
-    private func tagFields(for fileName: String) -> ([String], TaggingStatus) {
-        switch TagParser.parseTags(from: fileName) {
-        case .valid(let tags): return (tags, .valid)
-        case .untagged: return ([], .untagged)
-        case .invalid: return ([], .invalid)
-        }
     }
 
     private func message(for error: FileSystemError) -> String {
