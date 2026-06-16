@@ -200,7 +200,10 @@ final class ThumbnailService {
         return NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
     }
 
-    private nonisolated static func imageThumbnail(at url: URL, maxPixelSize: Int) -> CGImage? {
+    /// Downscales a still image (or a frame mpv has already written to disk) to
+    /// `maxPixelSize` on its longest edge. Shared with `MPVThumbnailer`, which
+    /// extracts video frames as PNGs and routes them through this same path.
+    nonisolated static func imageThumbnail(at url: URL, maxPixelSize: Int) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -211,6 +214,13 @@ final class ThumbnailService {
     }
 
     private nonisolated static func videoFrame(at url: URL, maxPixelSize: Int) async -> CGImage? {
+        if let frame = await avAssetFrame(at: url, maxPixelSize: maxPixelSize) { return frame }
+        // AVFoundation can't open every container the player handles (notably webm
+        // and mkv); libmpv decodes those, so fall back to it.
+        return await MPVThumbnailer.frame(at: url, maxPixelSize: maxPixelSize)
+    }
+
+    private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> CGImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true

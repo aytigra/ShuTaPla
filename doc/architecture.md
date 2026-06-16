@@ -356,8 +356,8 @@ class MPVClient {
 ```
 Responsibilities:
   - Generate thumbnails for image files (CGImageSource with kCGImageSourceThumbnailMaxPixelSize).
-  - Generate thumbnails for video files (AVAssetImageGenerator; an mpv screenshot can
-    replace this once the player lands, for formats AVFoundation can't decode).
+  - Generate thumbnails for video files (AVAssetImageGenerator, falling back to a libmpv
+    frame extraction for containers AVFoundation can't open — see MPVThumbnailer).
   - Cache decoded images in memory (NSCache) over an on-disk PNG cache (Caches directory).
   - Provide async, cancellable thumbnail loading for the gallery, generated and decoded
     off the main actor.
@@ -368,6 +368,8 @@ Key methods:
 ```
 
 Thumbnails are generated lazily on first request and cached. The on-disk cache key is the SHA-256 of `relativePath + modification date + max pixel size`, so an edited file (or a different requested size) yields a fresh thumbnail. Generation and PNG decode run off the main actor: the `@MainActor` entry point reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoding off-main, so scrolling never blocks on a draw-time decode — see §10). `cachedThumbnail` is a synchronous in-memory lookup so a cell shown before paints without disk I/O or a placeholder flash. Each gallery cell loads via `.task(id:)`, which cancels the work when the cell scrolls off-screen.
+
+Video frames come from `AVAssetImageGenerator`; when it can't open the container (notably `.webm` and `.mkv`, which AVFoundation won't demux), generation falls back to **`MPVThumbnailer`** — a stateless helper that decodes one frame with libmpv, the same engine that plays those files. Each call spins a short-lived, windowless mpv instance with the `image` video output (`vo=image`), seeks 10% in, writes a single PNG to a private temp directory, and tears the handle down; the PNG is then downscaled through the same `imageThumbnail` path as still images. It owns a fresh handle per extraction and never touches the playback engines' `MPVClient` or its render context, so it is independent of the player's lifecycle. Extractions run on a small concurrent pool capped by a semaphore (2 at a time), since each is a full software decode and misses are rare once the disk cache is warm; a per-call deadline bounds a pathological decode.
 
 ### BookmarkService
 
@@ -974,7 +976,8 @@ ShuTaPla/                            (app source)
 │   ├── TagParser.swift              // pure functions, no state
 │   ├── BookmarkService.swift        // security-scoped bookmark management
 │   ├── CloudFileService.swift       // iCloud status detection, on-demand download, prefetch
-│   └── ThumbnailService.swift       // async thumbnail generation + caching
+│   ├── ThumbnailService.swift       // async thumbnail generation + caching
+│   └── MPVThumbnailer.swift         // libmpv video-frame fallback for webm/mkv thumbnails
 │
 ├── MPV/
 │   ├── MPVClient.swift              // Swift wrapper around mpv_handle + OpenGL render context
