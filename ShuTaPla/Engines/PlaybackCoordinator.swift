@@ -221,11 +221,11 @@ final class PlaybackCoordinator: PlaybackSource {
         // slideshow advances take, so there is one place that records the move.
         switch channel(of: playlist) {
         case .visualImage:
-            forward ? imageEngine.advanceToNext() : imageEngine.returnToPrevious()
+            if forward { imageEngine.advanceToNext() } else { imageEngine.returnToPrevious() }
         case .visualVideo:
-            forward ? videoEngine?.advanceToNext() : videoEngine?.returnToPrevious()
+            if forward { videoEngine?.advanceToNext() } else { videoEngine?.returnToPrevious() }
         case .audio:
-            forward ? audioEngine?.advanceToNext() : audioEngine?.returnToPrevious()
+            if forward { audioEngine?.advanceToNext() } else { audioEngine?.returnToPrevious() }
         case nil:
             break
         }

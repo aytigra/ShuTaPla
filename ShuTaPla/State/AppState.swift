@@ -628,6 +628,7 @@ final class AppState {
     /// Cancels a running background re-scan — the only cancellable Manager operation.
     /// Returns whether something was in flight (the Manager `[esc]` hotkey consumes the
     /// key either way).
+    @discardableResult
     func cancelInProgressOperation() -> Bool {
         guard !busyPlaylistIDs.isEmpty else { return false }
         updateTask?.cancel()

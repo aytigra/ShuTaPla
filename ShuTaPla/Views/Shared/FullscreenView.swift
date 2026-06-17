@@ -53,11 +53,10 @@ struct FullscreenView: NSViewRepresentable {
         /// layout/render pass (AppKit reports that as a reentrant layout).
         func scheduleExit() {
             guard let window = hostWindow, window.styleMask.contains(.fullScreen) else { return }
-            // Strongly capture the window (it outlives the view) so the deferred exit still runs
-            // after teardown; `nonisolated(unsafe)` only because `NSWindow` isn't `Sendable`.
-            nonisolated(unsafe) let target = window
+            // Strongly capture the window (it outlives the view) so the deferred exit still
+            // runs after teardown.
             DispatchQueue.main.async {
-                if target.styleMask.contains(.fullScreen) { target.toggleFullScreen(nil) }
+                if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
             }
         }
     }
