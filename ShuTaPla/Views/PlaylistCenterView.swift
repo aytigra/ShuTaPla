@@ -2,8 +2,8 @@
 //  PlaylistCenterView.swift
 //  ShuTaPla
 //
-//  The Manager center panel: a header (name, Play, Reshuffle, Update, view-mode
-//  toggle), the tagging counter notices, and the file list. Owns the shared
+//  The Manager center panel: a header (name, Play, Reshuffle, view-mode toggle),
+//  the tagging counter notices, and the file list. Owns the shared
 //  delete confirmation and error alert used by the list's interactions.
 //
 
@@ -13,7 +13,6 @@ struct PlaylistCenterView: View {
     @Environment(AppState.self) private var appState
 
     @State private var errorMessage: String?
-    @State private var isUpdating = false
 
     var body: some View {
         Group {
@@ -100,17 +99,6 @@ struct PlaylistCenterView: View {
             } label: {
                 Label("Reshuffle", systemImage: "shuffle")
             }
-
-            Button {
-                Task {
-                    isUpdating = true
-                    await appState.update(playlist)
-                    isUpdating = false
-                }
-            } label: {
-                Label("Update", systemImage: "arrow.clockwise")
-            }
-            .disabled(isUpdating)
 
             Picker("View", selection: viewMode(playlist)) {
                 Image(systemName: "list.bullet").tag(ViewMode.list)

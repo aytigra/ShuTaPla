@@ -25,6 +25,7 @@ struct PlaylistSidebar: View {
     // Inline rename: the playlist being edited and its draft text.
     @State private var renaming: Playlist?
     @State private var draftName = ""
+    @FocusState private var renameFieldFocused: Bool
 
     // Delete confirmation target.
     @State private var deleteCandidate: Playlist?
@@ -160,6 +161,8 @@ struct PlaylistSidebar: View {
         if renaming === playlist {
             TextField("Name", text: $draftName)
                 .textFieldStyle(.roundedBorder)
+                .focused($renameFieldFocused)
+                .onAppear { renameFieldFocused = true }
                 .onSubmit { commitRename() }
                 .onExitCommand { renaming = nil }
         } else {

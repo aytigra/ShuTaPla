@@ -78,14 +78,12 @@ Each playlist stores:
 
 ### Reshuffle vs. Update
 
-Each playlist exposes two refresh actions:
+Each playlist refreshes from disk two ways:
 
-- **Reshuffle** — re-reads the folder and rebuilds the file list from scratch with a new random order. Last-played position is reset.
-- **Update** — re-reads the folder, appends any newly discovered files at the end, and prunes files that have disappeared from disk. Ordering and last-played position are preserved.
+- **Reshuffle** — a header button that re-reads the folder and rebuilds the file list from scratch with a new random order. Last-played position is reset.
+- **Update** — re-reads the folder, appends any newly discovered files at the end, and prunes files that have disappeared from disk. Ordering and last-played position are preserved. It runs automatically whenever a playlist becomes active — including re-selecting the open playlist — so new files appear without a dedicated control.
 
-In addition, whenever a playlist becomes active the app performs an **Update** so new files appear without manual intervention. Both the manual and the automatic Update prune missing files.
-
-All folder re-reads (Reshuffle and Update, manual or automatic) run in the **background** without blocking the UI, with a small "sync in progress" indicator shown while a re-read is running.
+All folder re-reads (Reshuffle and the automatic Update) run in the **background** without blocking the UI, with a small "sync in progress" indicator shown while a re-read is running.
 
 ### Playback order and wrap-around
 

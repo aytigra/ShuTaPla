@@ -90,6 +90,11 @@ final class AppState {
     /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
 
+    /// Bumped by `select` to ask the file list to scroll its selection into view,
+    /// even when the selection itself didn't change — so re-clicking the current
+    /// playlist re-centers the playing file. The list observes the change only.
+    private(set) var scrollSelectionToken = 0
+
     /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
     /// a row's Delete command). While non-empty the center panel shows the confirmation
     /// alert, which owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
@@ -312,11 +317,21 @@ final class AppState {
     /// Makes `playlist` the Manager selection, activates it for its channel, and
     /// kicks off a background re-scan to pick up files added or removed on disk.
     func select(_ playlist: Playlist) {
-        if selectedPlaylist !== playlist { selectedFileIDs = [] }
+        let isNewSelection = selectedPlaylist !== playlist
+        if isNewSelection { selectedFileIDs = [] }
         selectedPlaylist = playlist
         activeServiceFilter = nil   // service filters don't carry across playlists
         activate(playlist)
         recomputeFilteredFiles()    // show the restored per-playlist filter at once
+        // Highlight where playback will resume and scroll the list to it. Selecting
+        // the already-current playlist snaps the highlight back to the playing file —
+        // the one way to do so without leaving the playlist. Skipped only when the
+        // resume file is filtered out (or none has played yet).
+        if let currentID = playlist.currentFileID,
+           filteredFiles.contains(where: { $0.id == currentID }) {
+            selectedFileIDs = [currentID]
+        }
+        scrollSelectionToken += 1   // re-center even if the selection didn't change
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
     }

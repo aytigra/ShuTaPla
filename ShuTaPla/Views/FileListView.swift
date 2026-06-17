@@ -22,6 +22,10 @@ struct FileListView: View {
     @State private var anchor: UUID?
     @State private var renamingID: UUID?
     @State private var draftName = ""
+    // A mouse click already targets a visible row, so the auto-scroll that keeps the
+    // keyboard selection centered would only jar the view. Set when a click changes
+    // the selection, consumed by the next selection-change scroll.
+    @State private var skipSelectionScroll = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -39,10 +43,19 @@ struct FileListView: View {
                     ContentUnavailableView("No Files", systemImage: "doc")
                 }
             }
-            // Keep the keyboard-driven selection (single row) visible as it moves.
+            // Keep the keyboard-driven selection (single row) visible as it moves. A
+            // mouse-driven change skips this — the clicked row is already on screen.
             .onChange(of: appState.selectedFileIDs) { _, ids in
+                if skipSelectionScroll { skipSelectionScroll = false; return }
                 guard ids.count == 1, let id = ids.first else { return }
                 withAnimation { proxy.scrollTo(id, anchor: .center) }
+            }
+            // Selecting a playlist (or re-selecting the current one) asks to re-center
+            // the resume file even when the selection didn't move. Deferred a layout
+            // pass so a just-switched playlist's rows exist for `scrollTo` to land on.
+            .onChange(of: appState.scrollSelectionToken) { _, _ in
+                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
             // Returning from the player selects the last-played file before this view
             // mounts, so `onChange` never fires for it. Defer past the first layout pass
@@ -98,6 +111,7 @@ struct FileListView: View {
     }
 
     private func handleClick(_ file: PlaylistFile) {
+        let before = appState.selectedFileIDs
         FileSelection.apply(
             click: file.id,
             modifiers: NSEvent.modifierFlags,
@@ -105,6 +119,7 @@ struct FileListView: View {
             selection: &appState.selectedFileIDs,
             anchor: &anchor
         )
+        if appState.selectedFileIDs != before { skipSelectionScroll = true }
     }
 
     // MARK: - Rename

@@ -618,7 +618,7 @@ User picks folder
 
 **Auto-update**: When a playlist becomes the active playlist (selected in Manager or started in Player), an update runs as a background Task. The UI is not blocked; new files appear in the list as the update completes.
 
-Both manual and automatic Update prune files that have disappeared from disk. Every re-read (Reshuffle and Update, manual or automatic) runs as a background Task with a small "sync in progress" indicator shown while it is running — the UI is never blocked.
+Update prunes files that have disappeared from disk. Every re-read (the Reshuffle button and the automatic Update) runs as a background Task with a small "sync in progress" indicator shown while it is running — the UI is never blocked.
 
 ### Tag editing flow
 
