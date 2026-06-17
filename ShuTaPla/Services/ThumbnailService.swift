@@ -16,7 +16,7 @@
 //  The in-memory cache is bounded by the decoded byte size of its images, so
 //  scrolling a large playlist evicts the least-recently-used thumbnails once the
 //  budget is reached rather than retaining every decoded bitmap. Reloading an
-//  evicted thumbnail is a cheap disk PNG decode.
+//  evicted thumbnail is a cheap disk decode.
 //
 
 import Foundation
@@ -224,17 +224,61 @@ final class ThumbnailService {
 
     /// Encodes a thumbnail as HEIC. HEVC intra-frame compression is several times
     /// smaller than PNG for photographic content and is hardware-accelerated on
-    /// Apple silicon; it is lossy at `quality` and preserves alpha.
+    /// Apple silicon; it is lossy at `quality`. An alpha channel is kept only when
+    /// the image actually uses transparency, so an opaque source neither inflates
+    /// the file nor doubles its decoded footprint with a redundant channel.
     private nonisolated static func encodeHEIC(_ cgImage: CGImage, quality: CGFloat = 0.8) -> Data? {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(
             data, UTType.heic.identifier as CFString, 1, nil
         ) else { return nil }
-        CGImageDestinationAddImage(destination, cgImage, [
+        CGImageDestinationAddImage(destination, flattenedIfOpaque(cgImage), [
             kCGImageDestinationLossyCompressionQuality: quality
         ] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
+    }
+
+    /// Returns an alpha-free copy when `cgImage` carries an alpha channel whose
+    /// pixels are all fully opaque; otherwise returns it unchanged. Redrawing into
+    /// an opaque context drops the redundant channel that ImageIO warns about,
+    /// while genuinely transparent thumbnails keep their alpha.
+    private nonisolated static func flattenedIfOpaque(_ cgImage: CGImage) -> CGImage {
+        switch cgImage.alphaInfo {
+        case .none, .noneSkipLast, .noneSkipFirst:
+            return cgImage          // no alpha channel to drop
+        default:
+            break
+        }
+        guard isFullyOpaque(cgImage),
+              let context = CGContext(
+                  data: nil,
+                  width: cgImage.width,
+                  height: cgImage.height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: cgImage.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else { return cgImage }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        return context.makeImage() ?? cgImage
+    }
+
+    /// Whether every pixel of a 32-bit RGBA/BGRA image is fully opaque. Reads the
+    /// alpha byte of each pixel; returns `false` for layouts it can't inspect, so
+    /// the caller leaves the image untouched.
+    private nonisolated static func isFullyOpaque(_ cgImage: CGImage) -> Bool {
+        guard cgImage.bitsPerPixel == 32,
+              let data = cgImage.dataProvider?.data else { return false }
+        let length = CFDataGetLength(data)
+        guard let bytes = CFDataGetBytePtr(data) else { return false }
+        let alphaFirst = cgImage.alphaInfo == .premultipliedFirst || cgImage.alphaInfo == .first
+        var offset = alphaFirst ? 0 : 3
+        while offset < length {
+            if bytes[offset] != 0xFF { return false }
+            offset += 4
+        }
+        return true
     }
 
     /// Downscales a still image (or a frame mpv has already written to disk) to

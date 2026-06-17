@@ -170,7 +170,10 @@ private struct GalleryCell: View {
         .padding(6)
         .background(isSelected ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
-        .task(id: thumbnailKey) {
+        // Generation is deferrable background work, so it runs at `.utility` QoS
+        // rather than the default user-initiated: the encoder blocks its worker
+        // thread on CoreMedia, and a lower band keeps that off the priority path.
+        .task(id: thumbnailKey, priority: .utility) {
             // A previously generated thumbnail is served synchronously, so seen
             // cells don't flash a placeholder while scrolling; otherwise generate
             // it off the main actor.
