@@ -4,7 +4,7 @@
 //
 //  The Manager center panel: a header (name, Play, Reshuffle, view-mode toggle),
 //  the tagging counter notices, and the file list. Owns the shared
-//  delete confirmation and error alert used by the list's interactions.
+//  delete, remove-audio, and error confirmations used by the list's interactions.
 //
 
 import SwiftUI
@@ -52,6 +52,28 @@ struct PlaylistCenterView: View {
                 .keyboardShortcut(.cancelAction)
         }
         .alert(
+            audioStripTitle,
+            isPresented: Binding(
+                get: { !appState.pendingAudioStrip.isEmpty },
+                set: { if !$0 { appState.cancelAudioStrip() } }
+            )
+        ) {
+            Button("Remove Audio", role: .destructive) { appState.confirmAudioStrip() }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { appState.cancelAudioStrip() }
+                .keyboardShortcut(.cancelAction)
+        } message: {
+            Text("The original is moved to the Trash.")
+        }
+        .alert(
+            "Couldn't remove audio",
+            isPresented: Binding(get: { appState.audioStripError != nil }, set: { if !$0 { appState.audioStripError = nil } })
+        ) {
+            Button("OK", role: .cancel) { appState.audioStripError = nil }
+        } message: {
+            Text(appState.audioStripError ?? "")
+        }
+        .alert(
             "Something went wrong",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
         ) {
@@ -74,6 +96,13 @@ struct PlaylistCenterView: View {
         return files.count == 1
             ? "Move “\(files[0].fileName)” to the Trash?"
             : "Move \(files.count) files to the Trash?"
+    }
+
+    private var audioStripTitle: String {
+        let files = appState.pendingAudioStrip
+        return files.count == 1
+            ? "Remove the audio from “\(files[0].fileName)”?"
+            : "Remove the audio from \(files.count) files?"
     }
 
     // MARK: - Header

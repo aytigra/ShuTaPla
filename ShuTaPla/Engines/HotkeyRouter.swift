@@ -119,11 +119,12 @@ final class HotkeyRouter {
 
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
-    /// Whether a modal confirmation dialog (Manager trash, player trash, or playlist tag
-    /// removal) is up and owns the keyboard.
+    /// Whether a modal confirmation dialog (Manager trash, remove-audio, player trash, or
+    /// playlist tag removal) is up and owns the keyboard.
     private var hasBlockingConfirmation: Bool {
         guard let appState else { return false }
         return !appState.pendingManagerDelete.isEmpty
+            || !appState.pendingAudioStrip.isEmpty
             || appState.playerDeleteCandidate != nil
             || appState.pendingTagRemoval != nil
     }

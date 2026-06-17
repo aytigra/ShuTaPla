@@ -149,6 +149,7 @@ For video playlists, each file shows its running time: a right-aligned column in
   - **Tag edits in the right panel** apply to all selected files. The chips shown represent the **intersection** of tags across the selection (tags every selected file has). Adding a tag adds it to every selected file (a no-op for files that already have it); removing a chip removes that tag from every selected file.
 - **Rename** an individual file is also available as a per-file action (context menu / inline rename).
 - **Show in Finder** is available per file.
+- **Remove Audio** (video playlists only) strips the audio track from the file — or from the whole selection when invoked on one of several selected files. It is confirmed with the same `[enter]`/`[esc]` dialog as Delete. The video stream is copied, not re-encoded, so it is fast and lossless and works for every container the player can open (including webm/mkv). The original is moved to the Trash as a recoverable backup and the audio-free file takes its place; a file currently on screen is reloaded and resumed at its position. The work runs in the background, with a spinner on each file's row while it processes.
 
 ### Playlist-wide tag operations
 

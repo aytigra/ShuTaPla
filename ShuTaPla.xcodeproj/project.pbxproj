@@ -444,17 +444,28 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/mpv/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/include,
+					/opt/homebrew/opt/ffmpeg/include,
+				);
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/mpv/lib;
+				LIBRARY_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/lib,
+					/opt/homebrew/opt/ffmpeg/lib,
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lmpv";
+				OTHER_LDFLAGS = (
+					"-lmpv",
+					"-lavformat",
+					"-lavcodec",
+					"-lavutil",
+				);
 				OTHER_SWIFT_FLAGS = "-Xcc -DGL_SILENCE_DEPRECATION";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPla;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -463,7 +474,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -487,17 +498,28 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/mpv/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/include,
+					/opt/homebrew/opt/ffmpeg/include,
+				);
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/mpv/lib;
+				LIBRARY_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/lib,
+					/opt/homebrew/opt/ffmpeg/lib,
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lmpv";
+				OTHER_LDFLAGS = (
+					"-lmpv",
+					"-lavformat",
+					"-lavcodec",
+					"-lavutil",
+				);
 				OTHER_SWIFT_FLAGS = "-Xcc -DGL_SILENCE_DEPRECATION";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPla;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -506,7 +528,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -521,7 +543,10 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/mpv/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/include,
+					/opt/homebrew/opt/ffmpeg/include,
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaTests;
@@ -529,7 +554,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ShuTaPla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ShuTaPla";
@@ -545,7 +570,10 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/mpv/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/mpv/include,
+					/opt/homebrew/opt/ffmpeg/include,
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaTests;
@@ -553,7 +581,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ShuTaPla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ShuTaPla";

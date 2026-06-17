@@ -84,14 +84,19 @@ echo "note: bundling libmpv closure into $FRAMEWORKS"
 bundle_dylib "$MPV_LIB"
 
 # Point every Mach-O in MacOS/ (the thin launcher plus the .debug.dylib that actually links
-# libmpv under Xcode's debug-dylib mode) at the bundled copy instead of the Homebrew keg.
+# the libraries under Xcode's debug-dylib mode) at the bundled copies instead of the Homebrew
+# keg. The app links libmpv and, for audio removal, the FFmpeg libraries directly; both are in
+# the bundled closure, so rewrite every Homebrew reference, not just libmpv's.
 MACOS_DIR="$BUILT_PRODUCTS_DIR/$EXECUTABLE_FOLDER_PATH"
 for binary in "$MACOS_DIR"/*; do
     [ -f "$binary" ] || continue
-    ref="$(otool -L "$binary" 2>/dev/null | awk '{print $1}' | grep "$BREW_PREFIX.*libmpv" | head -1 || true)"
-    if [ -n "$ref" ]; then
-        install_name_tool -change "$ref" "@rpath/$(basename "$ref")" "$binary" 2>/dev/null || true
-    fi
+    while IFS= read -r ref; do
+        case "$ref" in
+            "$BREW_PREFIX"/*)
+                install_name_tool -change "$ref" "@rpath/$(basename "$ref")" "$binary" 2>/dev/null || true
+                ;;
+        esac
+    done < <(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}')
 done
 
 echo "note: bundled $(ls "$FRAMEWORKS"/*.dylib 2>/dev/null | wc -l | tr -d ' ') dylib(s)"

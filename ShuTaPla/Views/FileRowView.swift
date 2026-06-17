@@ -13,6 +13,7 @@ struct FileRowView: View {
     let playlist: Playlist
     let isSelected: Bool
     let isRenaming: Bool
+    let isStripping: Bool
     @Binding var draftName: String
     let onCommitRename: () -> Void
     let onCancelRename: () -> Void
@@ -37,6 +38,13 @@ struct FileRowView: View {
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+        // Dim the row behind a spinner while its audio is being removed.
+        .opacity(isStripping ? 0.5 : 1)
+        .overlay(alignment: .trailing) {
+            if isStripping {
+                ProgressView().controlSize(.small).padding(.trailing, 10)
+            }
+        }
         .contentShape(Rectangle())
         // Length is read once and cached on the model, so it appears instantly on
         // later displays and across launches. Images have no timeline.

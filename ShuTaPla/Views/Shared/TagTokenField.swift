@@ -478,7 +478,9 @@ private struct TokenTextField: NSViewRepresentable {
         // MARK: Outside-click monitor
 
         func startOutsideMonitor(for field: NSTextField) {
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak field] event in
+            // Both buttons: a left-click elsewhere, and a right-click that raises a
+            // context menu on a file row or any other outside target, give up focus.
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak field] event in
                 guard let self, let field, let window = field.window, event.window === window else { return event }
                 if !self.clickIsInsideControl(event, field: field) {
                     window.makeFirstResponder(nil)

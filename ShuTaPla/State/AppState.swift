@@ -105,6 +105,20 @@ final class AppState {
     /// center panel's alert.
     var managerDeleteError: String?
 
+    /// Videos awaiting the remove-audio confirmation (raised by a row's Remove Audio
+    /// command). While non-empty the center panel shows the confirmation alert, which
+    /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
+    /// default/cancel buttons and swallows every other key.
+    var pendingAudioStrip: [PlaylistFile] = []
+
+    /// A user-facing message when removing audio fails, surfaced by the center
+    /// panel's alert.
+    var audioStripError: String?
+
+    /// Files whose audio is being removed, so their list/gallery rows can show a
+    /// spinner while the remux runs.
+    private(set) var strippingFileIDs: Set<UUID> = []
+
     /// The playlist tag awaiting a remove-from-all-files confirmation in the Manager
     /// tag-management panel. While non-nil the panel shows the confirmation alert, which
     /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its default/cancel
@@ -438,6 +452,7 @@ final class AppState {
         // (and dereference) a destroyed model when the user confirms.
         let removedIDs = Set(toRemove.map(\.id))
         pendingManagerDelete.removeAll { removedIDs.contains($0.id) }
+        pendingAudioStrip.removeAll { removedIDs.contains($0.id) }
         if let candidate = playerDeleteCandidate, removedIDs.contains(candidate.id) {
             playerDeleteCandidate = nil
         }
@@ -560,6 +575,72 @@ final class AppState {
         return nil
     }
 
+    /// Removes the audio track from each video, remuxing it in place (the video
+    /// stream is copied, not re-encoded). The original is moved to the Trash as a
+    /// recoverable backup and the audio-free file takes its place; a video currently
+    /// on screen is reloaded and resumed at its position. Returns a message when some
+    /// files couldn't be processed.
+    func stripAudio(from files: [PlaylistFile]) async -> String? {
+        guard let playlist = files.first?.playlist else { return nil }
+        guard let folderURL = beginFolderAccess(to: playlist) else { return nil }
+        defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
+
+        var failed = 0
+        for file in files {
+            strippingFileIDs.insert(file.id)
+            let ok = await stripAudio(file, in: folderURL)
+            strippingFileIDs.remove(file.id)
+            if !ok { failed += 1 }
+        }
+
+        guard failed == 0 else {
+            return failed == files.count
+                ? "Couldn't remove the audio."
+                : "\(failed) of \(files.count) files couldn't have their audio removed."
+        }
+        return nil
+    }
+
+    /// Remuxes one file without its audio and swaps it in, with the playlist folder's
+    /// scoped access already open. Returns whether it succeeded.
+    private func stripAudio(_ file: PlaylistFile, in folderURL: URL) async -> Bool {
+        let fm = FileManager.default
+        let source = folderURL.appending(path: file.relativePath)
+        guard fm.fileExists(atPath: source.path) else { return false }
+
+        // mpv writes the result beside the original as a hidden sibling: a scan in
+        // flight skips dotfiles, and a same-volume rename into place can't fail for
+        // space once the bytes are written. Cleaned up if anything before the swap fails.
+        let sidecar = source.deletingLastPathComponent()
+            .appending(path: ".shutapla-strip-\(UUID().uuidString).\(source.pathExtension)")
+        defer { try? fm.removeItem(at: sidecar) }
+
+        guard await AudioStripper.stripAudio(at: source, to: sidecar) else { return false }
+
+        // Capture the live position just before the swap so the reload looks seamless,
+        // and whether playback was paused so the reload doesn't resume it. Only the file
+        // showing on the visual channel needs reloading.
+        let onScreen = coordinator.visualCurrentFile?.id == file.id ? coordinator.visualPlaylist : nil
+        let resumeAt = onScreen != nil ? coordinator.visualCurrentTime : nil
+        let wasPaused = onScreen?.playbackState == .paused
+
+        do {
+            try fm.trashItem(at: source, resultingItemURL: nil)
+            try fm.moveItem(at: sidecar, to: source)
+        } catch {
+            return false
+        }
+
+        // The player still holds the trashed original open; reload the path to pick up
+        // the audio-free file and seek back to where it was.
+        if let onScreen, let resumeAt {
+            coordinator.jump(onScreen, to: file)
+            coordinator.seek(onScreen, to: resumeAt)
+            if wasPaused { coordinator.pause(onScreen) }
+        }
+        return true
+    }
+
     /// Reshuffles the playable files into a new random order; skipped files keep
     /// their place after the playable ones and are never shuffled in.
     func reshuffle(_ playlist: Playlist) {
@@ -680,6 +761,28 @@ final class AppState {
         pendingManagerDelete = []
         guard !targets.isEmpty else { return }
         Task { if let error = await deleteFiles(targets) { managerDeleteError = error } }
+    }
+
+    /// Requests confirmation to remove the audio track from a video-row's selection
+    /// (its Remove Audio command, in Manager or the player overlay). Routes through
+    /// AppState so `pendingAudioStrip` stays state it owns and prunes when a re-scan
+    /// removes a referenced file.
+    func requestAudioStrip(_ files: [PlaylistFile]) {
+        pendingAudioStrip = files
+    }
+
+    /// Dismisses the remove-audio confirmation without changing anything.
+    func cancelAudioStrip() {
+        pendingAudioStrip = []
+    }
+
+    /// Removes the audio from the videos pending in the confirmation, surfacing any
+    /// failure through `audioStripError`.
+    func confirmAudioStrip() {
+        let targets = pendingAudioStrip
+        pendingAudioStrip = []
+        guard !targets.isEmpty else { return }
+        Task { if let error = await stripAudio(from: targets) { audioStripError = error } }
     }
 
     /// Dismisses the playlist-wide tag-removal confirmation without removing anything.

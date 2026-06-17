@@ -77,6 +77,28 @@ struct PlayerView: View {
         } message: { file in
             Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
         }
+        .alert(
+            "Remove Audio?",
+            isPresented: Binding(
+                get: { !appState.pendingAudioStrip.isEmpty },
+                set: { if !$0 { appState.cancelAudioStrip() } }
+            )
+        ) {
+            Button("Remove Audio", role: .destructive) { appState.confirmAudioStrip() }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { appState.cancelAudioStrip() }
+                .keyboardShortcut(.cancelAction)
+        } message: {
+            Text("The original is moved to the Trash; playback resumes where it left off.")
+        }
+        .alert(
+            "Couldn't remove audio",
+            isPresented: Binding(get: { appState.audioStripError != nil }, set: { if !$0 { appState.audioStripError = nil } })
+        ) {
+            Button("OK", role: .cancel) { appState.audioStripError = nil }
+        } message: {
+            Text(appState.audioStripError ?? "")
+        }
     }
 
     /// Shown when the active filter excludes every file: the player stays in Player

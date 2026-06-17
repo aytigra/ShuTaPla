@@ -1,0 +1,11 @@
+// Clang module wrapping the FFmpeg libraries (libavformat/libavcodec/libavutil) for Swift.
+// Marked [system] so warnings from the FFmpeg headers are suppressed. Imported from Swift as
+// `import Cffmpeg`. The module is discovered via SWIFT_INCLUDE_PATHS (this directory); the
+// FFmpeg headers it pulls in resolve through HEADER_SEARCH_PATHS. No `link` directive — the
+// app target links the libraries via OTHER_LDFLAGS, and the test target loads them at runtime
+// through the host app. These are the same dylibs libmpv already depends on and the bundle
+// step already embeds.
+module Cffmpeg [system] {
+    header "shim.h"
+    export *
+}

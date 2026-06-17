@@ -42,6 +42,13 @@ Each skill has a `SKILL.md` with workflow decision trees and a `references/` dir
 
 ## Testing
 
+**Tests are first-class and lead the work, not trail it.** Write the test before the change it covers, and run it to watch it behave as expected:
+- **Fixing a bug:** write a failing test that reproduces it *first*, confirm it fails for the stated reason, then fix the code and watch it pass. A bug fixed without a reproducing test is not done.
+- **Refactoring:** make sure the behavior is covered by passing tests *before* you start, so the refactor is verified to preserve it. Add the missing coverage first if it isn't there.
+- **New feature:** cover the testable logic as you build it, not as a follow-up. Prefer testing the stateless/pure core (helpers, services with injectable seams) where a view layer makes direct unit testing impractical.
+
+Treat "where is the test?" as part of the definition of done — don't report a change complete without it.
+
 **Avoid test traps — they hang the run, not just the test.** A test that hits `EXC_BREAKPOINT` (code=1) or `EXC_BAD_ACCESS` doesn't fail cleanly: it crashes the test host mid-run, so the run never returns a result and the build/test tool (and the agent driving it) stalls. Treat "could this trap?" as a first-class concern when writing tests. The three trap classes seen so far, and how to write around each:
 
 1. **Orphaned `ModelContext` → `EXC_BREAKPOINT` on the next `fetch`.** Hold the `ModelContainer` for the whole test body, pulling `container.mainContext` locally — as `ModelTests.swift` does. A helper that builds a container internally and returns only `container.mainContext` lets the container deallocate when the helper returns; the orphaned context traps on its next `fetch` — surfacing at the fetch site, e.g. `AppStateModel.fetchOrCreate` (which `AppState.init` calls, so even constructing `AppState` traps). Plain `init`-and-assert tests trap most reliably; tests with intervening `insert(...)` or `await` may survive by chance because they stretch the autorelease pool, so the failure can look intermittent.

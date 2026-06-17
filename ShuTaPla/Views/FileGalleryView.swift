@@ -95,6 +95,7 @@ struct FileGalleryView: View {
             playlist: playlist,
             isSelected: appState.selectedFileIDs.contains(file.id),
             isRenaming: renamingID == file.id,
+            isStripping: appState.strippingFileIDs.contains(file.id),
             draftName: $draftName,
             onCommitRename: { commitRename(file) },
             onCancelRename: { renamingID = nil }
@@ -104,12 +105,13 @@ struct FileGalleryView: View {
         // until the double-click interval elapses, making selection feel laggy.
         .onTapGesture { handleTap(file) }
         .contextMenu {
-            Button("Rename") { beginRename(file) }
-            Button("Show in Finder") { appState.revealInFinder(file) }
-            Divider()
-            Button("Delete", role: .destructive) {
-                confirmDelete(FileSelection.deleteTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles))
-            }
+            FileContextMenu(
+                file: file,
+                playlist: playlist,
+                onRename: { beginRename(file) },
+                onRemoveAudio: { appState.requestAudioStrip(targets(for: file)) },
+                onDelete: { confirmDelete(targets(for: file)) }
+            )
         }
         // Pin each tile to the top of its grid row so cells with one- and two-line
         // captions line up at the thumbnail rather than centering against each other.
@@ -120,6 +122,12 @@ struct FileGalleryView: View {
 
     private var visibleFiles: [PlaylistFile] {
         appState.filteredFiles
+    }
+
+    /// The files a context-menu action targets: the multi-selection when the clicked
+    /// cell is part of it, otherwise just that cell.
+    private func targets(for file: PlaylistFile) -> [PlaylistFile] {
+        FileSelection.actionTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles)
     }
 
     // MARK: - Selection
@@ -170,6 +178,7 @@ private struct GalleryCell: View {
     let playlist: Playlist
     let isSelected: Bool
     let isRenaming: Bool
+    let isStripping: Bool
     @Binding var draftName: String
     let onCommitRename: () -> Void
     let onCancelRename: () -> Void
@@ -247,6 +256,14 @@ private struct GalleryCell: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
+            }
+            // A dimming scrim with a spinner while this cell's audio is being removed.
+            .overlay {
+                if isStripping {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.black.opacity(0.4))
+                        .overlay { ProgressView().controlSize(.small) }
+                }
             }
     }
 

@@ -73,6 +73,7 @@ struct FileListView: View {
             playlist: playlist,
             isSelected: appState.selectedFileIDs.contains(file.id),
             isRenaming: renamingID == file.id,
+            isStripping: appState.strippingFileIDs.contains(file.id),
             draftName: $draftName,
             onCommitRename: { commitRename(file) },
             onCancelRename: { renamingID = nil }
@@ -82,12 +83,13 @@ struct FileListView: View {
         // until the double-click interval elapses, making selection feel laggy.
         .onTapGesture { handleTap(file) }
         .contextMenu {
-            Button("Rename") { beginRename(file) }
-            Button("Show in Finder") { appState.revealInFinder(file) }
-            Divider()
-            Button("Delete", role: .destructive) {
-                confirmDelete(FileSelection.deleteTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles))
-            }
+            FileContextMenu(
+                file: file,
+                playlist: playlist,
+                onRename: { beginRename(file) },
+                onRemoveAudio: { appState.requestAudioStrip(targets(for: file)) },
+                onDelete: { confirmDelete(targets(for: file)) }
+            )
         }
     }
 
@@ -97,6 +99,12 @@ struct FileListView: View {
     /// and kept in sync with the tag/service filter.
     private var visibleFiles: [PlaylistFile] {
         appState.filteredFiles
+    }
+
+    /// The files a context-menu action targets: the multi-selection when the clicked
+    /// row is part of it, otherwise just that row.
+    private func targets(for file: PlaylistFile) -> [PlaylistFile] {
+        FileSelection.actionTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles)
     }
 
     // MARK: - Selection

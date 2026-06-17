@@ -42,9 +42,9 @@ enum FileSelection {
         }
     }
 
-    /// The files a delete action should target: the whole selection when the
+    /// The files a context-menu action should target: the whole selection when the
     /// clicked file is part of a multi-selection, otherwise just that file.
-    static func deleteTargets(
+    static func actionTargets(
         for file: PlaylistFile,
         selection: Set<UUID>,
         visible: [PlaylistFile]

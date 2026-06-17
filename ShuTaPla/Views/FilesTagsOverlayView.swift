@@ -128,6 +128,7 @@ struct FilesTagsOverlayView: View {
             playlist: playlist,
             isSelected: coordinator.visualCurrentFile?.id == file.id,
             isRenaming: renamingID == file.id,
+            isStripping: false,
             draftName: $draftName,
             onCommitRename: { commitRename(file) },
             onCancelRename: { renamingID = nil }
@@ -139,10 +140,13 @@ struct FilesTagsOverlayView: View {
             overlays.closeFilesTags()
         }
         .contextMenu {
-            Button("Rename") { beginRename(file) }
-            Button("Show in Finder") { appState.revealInFinder(file) }
-            Divider()
-            Button("Delete", role: .destructive) { appState.requestPlayerDelete(file) }
+            FileContextMenu(
+                file: file,
+                playlist: playlist,
+                onRename: { beginRename(file) },
+                onRemoveAudio: { appState.requestAudioStrip([file]) },
+                onDelete: { appState.requestPlayerDelete(file) }
+            )
         }
     }
 
