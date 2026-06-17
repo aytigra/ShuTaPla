@@ -83,14 +83,14 @@ struct PlaybackControlsBar: View {
 
     private var timeline: some View {
         HStack(spacing: 10) {
-            Text(format(coordinator.visualCurrentTime))
+            Text(coordinator.visualCurrentTime.formattedDuration)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
 
             Slider(value: scrubBinding, in: 0...max(coordinator.visualDuration, 0.1))
                 .disabled(coordinator.visualDuration <= 0)
 
-            Text(format(coordinator.visualDuration))
+            Text(coordinator.visualDuration.formattedDuration)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -159,11 +159,6 @@ struct PlaybackControlsBar: View {
 
     private var isPaused: Bool { playlist.playbackState == .paused }
 
-    private func format(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
 }
 
 /// A control-bar button style that reads as a button: padding gives it a real hit

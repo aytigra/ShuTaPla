@@ -57,6 +57,7 @@ struct FileListView: View {
     private func row(_ file: PlaylistFile) -> some View {
         FileRowView(
             file: file,
+            playlist: playlist,
             isSelected: appState.selectedFileIDs.contains(file.id),
             isRenaming: renamingID == file.id,
             draftName: $draftName,

@@ -125,6 +125,7 @@ struct FilesTagsOverlayView: View {
     private func row(_ file: PlaylistFile) -> some View {
         FileRowView(
             file: file,
+            playlist: playlist,
             isSelected: coordinator.visualCurrentFile?.id == file.id,
             isRenaming: renamingID == file.id,
             draftName: $draftName,

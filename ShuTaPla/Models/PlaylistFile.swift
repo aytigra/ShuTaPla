@@ -33,6 +33,10 @@ final class PlaylistFile {
     /// For file-position persistence (seconds).
     var lastPosition: TimeInterval?
 
+    /// Total running time in seconds, extracted on first display and cached here.
+    /// `nil` until known; always `nil` for image files, which have no timeline.
+    var duration: TimeInterval?
+
     /// Shuffled order within the playlist.
     var sortOrder: Int = 0
 

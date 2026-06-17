@@ -10,6 +10,7 @@
 import Testing
 import Foundation
 import AppKit
+import ImageIO
 @testable import ShuTaPla
 
 // MARK: - Helpers
@@ -45,6 +46,47 @@ private func pixelSize(of pngData: Data) -> (width: Int, height: Int)? {
     return (rep.pixelsWide, rep.pixelsHigh)
 }
 
+/// Writes a PNG whose every pixel has alpha 1.0 (`opaque`) or a uniform partial
+/// alpha (`!opaque`). `.copy` compositing replaces the freshly allocated bitmap's
+/// undefined contents outright, so the alpha is exactly what's filled.
+private func writeFilledPNG(width: Int, height: Int, opaque: Bool, to url: URL) throws {
+    guard let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    ) else { throw CocoaError(.fileWriteUnknown) }
+
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSGraphicsContext.current?.compositingOperation = .copy
+    NSColor(red: 0.8, green: 0.3, blue: 0.2, alpha: opaque ? 1.0 : 0.4).setFill()
+    NSRect(x: 0, y: 0, width: width, height: height).fill()
+
+    guard let data = rep.representation(using: .png, properties: [:]) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    try data.write(to: url)
+}
+
+/// Whether the encoded image carries an alpha channel, decoded straight from the
+/// thumbnail bytes. `nil` when the data can't be read as an image.
+private func hasAlphaChannel(_ data: Data) -> Bool? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+          let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+    switch cg.alphaInfo {
+    case .none, .noneSkipLast, .noneSkipFirst: return false
+    default: return true
+    }
+}
+
+/// Whether `data` is an ISO base-media container (HEIC), identified by the `ftyp`
+/// box at offset 4 — distinguishing it from the PNG the source images are.
+private func isISOMediaContainer(_ data: Data) -> Bool {
+    guard data.count >= 8 else { return false }
+    return data.subdata(in: 4..<8) == Data("ftyp".utf8)
+}
+
 // MARK: - Tests
 
 struct ThumbnailServiceTests {
@@ -56,12 +98,47 @@ struct ThumbnailServiceTests {
         let fileURL = dir.appending(path: "wide.png")
         try writePNG(width: 200, height: 100, to: fileURL)
 
-        let data = try #require(await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64))
+        let data = try #require(await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64).data)
         let size = try #require(pixelSize(of: data))
 
         // The longest edge is scaled to maxPixelSize; the aspect ratio is kept.
         #expect(max(size.width, size.height) == 64)
         #expect(size.width == 64 && size.height == 32)
+    }
+
+    @Test
+    func renderedThumbnailIsHeic() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writeFilledPNG(width: 64, height: 64, opaque: true, to: fileURL)
+
+        let data = try #require(await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64).data)
+        #expect(isISOMediaContainer(data), "thumbnail should be encoded as HEIC, not PNG")
+    }
+
+    @Test
+    func opaqueThumbnailDropsAlphaChannel() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "opaque.png")
+        try writeFilledPNG(width: 64, height: 64, opaque: true, to: fileURL)
+
+        let data = try #require(await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64).data)
+        // A fully opaque source has its redundant alpha channel flattened away.
+        #expect(hasAlphaChannel(data) == false)
+    }
+
+    @Test
+    func transparentThumbnailKeepsAlphaChannel() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "transparent.png")
+        try writeFilledPNG(width: 64, height: 64, opaque: false, to: fileURL)
+
+        let data = try #require(await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64).data)
+        // Genuine transparency is preserved rather than flattened.
+        #expect(hasAlphaChannel(data) == true)
     }
 
     @Test

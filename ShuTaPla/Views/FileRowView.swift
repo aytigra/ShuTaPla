@@ -10,11 +10,15 @@ import SwiftUI
 
 struct FileRowView: View {
     let file: PlaylistFile
+    let playlist: Playlist
     let isSelected: Bool
     let isRenaming: Bool
     @Binding var draftName: String
     let onCommitRename: () -> Void
     let onCancelRename: () -> Void
+
+    @Environment(DurationService.self) private var durations
+    @State private var duration: TimeInterval?
 
     var body: some View {
         Group {
@@ -29,6 +33,9 @@ struct FileRowView: View {
                     if !file.tags.isEmpty {
                         TagChips(tags: file.tags)
                     }
+                    if playlist.mediaType == .video {
+                        durationColumn
+                    }
                 }
             }
         }
@@ -37,6 +44,21 @@ struct FileRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
+        // Length is read once and cached on the model, so it appears instantly on
+        // later displays and across launches. Images have no timeline.
+        .task(id: file.id) {
+            guard playlist.mediaType == .video else { return }
+            duration = await durations.duration(for: file, in: playlist)
+        }
+    }
+
+    /// A fixed-width trailing column so the value right-aligns and the tag chips of
+    /// every row keep a common right edge whatever each duration's width.
+    private var durationColumn: some View {
+        Text(duration?.formattedDuration ?? "")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: 56, alignment: .trailing)
     }
 }
 

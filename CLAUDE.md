@@ -52,6 +52,8 @@ Each skill has a `SKILL.md` with workflow decision trees and a `references/` dir
 
 When a routing/logic test only needs the coordinator's synchronous bookkeeping, prefer an **image** playlist (the image engine has no libmpv) over a video/audio one to avoid trap class 3 entirely.
 
+**Real video samples for media tests live in `test_media/videos/` (repo root, not in a target).** Filenames carry the codec: `h264*.mp4`, `h265:hevc.mp4`, `mpeg-*.mpeg` (AVFoundation-decodable) and `vp8*.webm`, `vp9*.webm` (libmpv-only — the `MPVThumbnailer` fallback path). Tests reach them relative to `#filePath` (two levels up from `ShuTaPlaTests/` is the repo root), matching by prefix to stay robust to the bracketed tag suffixes and `(N)` variants in some names. These exercise the stateless extraction helpers (`ThumbnailService.renderThumbnail`, `MPVThumbnailer.frame`/`.duration`), which create and synchronously tear down their own short-lived mpv handles — no wakeup-scheduled drain, so trap class 3 doesn't apply.
+
 ## Xcode project structure
 
 This project uses Xcode **file system synchronized groups** (`PBXFileSystemSynchronizedRootGroup`). The following directories auto-sync with Xcode — files created on disk inside them appear in the Xcode project navigator automatically:

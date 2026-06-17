@@ -95,6 +95,7 @@ Playlist
       ├── taggingStatus: TaggingStatus // .valid | .untagged | .invalid
       ├── isSkipped: Bool              // unsupported / other-media-type file; kept for the skipped-files filter, never played or shuffled in
       ├── lastPosition: TimeInterval?  // for file-position persistence
+      ├── duration: TimeInterval?      // running time, extracted on first display; nil for images
       ├── sortOrder: Int               // shuffled order within playlist
       └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
@@ -363,13 +364,33 @@ Responsibilities:
     off the main actor.
 
 Key methods:
-  thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> NSImage?
+  thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> (image: NSImage?, duration: TimeInterval?)
   cachedThumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSImage?
 ```
 
 Thumbnails are generated lazily on first request and cached. The on-disk cache key is the SHA-256 of `relativePath + modification date + max pixel size`, so an edited file (or a different requested size) yields a fresh thumbnail. Generation and PNG decode run off the main actor: the `@MainActor` entry point reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoding off-main, so scrolling never blocks on a draw-time decode — see §10). `cachedThumbnail` is a synchronous in-memory lookup so a cell shown before paints without disk I/O or a placeholder flash. Each gallery cell loads via `.task(id:)`, which cancels the work when the cell scrolls off-screen.
 
-Video frames come from `AVAssetImageGenerator`; when it can't open the container (notably `.webm` and `.mkv`, which AVFoundation won't demux), generation falls back to **`MPVThumbnailer`** — a stateless helper that decodes one frame with libmpv, the same engine that plays those files. Each call spins a short-lived, windowless mpv instance with the `image` video output (`vo=image`), seeks 10% in, writes a single PNG to a private temp directory, and tears the handle down; the PNG is then downscaled through the same `imageThumbnail` path as still images. It owns a fresh handle per extraction and never touches the playback engines' `MPVClient` or its render context, so it is independent of the player's lifecycle. Extractions run on a small concurrent pool capped by a semaphore (2 at a time), since each is a full software decode and misses are rare once the disk cache is warm; a per-call deadline bounds a pathological decode.
+Video frames come from `AVAssetImageGenerator`; when it can't open the container (notably `.webm` and `.mkv`, which AVFoundation won't demux), generation falls back to **`MPVThumbnailer`** — a stateless helper that decodes one frame with libmpv, the same engine that plays those files. Each call spins a short-lived, windowless mpv instance with the `image` video output (`vo=image`), seeks 10% in, writes a single PNG to a private temp directory, and tears the handle down; the PNG is then downscaled through the same `imageThumbnail` path as still images. It owns a fresh handle per extraction and never touches the playback engines' `MPVClient` or its render context, so it is independent of the player's lifecycle. Extractions are serialized on a single background-QoS queue, since each is a full software decode and misses are rare once the disk cache is warm; a per-call deadline bounds a pathological decode.
+
+Generation also carries the video's **running time** back with the frame, since the decode already determines it: `AVAssetImageGenerator`'s path reads it from `AVURLAsset.load(.duration)` in parallel with the frame, and `MPVThumbnailer.frame` reads the loaded instance's `duration` property before tearing the handle down. `thumbnail` threads it up beside the image, so the gallery cell sets `PlaylistFile.duration` in the same continuation that delivers the thumbnail — the length badge appears *with* the thumbnail, never as a second pass. A thumbnail served from cache (disk or memory) reports no duration; the cell then relies on the persisted value, or `DurationService` for the rare case it is missing.
+
+### DurationService
+
+`@MainActor @Observable`, injected into the environment.
+
+```
+Responsibilities:
+  - Extract the running time of a video file (AVURLAsset.load(.duration), falling back
+    to a libmpv duration probe for containers AVFoundation can't open — see MPVThumbnailer).
+  - Cache the result on the model (PlaylistFile.duration) for instant later reads.
+
+Key method:
+  duration(for file: PlaylistFile, in playlist: Playlist) async -> TimeInterval?
+```
+
+This is the **standalone** path, used where no thumbnail is generated to carry the length along: the file-list rows (which have no thumbnails) and the gallery's cache-hit case (a thumbnail served from cache reports no duration). The `@MainActor` entry point returns `PlaylistFile.duration` when already known, otherwise a `nonisolated` worker resolves the bookmark, reads the duration, and writes it back onto the model; rows and cells load via `.task(id:)` for video playlists only (images have no timeline), and the persisted value means the indicator appears instantly on later displays and across launches. For AVFoundation-readable containers the length comes from `AVURLAsset.load(.duration)` — a moov-atom read, no frame decode. The webm/mkv fallback is **`MPVThumbnailer.duration(at:)`**, which loads the file into a windowless, paused mpv instance (`vo=null`) just far enough to read the demuxer's `duration` property — decoding nothing — on the same pool as frame extraction.
+
+In the **gallery**, a freshly generated thumbnail already delivers the length (see ThumbnailService), so the cell sets `PlaylistFile.duration` straight from the thumbnail result and only consults `DurationService` when the model still lacks a value (a cache-served thumbnail). A webm/mkv gallery cell therefore pays a single libmpv decode for both its thumbnail and its length, with no separate probe queued behind the frame extractions.
 
 ### BookmarkService
 

@@ -98,6 +98,9 @@ struct FileGalleryView: View {
                 confirmDelete(FileSelection.deleteTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles))
             }
         }
+        // Pin each tile to the top of its grid row so cells with one- and two-line
+        // captions line up at the thumbnail rather than centering against each other.
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Data
@@ -157,6 +160,7 @@ private struct GalleryCell: View {
     let onCancelRename: () -> Void
 
     @Environment(ThumbnailService.self) private var thumbnails
+    @Environment(DurationService.self) private var durations
     @State private var image: NSImage?
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
@@ -175,13 +179,23 @@ private struct GalleryCell: View {
         // thread on CoreMedia, and a lower band keeps that off the priority path.
         .task(id: thumbnailKey, priority: .utility) {
             // A previously generated thumbnail is served synchronously, so seen
-            // cells don't flash a placeholder while scrolling; otherwise generate
-            // it off the main actor.
+            // cells don't flash a placeholder while scrolling; otherwise generate it
+            // off the main actor. Generation reports the video's length in the same
+            // result — the decode already determined it — so the badge appears with
+            // the thumbnail rather than after a second pass. The length is persisted
+            // on the model, which the badge reads directly.
             if let cached = thumbnails.cachedThumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize) {
                 image = cached
-                return
+            } else {
+                let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
+                image = result.image
+                if let seconds = result.duration { file.duration = seconds }
             }
-            image = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
+            // A thumbnail served from cache (disk or memory) carries no length, so
+            // read it once if the model still lacks it. Images have no timeline.
+            if playlist.mediaType == .video, file.duration == nil {
+                _ = await durations.duration(for: file, in: playlist)
+            }
         }
     }
 
@@ -201,6 +215,17 @@ private struct GalleryCell: View {
                     Image(systemName: playlist.mediaType == .video ? "film" : "photo")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if let duration = file.duration {
+                    Text(duration.formattedDuration)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(5)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))

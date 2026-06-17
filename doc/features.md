@@ -140,6 +140,8 @@ For video and image playlists, the file list can be shown as:
 
 The choice is persisted per playlist. Audio playlists always use list view.
 
+For video playlists, each file shows its running time: a right-aligned column in the list (after the tag chips, which keep a common right edge) and a badge in the bottom-right corner of the gallery thumbnail. The length is read on first display and cached, so it appears instantly on later displays and across launches.
+
 ### File interactions
 
 - **Click** — select a file (also focuses it for the tag panel).

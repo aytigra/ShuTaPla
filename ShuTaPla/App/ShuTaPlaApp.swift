@@ -15,6 +15,7 @@ struct ShuTaPlaApp: App {
     let modelContainer: ModelContainer
     @State private var appState: AppState
     @State private var thumbnailService = ThumbnailService()
+    @State private var durationService = DurationService()
 
     init() {
         let schema = Schema([
@@ -40,6 +41,7 @@ struct ShuTaPlaApp: App {
                 .environment(appState)
                 .environment(appState.coordinator)
                 .environment(thumbnailService)
+                .environment(durationService)
                 .frame(minWidth: 800, minHeight: 600)
         }
         .modelContainer(modelContainer)
