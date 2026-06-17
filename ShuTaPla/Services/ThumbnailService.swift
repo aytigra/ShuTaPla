@@ -10,14 +10,20 @@
 //
 //  Generation runs off the main actor: the public entry point reads the model on
 //  the main actor, then hands Sendable values (bookmark, relative path, size) to
-//  `nonisolated` workers that resolve the bookmark, read the file, and return PNG
+//  `nonisolated` workers that resolve the bookmark, read the file, and return HEIC
 //  `Data` that the main actor turns back into an `NSImage`.
+//
+//  The in-memory cache is bounded by the decoded byte size of its images, so
+//  scrolling a large playlist evicts the least-recently-used thumbnails once the
+//  budget is reached rather than retaining every decoded bitmap. Reloading an
+//  evicted thumbnail is a cheap disk PNG decode.
 //
 
 import Foundation
 import AppKit
 import AVFoundation
 import ImageIO
+import UniformTypeIdentifiers
 import CryptoKit
 import Observation
 
@@ -26,12 +32,20 @@ import Observation
 final class ThumbnailService {
 
     /// Decoded thumbnails, keyed by cache key. Spares re-reads while scrolling.
+    /// Bounded by `cacheByteBudget` of decoded pixels; over budget, the cache
+    /// evicts least-recently-used entries.
     @ObservationIgnored private let memory = NSCache<NSString, NSImage>()
+
+    /// Decoded-pixel ceiling for `memory`. A 440 px thumbnail decodes to ~0.6 MB,
+    /// so 128 MB holds ~200 of them — comfortably more than any viewport plus its
+    /// scroll buffer, while capping the footprint of a large playlist.
+    private static let cacheByteBudget = 128 * 1024 * 1024
 
     /// Where generated thumbnails are persisted between launches.
     @ObservationIgnored private let cacheDirectory: URL
 
     init(cacheDirectory: URL? = nil) {
+        memory.totalCostLimit = Self.cacheByteBudget
         if let cacheDirectory {
             self.cacheDirectory = cacheDirectory
         } else {
@@ -73,8 +87,16 @@ final class ThumbnailService {
             cacheDirectory: cacheDirectory
         ) else { return nil }
 
-        memory.setObject(boxed.image, forKey: memKey)
+        memory.setObject(boxed.image, forKey: memKey, cost: Self.byteCost(of: boxed.image))
         return boxed.image
+    }
+
+    /// Decoded byte size of an image, used as its cache cost: pixel area × 4 (RGBA).
+    /// The image is built from a `CGImage`, so its first representation carries the
+    /// true pixel dimensions.
+    private static func byteCost(of image: NSImage) -> Int {
+        guard let rep = image.representations.first else { return 0 }
+        return rep.pixelsWide * rep.pixelsHigh * 4
     }
 
     /// A synchronous in-memory hit for the scroll-hot path — no disk I/O, so a
@@ -145,7 +167,7 @@ final class ThumbnailService {
         key: String,
         cacheDirectory: URL
     ) async -> Data? {
-        let diskURL = cacheDirectory.appending(path: "\(key).png")
+        let diskURL = cacheDirectory.appending(path: "\(key).heic")
         if let data = try? Data(contentsOf: diskURL) { return data }
 
         guard let resolved = try? BookmarkService.resolve(bookmark) else { return nil }
@@ -161,7 +183,7 @@ final class ThumbnailService {
         return data
     }
 
-    /// Like `produceData`, but additionally decodes the PNG into a fully
+    /// Like `produceData`, but additionally decodes the encoded bytes into a fully
     /// rasterized `NSImage` off the main actor. Wrapping the result lets it cross
     /// back to the main actor without a draw-time decode on the scroll path.
     @concurrent
@@ -190,14 +212,29 @@ final class ThumbnailService {
 
     // MARK: - Generation
 
-    /// Renders a thumbnail for a file on disk and encodes it as PNG. Used by
+    /// Renders a thumbnail for a file on disk and encodes it as HEIC. Used by
     /// `produceData` and exercised directly by tests.
     nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> Data? {
         let cgImage = isVideo
             ? await videoFrame(at: fileURL, maxPixelSize: maxPixelSize)
             : imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize)
         guard let cgImage else { return nil }
-        return NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        return encodeHEIC(cgImage)
+    }
+
+    /// Encodes a thumbnail as HEIC. HEVC intra-frame compression is several times
+    /// smaller than PNG for photographic content and is hardware-accelerated on
+    /// Apple silicon; it is lossy at `quality` and preserves alpha.
+    private nonisolated static func encodeHEIC(_ cgImage: CGImage, quality: CGFloat = 0.8) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data, UTType.heic.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, cgImage, [
+            kCGImageDestinationLossyCompressionQuality: quality
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
     }
 
     /// Downscales a still image (or a frame mpv has already written to disk) to

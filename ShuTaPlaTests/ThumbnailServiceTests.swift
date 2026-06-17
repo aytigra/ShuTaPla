@@ -117,7 +117,7 @@ struct ThumbnailServiceTests {
         // Replace the cached bytes with a sentinel: a true cache hit returns these
         // verbatim instead of regenerating from the source image.
         let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 64))
-        let cacheFile = cacheDir.appending(path: "\(key).png")
+        let cacheFile = cacheDir.appending(path: "\(key).heic")
         let sentinel = Data("SENTINEL".utf8)
         try sentinel.write(to: cacheFile)
 
