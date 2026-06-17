@@ -1,2 +1,37 @@
+# macOS
+.DS_Store
 
+# Xcode — user-specific state (never shared)
+**/xcuserdata/
+
+# Obj-C / Swift specific
+*.hmap
+
+# App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output
+build/
+
+# Test media (local fixtures)
 test_media
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# NOTE: this project tracks its hand-maintained ShuTaPla.xcodeproj/project.pbxproj.
+# Do NOT add *.pbxproj or *.xcodeproj here — the repo needs them to open and build.
