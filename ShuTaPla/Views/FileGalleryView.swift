@@ -3,9 +3,9 @@
 //  ShuTaPla
 //
 //  The Manager center gallery: a `LazyVGrid` of thumbnail cells over the same
-//  filtered files as the list view (`AppState.filteredFiles`), with identical
-//  interactions — click / shift-click / cmd-click selection, double-click to
-//  play, inline rename, and a per-cell context menu. Each cell loads its
+//  filtered files as the list view (`AppState.filteredFiles`). Selection, rename,
+//  scroll, and the context menu are handled by the shared `FileCollectionView`;
+//  this names the gallery presentation and supplies the cell. Each cell loads its
 //  thumbnail asynchronously and cancels the load when scrolled off-screen.
 //
 
@@ -17,156 +17,23 @@ struct FileGalleryView: View {
     let confirmDelete: ([PlaylistFile]) -> Void
     let reportError: (String) -> Void
 
-    @Environment(AppState.self) private var appState
-
-    @State private var anchor: UUID?
-    @State private var renamingID: UUID?
-    @State private var draftName = ""
-    // A mouse click already targets a visible cell, so the auto-scroll that keeps the
-    // keyboard selection centered would only jar the view. Set when a click changes
-    // the selection, consumed by the next selection-change scroll.
-    @State private var skipSelectionScroll = false
-
-    private static let minItemWidth: CGFloat = 150
-    private static let gridSpacing: CGFloat = 12
-    private let columns = [GridItem(.adaptive(minimum: minItemWidth, maximum: 220), spacing: gridSpacing)]
-
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
-                    ForEach(visibleFiles) { file in
-                        cell(file)
-                            .id(file.id)
-                    }
-                }
-                .padding(Self.gridSpacing)
-            }
-            .overlay {
-                if visibleFiles.isEmpty {
-                    ContentUnavailableView("No Files", systemImage: "doc")
-                }
-            }
-            // Track the live column count so keyboard arrows can navigate in 2D.
-            .background {
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { appState.fileGridColumns = Self.columnCount(for: geo.size.width) }
-                        .onChange(of: geo.size.width) { _, width in
-                            appState.fileGridColumns = Self.columnCount(for: width)
-                        }
-                }
-            }
-            // Keep the keyboard-driven selection (single cell) visible as it moves. A
-            // mouse-driven change skips this — the clicked cell is already on screen.
-            .onChange(of: appState.selectedFileIDs) { _, ids in
-                if skipSelectionScroll { skipSelectionScroll = false; return }
-                guard ids.count == 1, let id = ids.first else { return }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
-            }
-            // Selecting a playlist (or re-selecting the current one) asks to re-center
-            // the resume file even when the selection didn't move. Deferred a layout
-            // pass so a just-switched playlist's cells exist for `scrollTo` to land on.
-            .onChange(of: appState.scrollSelectionToken) { _, _ in
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
-            }
-            // Returning from the player selects the last-played file before this view
-            // mounts, so `onChange` never fires for it. Defer past the first layout pass
-            // so the lazy grid has realized cells for `scrollTo` to land on.
-            .onAppear {
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
-                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
-            }
-        }
-    }
-
-    /// Mirrors `LazyVGrid`'s adaptive packing: as many `minItemWidth` columns as fit
-    /// in the padded width, separated by `gridSpacing`.
-    static func columnCount(for width: CGFloat) -> Int {
-        let available = width - gridSpacing * 2          // outer padding
-        guard available > 0 else { return 1 }
-        return max(1, Int((available + gridSpacing) / (minItemWidth + gridSpacing)))
-    }
-
-    private func cell(_ file: PlaylistFile) -> some View {
-        GalleryCell(
-            file: file,
+        FileCollectionView(
             playlist: playlist,
-            isSelected: appState.selectedFileIDs.contains(file.id),
-            isRenaming: renamingID == file.id,
-            isStripping: appState.strippingFileIDs.contains(file.id),
-            draftName: $draftName,
-            onCommitRename: { commitRename(file) },
-            onCancelRename: { renamingID = nil }
-        )
-        // A single tap gesture branching on the event's click count: attaching a
-        // separate `count: 2` gesture would force SwiftUI to delay the single click
-        // until the double-click interval elapses, making selection feel laggy.
-        .onTapGesture { handleTap(file) }
-        .contextMenu {
-            FileContextMenu(
-                file: file,
-                playlist: playlist,
-                onRename: { beginRename(file) },
-                onRemoveAudio: { appState.requestAudioStrip(targets(for: file)) },
-                onDelete: { confirmDelete(targets(for: file)) }
+            layout: .gallery,
+            confirmDelete: confirmDelete,
+            reportError: reportError
+        ) { config in
+            GalleryCell(
+                file: config.file,
+                playlist: config.playlist,
+                isSelected: config.isSelected,
+                isRenaming: config.isRenaming,
+                isStripping: config.isStripping,
+                draftName: config.draftName,
+                onCommitRename: config.onCommitRename,
+                onCancelRename: config.onCancelRename
             )
-        }
-        // Pin each tile to the top of its grid row so cells with one- and two-line
-        // captions line up at the thumbnail rather than centering against each other.
-        .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    // MARK: - Data
-
-    private var visibleFiles: [PlaylistFile] {
-        appState.filteredFiles
-    }
-
-    /// The files a context-menu action targets: the multi-selection when the clicked
-    /// cell is part of it, otherwise just that cell.
-    private func targets(for file: PlaylistFile) -> [PlaylistFile] {
-        FileSelection.actionTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles)
-    }
-
-    // MARK: - Selection
-
-    /// A double-click plays the file; a single click adjusts the selection.
-    private func handleTap(_ file: PlaylistFile) {
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            appState.beginPlayback(of: playlist, startingAt: file)
-        } else {
-            handleClick(file)
-        }
-    }
-
-    private func handleClick(_ file: PlaylistFile) {
-        let before = appState.selectedFileIDs
-        FileSelection.apply(
-            click: file.id,
-            modifiers: NSEvent.modifierFlags,
-            in: visibleFiles,
-            selection: &appState.selectedFileIDs,
-            anchor: &anchor
-        )
-        if appState.selectedFileIDs != before { skipSelectionScroll = true }
-    }
-
-    // MARK: - Rename
-
-    private func beginRename(_ file: PlaylistFile) {
-        draftName = file.fileName
-        renamingID = file.id
-    }
-
-    private func commitRename(_ file: PlaylistFile) {
-        let name = draftName
-        renamingID = nil
-        Task {
-            if let error = await appState.renameFile(file, to: name) {
-                reportError(error)
-            }
         }
     }
 }

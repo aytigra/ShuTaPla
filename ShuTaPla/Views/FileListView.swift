@@ -2,148 +2,36 @@
 //  FileListView.swift
 //  ShuTaPla
 //
-//  The Manager center file list: a `LazyVStack` of rows for the playlist's
-//  filtered files (`AppState.filteredFiles`), with click / shift-click / cmd-click
-//  selection, double-click to play, inline rename, and a per-row context menu.
-//  The active tag or service filter decides what appears here. The gallery
-//  presentation of the same files lives in `FileGalleryView`.
+//  The Manager center file list: a divided `LazyVStack` of `FileRowView`s over the
+//  playlist's filtered files. Selection, rename, scroll, and the context menu are
+//  handled by the shared `FileCollectionView`; this names the list presentation and
+//  supplies the row. The gallery presentation of the same files is `FileGalleryView`.
 //
 
 import SwiftUI
-import AppKit
 
 struct FileListView: View {
     let playlist: Playlist
     let confirmDelete: ([PlaylistFile]) -> Void
     let reportError: (String) -> Void
 
-    @Environment(AppState.self) private var appState
-
-    @State private var anchor: UUID?
-    @State private var renamingID: UUID?
-    @State private var draftName = ""
-    // A mouse click already targets a visible row, so the auto-scroll that keeps the
-    // keyboard selection centered would only jar the view. Set when a click changes
-    // the selection, consumed by the next selection-change scroll.
-    @State private var skipSelectionScroll = false
-
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(visibleFiles) { file in
-                        row(file)
-                            .id(file.id)
-                        Divider()
-                    }
-                }
-            }
-            .overlay {
-                if visibleFiles.isEmpty {
-                    ContentUnavailableView("No Files", systemImage: "doc")
-                }
-            }
-            // Keep the keyboard-driven selection (single row) visible as it moves. A
-            // mouse-driven change skips this — the clicked row is already on screen.
-            .onChange(of: appState.selectedFileIDs) { _, ids in
-                if skipSelectionScroll { skipSelectionScroll = false; return }
-                guard ids.count == 1, let id = ids.first else { return }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
-            }
-            // Selecting a playlist (or re-selecting the current one) asks to re-center
-            // the resume file even when the selection didn't move. Deferred a layout
-            // pass so a just-switched playlist's rows exist for `scrollTo` to land on.
-            .onChange(of: appState.scrollSelectionToken) { _, _ in
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
-            }
-            // Returning from the player selects the last-played file before this view
-            // mounts, so `onChange` never fires for it. Defer past the first layout pass
-            // so the lazy stack has realized rows for `scrollTo` to land on.
-            .onAppear {
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
-                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
-            }
-        }
-    }
-
-    private func row(_ file: PlaylistFile) -> some View {
-        FileRowView(
-            file: file,
+        FileCollectionView(
             playlist: playlist,
-            isSelected: appState.selectedFileIDs.contains(file.id),
-            isRenaming: renamingID == file.id,
-            isStripping: appState.strippingFileIDs.contains(file.id),
-            draftName: $draftName,
-            onCommitRename: { commitRename(file) },
-            onCancelRename: { renamingID = nil }
-        )
-        // A single tap gesture branching on the event's click count: attaching a
-        // separate `count: 2` gesture would force SwiftUI to delay the single click
-        // until the double-click interval elapses, making selection feel laggy.
-        .onTapGesture { handleTap(file) }
-        .contextMenu {
-            FileContextMenu(
-                file: file,
-                playlist: playlist,
-                onRename: { beginRename(file) },
-                onRemoveAudio: { appState.requestAudioStrip(targets(for: file)) },
-                onDelete: { confirmDelete(targets(for: file)) }
+            layout: .list,
+            confirmDelete: confirmDelete,
+            reportError: reportError
+        ) { config in
+            FileRowView(
+                file: config.file,
+                playlist: config.playlist,
+                isSelected: config.isSelected,
+                isRenaming: config.isRenaming,
+                isStripping: config.isStripping,
+                draftName: config.draftName,
+                onCommitRename: config.onCommitRename,
+                onCancelRename: config.onCancelRename
             )
-        }
-    }
-
-    // MARK: - Data
-
-    /// The filtered, sorted files for the selected playlist, cached on `AppState`
-    /// and kept in sync with the tag/service filter.
-    private var visibleFiles: [PlaylistFile] {
-        appState.filteredFiles
-    }
-
-    /// The files a context-menu action targets: the multi-selection when the clicked
-    /// row is part of it, otherwise just that row.
-    private func targets(for file: PlaylistFile) -> [PlaylistFile] {
-        FileSelection.actionTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles)
-    }
-
-    // MARK: - Selection
-
-    /// A double-click plays the file; a single click adjusts the selection.
-    private func handleTap(_ file: PlaylistFile) {
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            appState.beginPlayback(of: playlist, startingAt: file)
-        } else {
-            handleClick(file)
-        }
-    }
-
-    private func handleClick(_ file: PlaylistFile) {
-        let before = appState.selectedFileIDs
-        FileSelection.apply(
-            click: file.id,
-            modifiers: NSEvent.modifierFlags,
-            in: visibleFiles,
-            selection: &appState.selectedFileIDs,
-            anchor: &anchor
-        )
-        if appState.selectedFileIDs != before { skipSelectionScroll = true }
-    }
-
-    // MARK: - Rename
-
-    private func beginRename(_ file: PlaylistFile) {
-        draftName = file.fileName
-        renamingID = file.id
-    }
-
-    private func commitRename(_ file: PlaylistFile) {
-        let name = draftName
-        renamingID = nil
-        Task {
-            if let error = await appState.renameFile(file, to: name) {
-                reportError(error)
-            }
         }
     }
 }
