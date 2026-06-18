@@ -61,6 +61,8 @@ private func addFile(
 private struct StubFileSystem: FileSystemProviding {
     let result: ScanResult
     var delta = UpdateDelta(added: [], removedRelativePaths: [])
+    /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
+    var trashFails = false
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { result }
     func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta {
@@ -69,7 +71,9 @@ private struct StubFileSystem: FileSystemProviding {
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
     }
-    func trashFiles(_ urls: [URL]) async throws -> TrashResult { TrashResult(trashed: urls, failed: []) }
+    func trashFiles(_ urls: [URL]) async throws -> TrashResult {
+        trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
+    }
 }
 
 // MARK: - Tests
@@ -510,6 +514,97 @@ struct AppStateTests {
         #expect(b.tags == ["shore"])
         #expect(playlist.tagFrequency["shore"] == 2)
         #expect(playlist.tagFrequency["beach"] == nil)
+    }
+
+    @Test func renameTagAcrossPlaylistRewritesActiveFilterAndSavedSearches() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.select(playlist)
+
+        // Filter by "beach" and remember it as a saved search.
+        appState.toggleFilterTag("beach")
+        appState.saveCurrentSearch()
+        #expect(appState.filteredFiles.count == 2)
+
+        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+
+        #expect(error == nil)
+        // The active filter and the saved search follow the rename rather than pointing
+        // at the now-nonexistent "beach", so the filtered list stays populated.
+        #expect(playlist.filterState.selectedTags == ["shore"])
+        #expect(playlist.savedSearches.first?.tags == ["shore"])
+        #expect(appState.filteredFiles.count == 2)
+
+        await appState.updateTask?.value
+    }
+
+    @Test func removeTagAcrossPlaylistDropsItFromFilterAndSavedSearches() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.select(playlist)
+        playlist.savedSearches = [
+            SavedSearch(tags: ["beach"], mode: .or),
+            SavedSearch(tags: ["beach", "sun"], mode: .or),
+        ]
+
+        appState.setFilterMode(.or)
+        appState.toggleFilterTag("beach")
+        appState.toggleFilterTag("sun")
+        #expect(appState.filteredFiles.count == 2)
+
+        await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
+
+        // The removed tag is gone from the active filter; the beach-only saved search is
+        // dropped (no tags left) and the combined one keeps only "sun".
+        #expect(playlist.filterState.selectedTags == ["sun"])
+        #expect(playlist.savedSearches == [SavedSearch(tags: ["sun"], mode: .or)])
+        #expect(appState.filteredFiles.count == 1)   // only the file that still has "sun"
+
+        await appState.updateTask?.value
+    }
+
+    @Test func confirmPlayerDeleteSurfacesFailureAndKeepsFile() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = addFile("a.mp4", order: 0, to: playlist, in: context)
+        var fileSystem = StubFileSystem(result: emptyResult)
+        fileSystem.trashFails = true
+        let appState = AppState(modelContext: context, fileSystem: fileSystem)
+
+        appState.playerDeleteCandidate = file
+        appState.confirmPlayerDelete()
+
+        // The fire-and-forget trash fails, so the player reports the message instead of
+        // silently advancing, and the file stays in the playlist.
+        var waited = 0
+        while appState.playerDeleteError == nil && waited < 100 {
+            try? await Task.sleep(for: .milliseconds(20))
+            waited += 1
+        }
+        #expect(appState.playerDeleteError != nil)
+        #expect(file.playlist === playlist)
+        #expect(playlist.files.contains { $0 === file })
     }
 
     // MARK: - Saved searches (Task 7)

@@ -191,14 +191,43 @@ struct ThumbnailServiceTests {
         let first = await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64)
         #expect(first != nil)
 
-        // Replace the cached bytes with a sentinel: a true cache hit returns these
-        // verbatim instead of regenerating from the source image.
+        // Replace the cached bytes with a different but still-decodable image: a true
+        // cache hit returns these verbatim instead of regenerating from the source.
         let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 64))
         let cacheFile = cacheDir.appending(path: "\(key).heic")
-        let sentinel = Data("SENTINEL".utf8)
+        let sentinelURL = dir.appending(path: "sentinel.png")
+        try writePNG(width: 16, height: 16, to: sentinelURL)
+        let sentinel = try Data(contentsOf: sentinelURL)
         try sentinel.write(to: cacheFile)
 
         let second = await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64)
         #expect(second == sentinel)
+    }
+
+    @Test
+    func corruptDiskCacheIsRegeneratedNotServed() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 64))
+        let cacheFile = cacheDir.appending(path: "\(key).heic")
+
+        // A 0-byte cache file (an interrupted prior write) reads successfully but can't
+        // be decoded, so it must not be treated as a hit.
+        try Data().write(to: cacheFile)
+
+        let data = try #require(
+            await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64)
+        )
+        // The bad file is discarded and a real thumbnail regenerated from the source.
+        #expect(!data.isEmpty)
+        #expect(isISOMediaContainer(data))
     }
 }

@@ -141,7 +141,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     /// Tears the instance down: frees the render context (must happen before the handle is
     /// destroyed), stops wakeups, finishes the event stream, and destroys the handle on
-    /// `queue`. Safe to call once; further commands become no-ops at the C layer.
+    /// `queue`. Idempotent. Commands and setters enqueued after this run as no-ops: each
+    /// guards on `isTerminated` (set here, on the same serial queue) so none touches the
+    /// freed handle.
     func shutdown() {
         freeRenderContext()
         queue.async {
@@ -241,6 +243,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// Loads `path`, optionally resuming at `startingAt` seconds.
     func loadFile(_ path: String, startingAt position: TimeInterval? = nil) {
         queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
             if let position {
                 command(self.handle, "loadfile", path, "replace", "0", "start=\(position)")
             } else {
@@ -254,17 +257,26 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     /// Stops playback and clears the playlist (mpv emits `end-file` with reason `stop`).
     func stop() {
-        queue.async { command(self.handle, "stop") }
+        queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            command(self.handle, "stop")
+        }
     }
 
     /// Seeks to an absolute position in seconds.
     func seek(to seconds: TimeInterval) {
-        queue.async { command(self.handle, "seek", String(seconds), "absolute") }
+        queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            command(self.handle, "seek", String(seconds), "absolute")
+        }
     }
 
     /// Seeks by a relative offset in seconds (may be negative).
     func seek(by seconds: TimeInterval) {
-        queue.async { command(self.handle, "seek", String(seconds), "relative") }
+        queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            command(self.handle, "seek", String(seconds), "relative")
+        }
     }
 
     // MARK: - Properties
@@ -295,6 +307,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
         }
         set {
             queue.async {
+                guard !self.isTerminated else { return }   // handle already destroyed by shutdown
                 mpv_set_property_string(self.handle, "loop-file", newValue ? "inf" : "no")
             }
         }
@@ -371,6 +384,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     private func setProperty(_ name: String, flag: Bool) {
         queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
             var value: Int32 = flag ? 1 : 0
             mpv_set_property(self.handle, name, MPV_FORMAT_FLAG, &value)
         }
@@ -378,6 +392,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     private func setProperty(_ name: String, double: Double) {
         queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
             var value = double
             mpv_set_property(self.handle, name, MPV_FORMAT_DOUBLE, &value)
         }

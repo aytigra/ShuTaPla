@@ -18,6 +18,8 @@ struct TagParserTests {
         ("[bea].png", .valid(["bea"])),
         ("clip [tag1 tag_2 abc].mp4", .valid(["tag1", "tag_2", "abc"])),
         ("[ beach   sunny ].jpg", .valid(["beach", "sunny"])),       // extra whitespace
+        ("clip [beach\tsunset].mp4", .valid(["beach", "sunset"])),   // tab separator
+        ("clip [beach\u{00A0}sunset].mp4", .valid(["beach", "sunset"])), // non-breaking space
         ("photo [Beach].jpg", .valid(["Beach"])),                    // casing preserved
 
         // Untagged — no brackets.

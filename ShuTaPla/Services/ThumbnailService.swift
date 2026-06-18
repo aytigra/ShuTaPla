@@ -156,6 +156,18 @@ final class ThumbnailService {
         return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
     }
 
+    /// Whether `data` decodes as a complete image, used to reject a 0-byte or truncated
+    /// disk-cache file before treating it as a hit. `statusComplete` distinguishes a
+    /// fully written thumbnail from a partial one without forcing a full raster decode.
+    private nonisolated static func isDecodableImage(_ data: Data) -> Bool {
+        guard !data.isEmpty,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0,
+              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete
+        else { return false }
+        return true
+    }
+
     private nonisolated static func digest(_ string: String) -> String {
         SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -175,7 +187,13 @@ final class ThumbnailService {
         cacheDirectory: URL
     ) async -> (data: Data?, duration: TimeInterval?) {
         let diskURL = cacheDirectory.appending(path: "\(key).heic")
-        if let data = try? Data(contentsOf: diskURL) { return (data, nil) }
+        if let data = try? Data(contentsOf: diskURL) {
+            if isDecodableImage(data) { return (data, nil) }
+            // A 0-byte or truncated cache file (an interrupted prior write) reads fine but
+            // can't be decoded into a thumbnail — without this it would "hit" forever and
+            // leave the cell stuck on a placeholder. Drop it and regenerate.
+            try? FileManager.default.removeItem(at: diskURL)
+        }
 
         guard let resolved = try? BookmarkService.resolve(bookmark) else { return (nil, nil) }
         let didAccess = resolved.url.startAccessingSecurityScopedResource()

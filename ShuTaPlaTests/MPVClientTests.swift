@@ -126,6 +126,28 @@ import Foundation
         #expect(client.isLooping == false)
     }
 
+    @Test func commandAfterShutdownDoesNotTouchDestroyedHandle() throws {
+        let client = try MPVClient(configuration: .audio)
+        client.loadFile(sine(seconds: 5))
+        client.shutdown()
+
+        // Every command/setter dispatches onto the same serial queue *after* shutdown's
+        // destroy block. The `isTerminated` guard makes each a no-op instead of calling
+        // `mpv_command`/`mpv_set_property` on the freed handle (a use-after-free).
+        client.loadFile(sine(seconds: 5))
+        client.play()
+        client.pause()
+        client.stop()
+        client.seek(to: 3)
+        client.seek(by: 1)
+        client.isLooping = true
+        client.volume = 70
+
+        // The synchronous read drains the queue (FIFO): had any write above touched the
+        // destroyed handle it would have crashed before this returns.
+        #expect(client.volume == 0)
+    }
+
     @Test func endOfFileEmittedAtNaturalEnd() async throws {
         let client = try MPVClient(configuration: .audio)
         defer { client.shutdown() }

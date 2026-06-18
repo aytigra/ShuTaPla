@@ -99,6 +99,14 @@ struct PlayerView: View {
         } message: {
             Text(appState.audioStripError ?? "")
         }
+        .alert(
+            "Couldn't move to Trash",
+            isPresented: Binding(get: { appState.playerDeleteError != nil }, set: { if !$0 { appState.playerDeleteError = nil } })
+        ) {
+            Button("OK", role: .cancel) { appState.playerDeleteError = nil }
+        } message: {
+            Text(appState.playerDeleteError ?? "")
+        }
     }
 
     /// Shown when the active filter excludes every file: the player stays in Player

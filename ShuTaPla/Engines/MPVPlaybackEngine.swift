@@ -90,6 +90,7 @@ class MPVPlaybackEngine {
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
         isPlaying = true               // optimistic; corrected by the next `pause` event
+        if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)
         client.play()
     }

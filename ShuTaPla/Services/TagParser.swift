@@ -48,7 +48,9 @@ nonisolated enum TagParser {
             return .untagged  // `[]` or whitespace-only group, cleaned up on next edit
         }
 
-        let tokens = content.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        // Split on any whitespace (space, tab, NBSP), matching the emptiness check above,
+        // so a tab/NBSP-separated group reads as multiple tokens rather than one invalid one.
+        let tokens = content.split(whereSeparator: \.isWhitespace).map(String.init)
         return tokens.allSatisfy(isValidTag) ? .valid(tokens) : .invalid
     }
 
@@ -207,7 +209,7 @@ nonisolated enum TagParser {
     }
 
     /// Case-insensitive de-duplication preserving order and first-seen casing.
-    private static func dedupe(_ tags: [String]) -> [String] {
+    static func dedupe(_ tags: [String]) -> [String] {
         var seen = Set<String>()
         var result: [String] = []
         for tag in tags where seen.insert(tag.lowercased()).inserted {

@@ -39,7 +39,12 @@ final class DurationService {
     /// Resolves the file and reads its duration, AVFoundation first then libmpv.
     /// Returns `nil` when the file is gone or neither decoder reports a positive
     /// length.
-    nonisolated static func extract(bookmark: Data, relativePath: String) async -> TimeInterval? {
+    ///
+    /// `@concurrent` so the resolve + decode lands on the cooperative pool: under
+    /// MainActor-default isolation a plain `nonisolated async` would run on the
+    /// caller's actor (the main actor for `duration(for:in:)`), freezing the UI while
+    /// the file list populates uncached lengths.
+    @concurrent nonisolated static func extract(bookmark: Data, relativePath: String) async -> TimeInterval? {
         guard let resolved = try? BookmarkService.resolve(bookmark) else { return nil }
         let didAccess = resolved.url.startAccessingSecurityScopedResource()
         defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
@@ -51,7 +56,7 @@ final class DurationService {
         return await MPVThumbnailer.duration(at: fileURL)
     }
 
-    private nonisolated static func avDuration(at url: URL) async -> TimeInterval? {
+    @concurrent private nonisolated static func avDuration(at url: URL) async -> TimeInterval? {
         let asset = AVURLAsset(url: url)
         guard let duration = try? await asset.load(.duration) else { return nil }
         let seconds = CMTimeGetSeconds(duration)

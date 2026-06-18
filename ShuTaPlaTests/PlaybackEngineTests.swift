@@ -92,6 +92,22 @@ import AppKit
         #expect(await poll(timeout: .seconds(5)) { !engine.client.isLooping })
     }
 
+    @Test func loadingANewFileResetsLooping() async throws {
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+
+        engine.load(makeFile("a"), resource: sine(30))
+        engine.setLooping(true)
+        #expect(engine.isLooping)
+        #expect(await poll(timeout: .seconds(5)) { engine.client.isLooping })
+
+        // Loading the next file (what explicit advance/previous do) starts it unlooped:
+        // looping is a per-file choice, not a sticky engine mode.
+        engine.load(makeFile("b"), resource: sine(30))
+        #expect(!engine.isLooping)
+        #expect(await poll(timeout: .seconds(5)) { !engine.client.isLooping })
+    }
+
     @Test func seekMovesTime() async throws {
         let engine = try AudioPlaybackEngine()
         defer { engine.shutdown() }

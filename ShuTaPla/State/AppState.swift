@@ -134,6 +134,9 @@ final class AppState {
     /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
     var playerDeleteCandidate: PlaylistFile?
 
+    /// A user-facing message when a Player-mode trash fails, surfaced by the player's alert.
+    var playerDeleteError: String?
+
     /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
     /// While set it overrides the selected playlist's persisted tag filter; it is
     /// mutually exclusive and never persisted.
@@ -869,8 +872,13 @@ final class AppState {
         guard let file = playerDeleteCandidate else { return }
         playerDeleteCandidate = nil
         Task {
-            _ = await deleteFiles([file])
-            coordinator.reconcileVisualSelection()
+            if let error = await deleteFiles([file]) {
+                // The trash failed (permissions/locked): keep the player on the file and
+                // tell the user, rather than silently advancing past an undeleted file.
+                playerDeleteError = error
+            } else {
+                coordinator.reconcileVisualSelection()
+            }
         }
     }
 
@@ -917,13 +925,39 @@ final class AppState {
             TagParser.sameTag($0, newTag) && !TagParser.sameTag($0, oldTag)
         }
         if collides { return "A tag named “\(newTag)” already exists." }
-        return await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
+        let error = await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
+        rewriteTagInFilters(playlist) { TagParser.sameTag($0, oldTag) ? newTag : $0 }
+        recomputeIfSelected(playlist)
+        return error
     }
 
     /// Removes a tag from every file in the playlist that carries it.
     @discardableResult
     func removeTagAcrossPlaylist(_ playlist: Playlist, tag: String) async -> String? {
-        await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
+        let error = await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
+        removeTagFromFilters(playlist, tag: tag)
+        recomputeIfSelected(playlist)
+        return error
+    }
+
+    /// Maps every tag in the playlist's active tag filter and its saved searches through
+    /// `transform`, keeping filter state in step with a playlist-wide tag rename so the
+    /// filter doesn't keep pointing at a tag that no longer exists on disk.
+    private func rewriteTagInFilters(_ playlist: Playlist, _ transform: (String) -> String) {
+        playlist.filterState.selectedTags = TagParser.dedupe(playlist.filterState.selectedTags.map(transform))
+        playlist.savedSearches = playlist.savedSearches.map {
+            SavedSearch(tags: TagParser.dedupe($0.tags.map(transform)), mode: $0.mode)
+        }
+    }
+
+    /// Drops `tag` from the playlist's active tag filter and its saved searches after a
+    /// playlist-wide removal. A saved search left with no tags is discarded.
+    private func removeTagFromFilters(_ playlist: Playlist, tag: String) {
+        playlist.filterState.selectedTags.removeAll { TagParser.sameTag($0, tag) }
+        playlist.savedSearches = playlist.savedSearches.compactMap {
+            let tags = $0.tags.filter { !TagParser.sameTag($0, tag) }
+            return tags.isEmpty ? nil : SavedSearch(tags: tags, mode: $0.mode)
+        }
     }
 
     /// Applies a filename transform to a batch of files (one scoped-access session,
