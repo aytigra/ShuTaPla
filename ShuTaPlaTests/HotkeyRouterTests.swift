@@ -380,6 +380,112 @@ import AppKit
         #expect(image.currentFileID == visualBefore)     // visual untouched
     }
 
+    // MARK: - Arrows as overlay controls
+
+    @Test func visualArrowUpOpensFilesAndTags() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+        let current = image.currentFileID
+
+        let overlay = MockOverlay()
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowUp, rightOption: false))
+        #expect(overlay.openFilesTagsCalls == 1)
+        #expect(image.currentFileID == current)   // opens the overlay rather than advancing
+    }
+
+    @Test func visualArrowUpIsANoOpWhenFilesTagsAlreadyOpen() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        overlay.isFilesTagsOpen = true
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowUp, rightOption: false))   // consumed, but neither opens nor closes
+        #expect(overlay.openFilesTagsCalls == 0)
+        #expect(overlay.closeFilesTagsCalls == 0)
+    }
+
+    @Test func visualArrowDownRevealsCompactAudio() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowDown, rightOption: false))
+        #expect(overlay.revealCompactAudioCalls == 1)
+    }
+
+    @Test func visualArrowDownClosesFilesAndTagsWhenOpen() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        overlay.isFilesTagsOpen = true
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowDown, rightOption: false))
+        #expect(overlay.closeFilesTagsCalls == 1)
+        #expect(overlay.revealCompactAudioCalls == 0)   // closes the overlay rather than revealing audio
+    }
+
+    @Test func audioArrowUpClosesTheAudioOverlay() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["a.mp3", "b.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: ["a.mp3", "b.mp3"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(audio)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        overlay.audioHoldsKeyContext = true
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowUp, rightOption: false))
+        #expect(overlay.closeAudioCalls == 1)
+    }
+
+    @Test func audioArrowDownExpandsToExtended() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["a.mp3", "b.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: ["a.mp3", "b.mp3"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(audio)
+        defer { appState.coordinator.shutdown() }
+
+        let overlay = MockOverlay()
+        overlay.audioHoldsKeyContext = true
+        let router = makeRouter(appState, overlay: overlay, closeSpy: CloseSpy())
+        #expect(router.route(.arrowDown, rightOption: false))
+        #expect(overlay.expandAudioCalls == 1)
+    }
+
     // MARK: - Text input passthrough
 
     @Test func textInputSwallowsEverything() throws {

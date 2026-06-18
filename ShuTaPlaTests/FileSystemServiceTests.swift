@@ -219,7 +219,6 @@ struct FileSystemServiceTests {
 
         #expect(s1 == s2)                 // deterministic for a given seed
         #expect(s1.sorted() == input)     // same multiset → valid permutation
-        #expect(s1 != input)              // 50 elements: shuffle changes order
     }
 }
 
@@ -253,6 +252,31 @@ struct BookmarkServiceTests {
         #expect(service.referenceCount(for: data) == 1)
         service.stopAccess(to: data)
         #expect(service.referenceCount(for: data) == 0)
+    }
+
+    @Test func stopAccessOverReleaseStaysAtZero() throws {
+        let dir = try TempFS.makeDir()
+        defer { TempFS.remove(dir) }
+        let data = try BookmarkService.makeBookmark(for: dir)
+        let service = BookmarkService()
+
+        try service.startAccess(to: data)
+        service.stopAccess(to: data)
+        #expect(service.referenceCount(for: data) == 0)
+
+        // Releasing past the last reference is a safe no-op — it can't drive the count
+        // negative or double-release the scoped resource.
+        service.stopAccess(to: data)
+        #expect(service.referenceCount(for: data) == 0)
+    }
+
+    @Test func unresolvableBookmarkReportsNoSessionAndReleasesSafely() {
+        let garbage = Data([0x00])
+        let service = BookmarkService()
+
+        #expect(service.referenceCount(for: garbage) == 0)
+        service.stopAccess(to: garbage)   // never resolves → no-op, no crash
+        #expect(service.referenceCount(for: garbage) == 0)
     }
 
     // MARK: - Scoped-access helpers

@@ -495,16 +495,19 @@ struct AppStateTests {
         addFile("c.mp4", order: 0, to: p2, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
+        // Each `select` launches its own background re-scan; await each before the next so
+        // no intermediate task is left running to touch a torn-down model after the body.
         appState.select(p1)
+        await appState.updateTask?.value
         #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored filter
 
         appState.select(p2)
+        await appState.updateTask?.value
         #expect(appState.filteredFiles.map(\.fileName) == ["c.mp4"])  // no filter
 
         appState.select(p1)
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored again
-
         await appState.updateTask?.value
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored again
     }
 
     // MARK: - Tag editing (Task 7)
@@ -729,6 +732,71 @@ struct AppStateTests {
 
         #expect(consumed)
         #expect(appState.selectedFileIDs.isEmpty)
+    }
+
+    @Test func moveFileSelectionClampsAtGridEdgesWithoutLosingSelection() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let names = (1...6).map { "\($0).jpg" }
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        playlist.preferences.viewMode = .gallery
+        for (i, name) in names.enumerated() { addFile(name, order: i, to: playlist, in: context) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = playlist
+        appState.recomputeFilteredFiles()
+        appState.fileGridColumns = 3
+        let files = appState.filteredFiles
+
+        // Top-left cell selected: moving up (−3 → row −1) and left (−1 → off the row start)
+        // both fall off the grid. The key is still consumed (no beep) but the selection
+        // is held in place rather than cleared or wrapped.
+        appState.selectedFileIDs = [files[0].id]
+        #expect(appState.moveFileSelection(.up))
+        #expect(appState.selectedFileIDs == [files[0].id])
+        #expect(appState.moveFileSelection(.left))
+        #expect(appState.selectedFileIDs == [files[0].id])
+
+        // Bottom-right cell: moving down (+3) and right (+1) both run past the last index.
+        appState.selectedFileIDs = [files[5].id]
+        #expect(appState.moveFileSelection(.down))
+        #expect(appState.selectedFileIDs == [files[5].id])
+        #expect(appState.moveFileSelection(.right))
+        #expect(appState.selectedFileIDs == [files[5].id])
+    }
+
+    @Test func saveCurrentSearchIsANoOpWithAnEmptyFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = playlist
+
+        // No tags selected → nothing to remember.
+        appState.saveCurrentSearch()
+        #expect(playlist.savedSearches.isEmpty)
+    }
+
+    @Test func saveCurrentSearchCapsRecentsAtTen() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = playlist
+        appState.recomputeFilteredFiles()
+
+        // Remember twelve distinct searches; only the ten most recent survive, newest first.
+        for i in 0..<12 {
+            appState.clearTagFilter()
+            appState.toggleFilterTag("t\(i)")
+            appState.saveCurrentSearch()
+        }
+
+        #expect(playlist.savedSearches.count == 10)
+        #expect(playlist.savedSearches.first?.tags == ["t11"])
+        #expect(playlist.savedSearches.last?.tags == ["t2"])   // t0/t1 dropped off the end
     }
 
     @Test func rescanRemovalClearsPendingDeleteForThatFile() async throws {

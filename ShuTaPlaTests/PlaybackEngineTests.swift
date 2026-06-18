@@ -47,6 +47,16 @@ import AppKit
         return url
     }
 
+    /// Writes an empty placeholder file and returns its URL. An empty file fails to load
+    /// (END_FILE reason `error`, not a natural EOF), so loading it never triggers an
+    /// `advanceToNext` that could run after the test host tears down.
+    private func writeTempEmptyFile(ext: String = "mp3") throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "\(UUID().uuidString).\(ext)")
+        try Data().write(to: url)
+        return url
+    }
+
     /// A `PlaylistFile` standing in as an identity token (not inserted in a context).
     private func makeFile(_ name: String) -> PlaylistFile {
         PlaylistFile(relativePath: name, fileName: name)
@@ -65,16 +75,26 @@ import AppKit
         #expect(engine.isPlaying)
     }
 
-    @Test func endOfFileAdvancesViaSource() async throws {
+    @Test func advanceToNextLoadsSuccessorAndNotifiesSource() throws {
+        // The unattended end-of-file path drives the engine's `advanceToNext` directly.
+        // Exercise that synchronously rather than waiting on a real natural EOF (which would
+        // race the test host's teardown): the engine anchors on the first file, then advances.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
         let engine = try AudioPlaybackEngine()
         defer { engine.shutdown() }
-
-        let source = MockPlaybackSource(files: [makeFile("next")])
         engine.source = source
-        engine.load(nil, resource: sine(1))   // one second → natural EOF
+        engine.load(first, at: url)   // anchor on the first file
 
-        let advanced = await poll(timeout: .seconds(12)) { source.fileAfterCalls > 0 }
-        #expect(advanced)
+        #expect(engine.advanceToNext())
+        #expect(source.advancedTo == [second.id])
     }
 
     @Test func loopToggleReachesClient() async throws {
@@ -209,10 +229,18 @@ import AppKit
         engine.source = source
         engine.load(first, at: url)
         engine.startSlideshow(interval: 0.1)
+        defer { engine.stopSlideshow() }   // always halt the timer, even if an assertion fails
 
         let advanced = await poll(timeout: .seconds(3)) { source.fileAfterCalls > 0 }
-        engine.stopSlideshow()
         #expect(advanced)
+    }
+
+    @Test func stopSlideshowDisablesIt() {
+        let engine = ImagePlaybackEngine()
+        engine.startSlideshow(interval: 5)   // long interval: it never fires before we stop it
+        #expect(engine.slideshowEnabled)
+
+        engine.stopSlideshow()
         #expect(!engine.slideshowEnabled)
     }
 }

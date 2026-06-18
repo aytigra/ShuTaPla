@@ -286,6 +286,104 @@ import SwiftData
         #expect(coordinator.visualCurrentFile?.id == currentID)
     }
 
+    @Test func togglePauseFlipsBetweenPlayingAndPaused() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        #expect(image.playbackState == .playing)
+        coordinator.togglePause(image)
+        #expect(image.playbackState == .paused)
+        coordinator.togglePause(image)
+        #expect(image.playbackState == .playing)
+    }
+
+    @Test func playNowLiftsSuppressionAndJumps() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg", "3.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
+        )
+        try context.save()
+        let files = image.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.suppress()
+        #expect(coordinator.isSuppressed)
+
+        coordinator.playNow(image, file: files[2])
+        #expect(!coordinator.isSuppressed)                         // global pause lifted
+        #expect(image.playbackState == .playing)
+        #expect(coordinator.visualCurrentFile?.id == files[2].id)  // jumped to the chosen file
+    }
+
+    @Test func playNowClearsTheChannelsOwnPause() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
+        try context.save()
+        let files = image.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.pause(image)
+        #expect(image.playbackState == .paused)
+
+        coordinator.playNow(image, file: files[1])
+        #expect(image.playbackState == .playing)                   // its own pause cleared
+        #expect(coordinator.visualCurrentFile?.id == files[1].id)
+    }
+
+    @Test func haltAndResumeVisualForOverlayLeavePersistedStateAlone() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.haltVisualForOverlay()
+        #expect(coordinator.visualHaltedForOverlay)
+        #expect(image.playbackState == .playing)   // halt is transient; persisted state untouched
+
+        coordinator.resumeVisualForOverlay()
+        #expect(!coordinator.visualHaltedForOverlay)
+        #expect(image.playbackState == .playing)
+    }
+
+    @Test func haltVisualForOverlayIsSkippedWhileSuppressed() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.suppress()
+
+        // Suppression already halts the channel, so the overlay-halt is a no-op (nothing to
+        // balance later) rather than double-counting the suspend.
+        coordinator.haltVisualForOverlay()
+        #expect(!coordinator.visualHaltedForOverlay)
+    }
+
     @Test func jumpLoadsRequestedFileOnImageChannel() throws {
         let container = try makeContainer()
         let context = container.mainContext
