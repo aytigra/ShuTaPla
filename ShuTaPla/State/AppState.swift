@@ -34,6 +34,22 @@ struct PendingPlaylist {
     let scan: ScanResult
 }
 
+extension PendingPlaylist {
+    /// Media types present in the Mixed folder, ordered by frequency (most first) —
+    /// the choices the type dialog offers.
+    var typeChoices: [MediaType] {
+        scan.counts
+            .filter { $0.value > 0 }
+            .sorted { $0.value > $1.value }
+            .map(\.key)
+    }
+
+    /// A choice button's label: the type name with its file count, e.g. "Video (12)".
+    func choiceLabel(for type: MediaType) -> String {
+        "\(type.displayName) (\(scan.counts[type] ?? 0))"
+    }
+}
+
 /// A folder being scanned into a new playlist, shown optimistically in the
 /// sidebar (with a spinner) until the finished playlist replaces it.
 struct ImportingPlaylist: Identifiable {
@@ -110,6 +126,23 @@ final class AppState {
     /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key (so a bare
     /// `[delete]` can't stack a second trash confirmation behind it).
     var pendingPlaylistDelete: Playlist?
+
+    /// Raises the folder picker for adding a playlist. The Welcome screen and the sidebar's
+    /// plus button both set this; the shared `AddPlaylistFlow` modifier presents the picker.
+    var isImportingPlaylist = false
+
+    /// A scanned Mixed folder awaiting the user's media-type choice. While non-nil the add
+    /// flow shows the choice dialog, which owns the keyboard: the `HotkeyRouter` registers it
+    /// as a blocking modal so bare keys don't leak to playback behind it.
+    var pendingTypeChoice: PendingPlaylist?
+
+    /// A user-facing message when adding a playlist fails (or the folder has no media),
+    /// surfaced by the add flow's alert and registered with the `HotkeyRouter` as blocking.
+    var addPlaylistError: String?
+
+    /// True while a picked folder is being scanned into a playlist, so the add buttons can
+    /// disable and show a spinner.
+    private(set) var isAddingPlaylist = false
 
     /// Videos awaiting the remove-audio confirmation (raised by a row's Remove Audio
     /// command). While non-empty the center panel shows the confirmation alert, which
@@ -283,6 +316,32 @@ final class AppState {
             scan: pending.scan,
             mediaType: mediaType
         )
+    }
+
+    /// Folder-picker callback for the shared add flow: scans the folder and either creates
+    /// the playlist, raises the media-type choice (Mixed), or sets an error (empty/failed),
+    /// driving the observable state the `AddPlaylistFlow` modifier presents.
+    func importPlaylist(from url: URL) async {
+        isAddingPlaylist = true
+        defer { isAddingPlaylist = false }
+        switch await addPlaylist(from: url) {
+        case .created:
+            break   // makePlaylist switches to manager mode and selects it
+        case .needsTypeChoice(let pending):
+            pendingTypeChoice = pending
+        case .empty:
+            addPlaylistError = "“\(url.lastPathComponent)” has no videos, images, or audio files."
+        case .failed(let message):
+            addPlaylistError = message
+        }
+    }
+
+    /// Resolves the pending media-type choice: creates the Mixed-folder playlist with the
+    /// chosen type and dismisses the dialog.
+    func confirmPendingTypeChoice(_ mediaType: MediaType) {
+        guard let pending = pendingTypeChoice else { return }
+        confirmPlaylist(pending, mediaType: mediaType)
+        pendingTypeChoice = nil
     }
 
     /// Builds and persists a `Playlist` and its `PlaylistFile`s from a scan.

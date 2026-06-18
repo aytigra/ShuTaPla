@@ -613,6 +613,33 @@ import AppKit
         #expect(router.handle(esc) === esc)                    // passed through to the dialog
     }
 
+    @Test func addPlaylistTypeChoiceHoldsKeyboardContext() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        // The Mixed-folder media-type dialog is a modal that owns the keyboard: bare keys
+        // must be swallowed and `[esc]` pass through, rather than leaking to playback behind it.
+        appState.pendingTypeChoice = PendingPlaylist(
+            name: "Mix", bookmark: Data(), folderPath: "/mix",
+            scan: ScanResult(files: [], counts: [.video: 1, .image: 1], dominantType: nil)
+        )
+
+        let current = image.currentFileID
+        #expect(router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
+        #expect(image.currentFileID == current)                 // not advanced behind it
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)                     // passed through to the dialog
+    }
+
     // MARK: - Helpers
 
     private func keyEvent(keyCode: UInt16, characters: String = " ") -> NSEvent {

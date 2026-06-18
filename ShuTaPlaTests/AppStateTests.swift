@@ -172,6 +172,60 @@ struct AppStateTests {
         #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
     }
 
+    // MARK: - Shared add-playlist flow (drives observable AppState state)
+
+    @Test func pendingTypeChoiceOrdersByFrequencyAndLabelsWithCounts() {
+        let scan = ScanResult(files: [], counts: [.video: 1, .image: 3, .audio: 2], dominantType: nil)
+        let pending = PendingPlaylist(name: "Mix", bookmark: Data(), folderPath: "/mix", scan: scan)
+
+        #expect(pending.typeChoices == [.image, .audio, .video])   // most files first
+        #expect(pending.choiceLabel(for: .image) == "Image (3)")
+        #expect(pending.choiceLabel(for: .video) == "Video (1)")
+    }
+
+    @Test func importPlaylistFromMixedFolderRaisesTypeChoiceThenCreates() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("v0.mp4", .video), scanned("i0.jpg", .image), scanned("i1.jpg", .image)],
+            counts: [.video: 1, .image: 2],
+            dominantType: nil
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await appState.importPlaylist(from: dir)
+
+        #expect(appState.pendingTypeChoice != nil)   // Mixed folder raises the choice
+        #expect(appState.isAddingPlaylist == false)  // spinner cleared on return
+        #expect(appState.addPlaylistError == nil)
+        #expect(appState.mode == .welcome)           // nothing created yet
+
+        appState.confirmPendingTypeChoice(.image)
+
+        #expect(appState.pendingTypeChoice == nil)   // dialog dismissed
+        #expect(appState.mode == .manager)
+        let persisted = try context.fetch(FetchDescriptor<Playlist>())
+        #expect(persisted.count == 1)
+        #expect(persisted.first?.mediaType == .image)
+    }
+
+    @Test func importPlaylistFromEmptyFolderSetsErrorAndCreatesNothing() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await appState.importPlaylist(from: dir)
+
+        #expect(appState.addPlaylistError != nil)
+        #expect(appState.pendingTypeChoice == nil)
+        #expect(appState.isAddingPlaylist == false)
+        #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
     @Test func nonMatchingFilesAreMarkedSkipped() async throws {
         let container = try makeContainer()
         let context = container.mainContext

@@ -120,10 +120,10 @@ final class HotkeyRouter {
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
     /// Whether a modal confirmation or error alert is up and owns the keyboard. Covers the
-    /// confirmation dialogs (Manager trash, remove-audio, player trash, playlist tag removal)
-    /// and the single-button error alerts that report a failed operation — for any of them
-    /// the app-wide monitor must pass `[enter]`/`[esc]` through and swallow the rest, or bare
-    /// keys leak to playback / the file list behind the modal.
+    /// confirmation dialogs (Manager trash, remove-audio, player trash, playlist tag removal,
+    /// add-playlist media-type choice) and the single-button error alerts that report a failed
+    /// operation — for any of them the app-wide monitor must pass `[enter]`/`[esc]` through and
+    /// swallow the rest, or bare keys leak to playback / the file list behind the modal.
     private var hasBlockingConfirmation: Bool {
         guard let appState else { return false }
         return !appState.pendingManagerDelete.isEmpty
@@ -136,6 +136,8 @@ final class HotkeyRouter {
             || appState.tagRemovalError != nil
             || appState.playerDeleteError != nil
             || appState.playerRenameError != nil
+            || appState.pendingTypeChoice != nil
+            || appState.addPlaylistError != nil
     }
 
     // MARK: - Monitor lifecycle
