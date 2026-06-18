@@ -26,7 +26,7 @@ nonisolated struct ImageTransform: Equatable, Sendable {
 
 @MainActor
 @Observable
-final class ImagePlaybackEngine {
+final class ImagePlaybackEngine: SourceNavigating {
 
     /// The decoded image to display, or `nil` while loading / when stopped.
     private(set) var currentImage: NSImage?
@@ -84,27 +84,7 @@ final class ImagePlaybackEngine {
         transform = .identity
     }
 
-    // MARK: - Advance / previous
-
-    @discardableResult
-    func advanceToNext() -> Bool {
-        guard let source,
-              let next = source.fileAfter(currentFile),
-              let url = source.url(for: next) else { return false }
-        load(next, at: url)
-        source.engineDidAdvance(to: next)
-        return true
-    }
-
-    @discardableResult
-    func returnToPrevious() -> Bool {
-        guard let source,
-              let previous = source.fileBefore(currentFile),
-              let url = source.url(for: previous) else { return false }
-        load(previous, at: url)
-        source.engineDidAdvance(to: previous)
-        return true
-    }
+    // Advance / previous come from `SourceNavigating` (shared with the mpv engines).
 
     // MARK: - Fit mode & transform
 

@@ -112,12 +112,6 @@ struct WelcomeView: View {
 
     private func label(for type: MediaType, in pending: PendingPlaylist) -> String {
         let count = pending.scan.counts[type] ?? 0
-        let noun: String
-        switch type {
-        case .video: noun = "Video"
-        case .image: noun = "Image"
-        case .audio: noun = "Audio"
-        }
-        return "\(noun) (\(count))"
+        return "\(type.displayName) (\(count))"
     }
 }

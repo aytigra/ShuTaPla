@@ -14,6 +14,15 @@ nonisolated enum MediaType: String, Codable, Sendable, CaseIterable {
     case video
     case image
     case audio
+
+    /// Capitalized human-facing name (the media-type choice prompt, labels).
+    var displayName: String {
+        switch self {
+        case .video: return "Video"
+        case .image: return "Image"
+        case .audio: return "Audio"
+        }
+    }
 }
 
 /// How an image is scaled to fit the player surface.
@@ -63,4 +72,22 @@ nonisolated enum ServiceFilter: String, Sendable {
     case untagged
     case invalidTagging
     case skipped
+
+    /// SF Symbol shown in the filter banner and the center-panel counter notices.
+    var systemImage: String {
+        switch self {
+        case .untagged: return "tag.slash"
+        case .invalidTagging: return "exclamationmark.triangle"
+        case .skipped: return "nosign"
+        }
+    }
+
+    /// Descriptive label for the "Showing …" active-filter banner.
+    var label: String {
+        switch self {
+        case .untagged: return "untagged files"
+        case .invalidTagging: return "files with invalid tagging"
+        case .skipped: return "skipped files"
+        }
+    }
 }

@@ -20,7 +20,7 @@ import Foundation
 
 @MainActor
 @Observable
-class MPVPlaybackEngine {
+class MPVPlaybackEngine: SourceNavigating {
 
     // MARK: - Observable playback state
 
@@ -79,9 +79,9 @@ class MPVPlaybackEngine {
 
     // MARK: - Loading & transport
 
-    /// Loads `file` from `url`, resuming at `position` if given, and starts playing.
-    func load(_ file: PlaylistFile?, at url: URL, startingAt position: TimeInterval? = nil) {
-        load(file, resource: Self.mpvResource(for: url), startingAt: position)
+    /// Loads `file` from `url` and starts playing.
+    func load(_ file: PlaylistFile?, at url: URL) {
+        load(file, resource: Self.mpvResource(for: url))
     }
 
     /// Loads an mpv resource string directly (a file path or a protocol URL such as
@@ -112,31 +112,7 @@ class MPVPlaybackEngine {
     /// Seeks by a relative offset in seconds (the ±3s hotkey passes ±3 here).
     func seek(by delta: TimeInterval) { client.seek(by: delta) }
 
-    // MARK: - Advance / previous
-
-    /// Loads the next file from `source`, wrapping past the last to the first.
-    /// Returns `false` when there is nothing to advance to.
-    @discardableResult
-    func advanceToNext() -> Bool {
-        guard let source,
-              let next = source.fileAfter(currentFile),
-              let url = source.url(for: next) else { return false }
-        load(next, at: url)
-        source.engineDidAdvance(to: next)
-        return true
-    }
-
-    /// Loads the previous file from `source`, wrapping from the first to the last.
-    /// Returns `false` when there is nothing to step back to.
-    @discardableResult
-    func returnToPrevious() -> Bool {
-        guard let source,
-              let previous = source.fileBefore(currentFile),
-              let url = source.url(for: previous) else { return false }
-        load(previous, at: url)
-        source.engineDidAdvance(to: previous)
-        return true
-    }
+    // Advance / previous come from `SourceNavigating` (shared with the image engine).
 
     // MARK: - Looping
 

@@ -165,9 +165,9 @@ struct PlaylistCenterView: View {
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {
-                if untagged > 0 { notice("\(untagged) untagged", systemImage: "tag.slash", filter: .untagged) }
-                if invalid > 0 { notice("\(invalid) invalid tagging", systemImage: "exclamationmark.triangle", filter: .invalidTagging) }
-                if skipped > 0 { notice("\(skipped) skipped", systemImage: "nosign", filter: .skipped) }
+                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged) }
+                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging) }
+                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped) }
                 Spacer()
             }
             .font(.caption)
@@ -177,12 +177,12 @@ struct PlaylistCenterView: View {
         }
     }
 
-    private func notice(_ text: String, systemImage: String, filter: ServiceFilter) -> some View {
+    private func notice(_ text: String, filter: ServiceFilter) -> some View {
         let isActive = appState.activeServiceFilter == filter
         return Button {
             appState.toggleServiceFilter(filter)
         } label: {
-            Label(text, systemImage: systemImage)
+            Label(text, systemImage: filter.systemImage)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(isActive ? Color.accentColor.opacity(0.22) : Color.clear, in: Capsule())

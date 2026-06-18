@@ -183,4 +183,25 @@ struct ModelTests {
         #expect(CloudStatus(rawValue: "downloading") == .downloading)
         #expect(ServiceFilter(rawValue: "invalidTagging") == .invalidTagging)
     }
+
+    // MARK: - Enum display properties (one source of truth for the UI)
+
+    @Test(arguments: [
+        (MediaType.video, "Video"),
+        (MediaType.image, "Image"),
+        (MediaType.audio, "Audio"),
+    ])
+    func mediaTypeDisplayName(_ type: MediaType, _ name: String) {
+        #expect(type.displayName == name)
+    }
+
+    @Test(arguments: [
+        (ServiceFilter.untagged, "tag.slash", "untagged files"),
+        (ServiceFilter.invalidTagging, "exclamationmark.triangle", "files with invalid tagging"),
+        (ServiceFilter.skipped, "nosign", "skipped files"),
+    ])
+    func serviceFilterDisplay(_ filter: ServiceFilter, _ image: String, _ label: String) {
+        #expect(filter.systemImage == image)
+        #expect(filter.label == label)
+    }
 }

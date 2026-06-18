@@ -42,8 +42,8 @@ struct FilterBar: View {
 
     private func serviceBanner(_ service: ServiceFilter) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: icon(for: service))
-            Text("Showing \(name(for: service))").font(.callout)
+            Image(systemName: service.systemImage)
+            Text("Showing \(service.label)").font(.callout)
             Spacer()
             Button("Show all") { appState.toggleServiceFilter(service) }
                 .buttonStyle(.borderless)
@@ -126,21 +126,4 @@ struct FilterBar: View {
         }
     }
 
-    // MARK: - Service filter labels
-
-    private func icon(for service: ServiceFilter) -> String {
-        switch service {
-        case .untagged: return "tag.slash"
-        case .invalidTagging: return "exclamationmark.triangle"
-        case .skipped: return "nosign"
-        }
-    }
-
-    private func name(for service: ServiceFilter) -> String {
-        switch service {
-        case .untagged: return "untagged files"
-        case .invalidTagging: return "files with invalid tagging"
-        case .skipped: return "skipped files"
-        }
-    }
 }
