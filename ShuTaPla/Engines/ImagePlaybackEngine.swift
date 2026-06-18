@@ -143,14 +143,13 @@ final class ImagePlaybackEngine: SourceNavigating {
     /// pays a draw-time decode.
     @concurrent
     private nonisolated static func decodeImage(at url: URL) async -> SendableImage? {
-        let didAccess = url.startAccessingSecurityScopedResource()
-        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-
-        let options: [CFString: Any] = [kCGImageSourceShouldAllowFloat: true]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else {
-            return nil
+        await url.withSecurityScopedAccess { url in
+            let options: [CFString: Any] = [kCGImageSourceShouldAllowFloat: true]
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else {
+                return nil
+            }
+            return SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
         }
-        return SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
     }
 }

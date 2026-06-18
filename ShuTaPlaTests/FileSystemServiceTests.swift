@@ -254,6 +254,45 @@ struct BookmarkServiceTests {
         service.stopAccess(to: data)
         #expect(service.referenceCount(for: data) == 0)
     }
+
+    // MARK: - Scoped-access helpers
+
+    @Test func withScopedAccessRunsBodyWithResolvedFolder() throws {
+        let dir = try TempFS.makeDir()
+        defer { TempFS.remove(dir) }
+        let data = try BookmarkService.makeBookmark(for: dir)
+
+        let path = try BookmarkService.withScopedAccess(to: data) { $0.path }
+        #expect(URL(filePath: path).resolvingSymlinksInPath().path == dir.resolvingSymlinksInPath().path)
+    }
+
+    @Test func withScopedAccessThrowsWhenBookmarkUnresolvable() {
+        #expect(throws: BookmarkError.self) {
+            try BookmarkService.withScopedAccess(to: Data([0x00])) { _ in 0 }
+        }
+    }
+
+    @Test func withResolvedFileGivesFileURLForExistingFile() async throws {
+        let dir = try TempFS.makeDir()
+        defer { TempFS.remove(dir) }
+        _ = try TempFS.write("clip [a].mp4", in: dir)
+        let data = try BookmarkService.makeBookmark(for: dir)
+
+        let name = try await BookmarkService.withResolvedFile(
+            bookmark: data, relativePath: "clip [a].mp4"
+        ) { $0.lastPathComponent }
+        #expect(name == "clip [a].mp4")
+    }
+
+    @Test func withResolvedFileThrowsFileNotFoundForMissingFile() async throws {
+        let dir = try TempFS.makeDir()
+        defer { TempFS.remove(dir) }
+        let data = try BookmarkService.makeBookmark(for: dir)
+
+        await #expect(throws: BookmarkError.fileNotFound) {
+            try await BookmarkService.withResolvedFile(bookmark: data, relativePath: "missing.mp4") { _ in () }
+        }
+    }
 }
 
 // MARK: - Mock conformance

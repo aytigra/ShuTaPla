@@ -23,6 +23,7 @@ nonisolated struct ResolvedBookmark: Sendable, Equatable {
 nonisolated enum BookmarkError: Error, Equatable {
     case creationFailed
     case resolutionFailed
+    case fileNotFound
     case stale
 }
 
@@ -83,6 +84,54 @@ final class BookmarkService {
             return try attempt([])
         } catch {
             throw BookmarkError.resolutionFailed
+        }
+    }
+
+    // MARK: - Scoped access (stateless)
+
+    /// Resolves `bookmark` to its folder, opens a transient security-scoped session,
+    /// runs `body` with the folder URL, and balances the matching stop on exit —
+    /// including when `body` throws. Throws `BookmarkError.resolutionFailed` when the
+    /// bookmark can't be resolved; best-effort callers wrap the call in `try?`.
+    /// Staleness is ignored: these are one-shot reads, not the long-lived sessions
+    /// `startAccess(to:)` reference-counts.
+    nonisolated static func withScopedAccess<T>(
+        to bookmark: Data,
+        _ body: (URL) throws -> T
+    ) throws -> T {
+        let resolved = try resolve(bookmark)
+        let didAccess = resolved.url.startAccessingSecurityScopedResource()
+        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
+        return try body(resolved.url)
+    }
+
+    /// The `async` form of `withScopedAccess(to:_:)`, for workers that await inside
+    /// the scoped session (decode/probe).
+    nonisolated static func withScopedAccess<T>(
+        to bookmark: Data,
+        _ body: (URL) async throws -> T
+    ) async throws -> T {
+        let resolved = try resolve(bookmark)
+        let didAccess = resolved.url.startAccessingSecurityScopedResource()
+        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
+        return try await body(resolved.url)
+    }
+
+    /// Resolves `bookmark`, appends `relativePath`, and runs `body` with that file
+    /// URL under a scoped-access session. Throws `.resolutionFailed` when the folder
+    /// can't be resolved and `.fileNotFound` when the file is gone; best-effort
+    /// callers fold both into a nil result with `try?`.
+    nonisolated static func withResolvedFile<T>(
+        bookmark: Data,
+        relativePath: String,
+        _ body: (URL) async throws -> T
+    ) async throws -> T {
+        try await withScopedAccess(to: bookmark) { folder in
+            let fileURL = folder.appending(path: relativePath)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                throw BookmarkError.fileNotFound
+            }
+            return try await body(fileURL)
         }
     }
 

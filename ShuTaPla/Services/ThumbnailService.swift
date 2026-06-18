@@ -144,16 +144,12 @@ final class ThumbnailService {
     /// Returns `nil` when the file is gone.
     @concurrent
     nonisolated static func cacheKey(bookmark: Data, relativePath: String, maxPixelSize: Int) async -> String? {
-        guard let resolved = try? BookmarkService.resolve(bookmark) else { return nil }
-        let didAccess = resolved.url.startAccessingSecurityScopedResource()
-        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
-
-        let fileURL = resolved.url.appending(path: relativePath)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate
-        let stamp = modDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "0"
-        return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
+        try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
+            let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            let stamp = modDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "0"
+            return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
+        }
     }
 
     /// Whether `data` decodes as a complete image, used to reject a 0-byte or truncated
@@ -195,16 +191,16 @@ final class ThumbnailService {
             try? FileManager.default.removeItem(at: diskURL)
         }
 
-        guard let resolved = try? BookmarkService.resolve(bookmark) else { return (nil, nil) }
-        let didAccess = resolved.url.startAccessingSecurityScopedResource()
-        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
-
-        let fileURL = resolved.url.appending(path: relativePath)
-        let rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
-        guard let data = rendered.data else { return (nil, nil) }
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        try? data.write(to: diskURL)
-        return (data, rendered.duration)
+        let produced = try? await BookmarkService.withResolvedFile(
+            bookmark: bookmark, relativePath: relativePath
+        ) { fileURL -> (data: Data?, duration: TimeInterval?) in
+            let rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
+            guard let data = rendered.data else { return (nil, nil) }
+            try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try? data.write(to: diskURL)
+            return (data, rendered.duration)
+        }
+        return produced ?? (nil, nil)
     }
 
     /// Like `produceData`, but additionally decodes the encoded bytes into a fully

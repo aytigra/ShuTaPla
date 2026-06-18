@@ -143,10 +143,7 @@ actor FileSystemService {
     // MARK: - Scanning (stateless, off-actor)
 
     private nonisolated static func scan(bookmark: Data) throws -> ScanResult {
-        let resolved = try BookmarkService.resolve(bookmark)
-        let didAccess = resolved.url.startAccessingSecurityScopedResource()
-        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
-        return try scan(directory: resolved.url)
+        try BookmarkService.withScopedAccess(to: bookmark) { try scan(directory: $0) }
     }
 
     /// Recursively enumerates `root`, keeping only recognized media files and

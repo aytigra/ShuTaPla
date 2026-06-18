@@ -45,15 +45,10 @@ final class DurationService {
     /// caller's actor (the main actor for `duration(for:in:)`), freezing the UI while
     /// the file list populates uncached lengths.
     @concurrent nonisolated static func extract(bookmark: Data, relativePath: String) async -> TimeInterval? {
-        guard let resolved = try? BookmarkService.resolve(bookmark) else { return nil }
-        let didAccess = resolved.url.startAccessingSecurityScopedResource()
-        defer { if didAccess { resolved.url.stopAccessingSecurityScopedResource() } }
-
-        let fileURL = resolved.url.appending(path: relativePath)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-
-        if let seconds = await avDuration(at: fileURL) { return seconds }
-        return await MPVThumbnailer.duration(at: fileURL)
+        (try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
+            if let seconds = await avDuration(at: fileURL) { return seconds }
+            return await MPVThumbnailer.duration(at: fileURL)
+        }) ?? nil
     }
 
     @concurrent private nonisolated static func avDuration(at url: URL) async -> TimeInterval? {
