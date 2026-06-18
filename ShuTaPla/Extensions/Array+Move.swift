@@ -13,11 +13,15 @@ extension Array {
     /// where `destination` is an offset into the pre-move array (the same index
     /// SwiftUI hands an `.onMove` closure).
     mutating func move(fromOffsets source: IndexSet, toOffset destination: Int) {
-        let moved = source.sorted().map { self[$0] }
-        for index in source.sorted(by: >) {
+        var moved: [Element] = []
+        moved.reserveCapacity(source.count)
+        for index in source {
+            moved.append(self[index])
+        }
+        for index in source.reversed() {
             remove(at: index)
         }
-        let insertAt = destination - source.filter { $0 < destination }.count
+        let insertAt = destination - source.count(in: 0..<destination)
         insert(contentsOf: moved, at: insertAt)
     }
 }
