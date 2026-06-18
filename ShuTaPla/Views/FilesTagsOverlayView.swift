@@ -21,7 +21,6 @@ struct FilesTagsOverlayView: View {
 
     @State private var renamingID: UUID?
     @State private var draftName = ""
-    @State private var errorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,11 +44,11 @@ struct FilesTagsOverlayView: View {
         .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
         .alert(
             "Couldn't complete",
-            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+            isPresented: Binding(get: { appState.playerRenameError != nil }, set: { if !$0 { appState.playerRenameError = nil } })
         ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
+            Button("OK", role: .cancel) { appState.playerRenameError = nil }
         } message: {
-            Text(errorMessage ?? "")
+            Text(appState.playerRenameError ?? "")
         }
     }
 
@@ -181,6 +180,6 @@ struct FilesTagsOverlayView: View {
     private func commitRename(_ file: PlaylistFile) {
         let name = draftName
         renamingID = nil
-        Task { if let error = await appState.renameFile(file, to: name) { errorMessage = error } }
+        Task { if let error = await appState.renameFile(file, to: name) { appState.playerRenameError = error } }
     }
 }

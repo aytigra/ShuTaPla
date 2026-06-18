@@ -49,6 +49,8 @@ Each skill has a `SKILL.md` with workflow decision trees and a `references/` dir
 
 Treat "where is the test?" as part of the definition of done — don't report a change complete without it.
 
+**Check the issue navigator before reporting done.** A build can succeed while the compiler still flags warnings (deprecations, unused values, concurrency issues) that won't surface unless you look. After the work builds, list navigator issues (`mcp__xcode__XcodeListNavigatorIssues`) and address — or surface to the user — any warnings the change introduced. This is part of the definition of done alongside tests.
+
 **Avoid test traps — they hang the run, not just the test.** A test that hits `EXC_BREAKPOINT` (code=1) or `EXC_BAD_ACCESS` doesn't fail cleanly: it crashes the test host mid-run, so the run never returns a result and the build/test tool (and the agent driving it) stalls. Treat "could this trap?" as a first-class concern when writing tests. The three trap classes seen so far, and how to write around each:
 
 1. **Orphaned `ModelContext` → `EXC_BREAKPOINT` on the next `fetch`.** Hold the `ModelContainer` for the whole test body, pulling `container.mainContext` locally — as `ModelTests.swift` does. A helper that builds a container internally and returns only `container.mainContext` lets the container deallocate when the helper returns; the orphaned context traps on its next `fetch` — surfacing at the fetch site, e.g. `AppStateModel.fetchOrCreate` (which `AppState.init` calls, so even constructing `AppState` traps). Plain `init`-and-assert tests trap most reliably; tests with intervening `insert(...)` or `await` may survive by chance because they stretch the autorelease pool, so the failure can look intermittent.

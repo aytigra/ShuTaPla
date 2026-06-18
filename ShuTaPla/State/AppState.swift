@@ -105,6 +105,12 @@ final class AppState {
     /// center panel's alert.
     var managerDeleteError: String?
 
+    /// The playlist awaiting a delete confirmation in the sidebar. While non-nil the sidebar
+    /// shows the confirmation dialog, which owns the keyboard: the `HotkeyRouter` passes
+    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key (so a bare
+    /// `[delete]` can't stack a second trash confirmation behind it).
+    var pendingPlaylistDelete: Playlist?
+
     /// Videos awaiting the remove-audio confirmation (raised by a row's Remove Audio
     /// command). While non-empty the center panel shows the confirmation alert, which
     /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
@@ -136,6 +142,11 @@ final class AppState {
 
     /// A user-facing message when a Player-mode trash fails, surfaced by the player's alert.
     var playerDeleteError: String?
+
+    /// A user-facing message when a rename from the Files & Tags overlay fails, surfaced by
+    /// that overlay's alert. On `AppState` (not view-local) so the `HotkeyRouter` can register
+    /// it as a blocking modal and stop bare keys leaking to playback behind it.
+    var playerRenameError: String?
 
     /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
     /// While set it overrides the selected playlist's persisted tag filter; it is

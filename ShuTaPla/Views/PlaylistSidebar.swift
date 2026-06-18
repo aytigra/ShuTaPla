@@ -27,9 +27,6 @@ struct PlaylistSidebar: View {
     @State private var draftName = ""
     @FocusState private var renameFieldFocused: Bool
 
-    // Delete confirmation target.
-    @State private var deleteCandidate: Playlist?
-
     var body: some View {
         List {
             audioHint
@@ -97,15 +94,16 @@ struct PlaylistSidebar: View {
         }
         .confirmationDialog(
             "Delete playlist?",
-            isPresented: Binding(get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }),
+            isPresented: Binding(get: { appState.pendingPlaylistDelete != nil }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
             titleVisibility: .visible,
-            presenting: deleteCandidate
+            presenting: appState.pendingPlaylistDelete
         ) { playlist in
             Button("Delete “\(playlist.name)”", role: .destructive) {
-                deleteCandidate = nil
+                appState.pendingPlaylistDelete = nil
                 Task { await appState.delete(playlist) }
             }
-            Button("Cancel", role: .cancel) { deleteCandidate = nil }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { appState.pendingPlaylistDelete = nil }
         } message: { _ in
             Text("This removes the playlist from ShuTaPla. The files on disk are not touched.")
         }
@@ -193,7 +191,7 @@ struct PlaylistSidebar: View {
             .listRowBackground(appState.selectedPlaylist === playlist ? Color.accentColor.opacity(0.18) : nil)
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }
-                Button("Delete", role: .destructive) { deleteCandidate = playlist }
+                Button("Delete", role: .destructive) { appState.pendingPlaylistDelete = playlist }
             }
         }
     }

@@ -564,6 +564,55 @@ import AppKit
         #expect(router.handle(keyEvent(keyCode: 49)) == nil)   // [space] swallowed behind it
     }
 
+    @Test func errorAlertHoldsKeyboardContext() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        defer { appState.coordinator.shutdown() }
+
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        // A single-button error alert (here a failed audio strip) is still a modal that owns
+        // the keyboard: bare keys must be swallowed and `[enter]`/`[esc]` pass through to it,
+        // rather than leaking to playback behind the alert.
+        appState.audioStripError = "Couldn't remove audio."
+
+        let current = image.currentFileID
+        #expect(router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
+        #expect(image.currentFileID == current)                 // not advanced behind it
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)                     // passed through to the OK button
+    }
+
+    @Test func playlistDeleteConfirmationHoldsKeyboardContext() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp4", "2.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["1.mp4", "2.mp4"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .manager
+        appState.selectedPlaylist = video
+        appState.recomputeFilteredFiles()
+        appState.selectedFileIDs = Set(appState.filteredFiles.prefix(1).map(\.id))
+        defer { appState.coordinator.shutdown() }
+
+        appState.pendingPlaylistDelete = video
+        let router = makeRouter(appState, overlay: MockOverlay(), closeSpy: CloseSpy())
+
+        // [delete] would normally raise a file-trash confirmation; while the playlist-delete
+        // dialog owns the keyboard it must be swallowed instead of stacking another modal.
+        #expect(router.handle(keyEvent(keyCode: 51)) == nil)   // [delete] swallowed
+        #expect(appState.pendingManagerDelete.isEmpty)
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(router.handle(esc) === esc)                    // passed through to the dialog
+    }
+
     // MARK: - Helpers
 
     private func keyEvent(keyCode: UInt16, characters: String = " ") -> NSEvent {
