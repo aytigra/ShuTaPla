@@ -26,11 +26,16 @@ protocol SourceNavigating: AnyObject {
 extension SourceNavigating {
 
     /// Loads the next file from `source`, wrapping past the last to the first.
-    /// Returns `false` when there is nothing to advance to.
+    /// Returns `false` when there is nothing to advance to — including when the
+    /// successor is the current file itself (a one-element sequence, or the only
+    /// match under the active filter): the current file is held in place rather
+    /// than re-loaded and re-decoded, so a natural end-of-file or slideshow tick
+    /// doesn't flicker or reset pan/zoom.
     @discardableResult
     func advanceToNext() -> Bool {
         guard let source,
               let next = source.fileAfter(currentFile),
+              next !== currentFile,
               let url = source.url(for: next) else { return false }
         load(next, at: url)
         source.engineDidAdvance(to: next)
@@ -38,11 +43,13 @@ extension SourceNavigating {
     }
 
     /// Loads the previous file from `source`, wrapping from the first to the last.
-    /// Returns `false` when there is nothing to step back to.
+    /// Returns `false` when there is nothing to step back to — including when the
+    /// predecessor is the current file itself (see `advanceToNext`).
     @discardableResult
     func returnToPrevious() -> Bool {
         guard let source,
               let previous = source.fileBefore(currentFile),
+              previous !== currentFile,
               let url = source.url(for: previous) else { return false }
         load(previous, at: url)
         source.engineDidAdvance(to: previous)

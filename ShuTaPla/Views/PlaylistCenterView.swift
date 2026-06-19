@@ -185,7 +185,7 @@ struct PlaylistCenterView: View {
             Label(text, systemImage: filter.systemImage)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(isActive ? Color.accentColor.opacity(0.22) : Color.clear, in: Capsule())
+                .background(isActive ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)

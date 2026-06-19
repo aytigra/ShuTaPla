@@ -84,6 +84,13 @@ final class PlaybackCoordinator: PlaybackSource {
         for bookmark in bookmarkByPlaylist.values { bookmarkService.stopAccess(to: bookmark) }
         folderURLByPlaylist.removeAll()
         bookmarkByPlaylist.removeAll()
+        // Clear the channel bookkeeping so a reused coordinator doesn't report stale
+        // active channels or a leftover suppression/overlay halt.
+        visualPlaylist = nil
+        visualKind = nil
+        audioPlaylist = nil
+        isSuppressed = false
+        visualHaltedForOverlay = false
     }
 
     // MARK: - Starting playback
@@ -312,7 +319,18 @@ final class PlaybackCoordinator: PlaybackSource {
         guard let playlist = visualPlaylist else { return }
         let sequence = playlist.playbackSequence
         if let current = visualCurrentFile, sequence.contains(where: { $0.id == current.id }) { return }
-        if let first = sequence.first { jump(playlist, to: first) }
+        if let first = sequence.first {
+            jump(playlist, to: first)
+        } else {
+            // The sequence is empty (a filter excluded everything). Clear the engine's
+            // loaded file so a later advance/seek can't act on a file no longer in the
+            // playlist, while keeping the visual channel set so the player shows its
+            // "no files" placeholder instead of dropping out of Player mode.
+            switch visualKind {
+            case .image: imageEngine.stop()
+            default: videoEngine?.stop()
+            }
+        }
     }
 
     /// Transiently halts the visual channel's advancement (slideshow timer / video)

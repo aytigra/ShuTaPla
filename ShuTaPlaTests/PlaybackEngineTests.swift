@@ -97,6 +97,51 @@ import AppKit
         #expect(source.advancedTo == [second.id])
     }
 
+    @Test func singleElementSequenceHoldsInsteadOfReloading() throws {
+        // A one-element sequence's successor (and predecessor) is the file itself. The
+        // unattended advance paths (natural EOF, slideshow tick) must hold it in place
+        // rather than re-load/re-decode it, so neither steps and the source is never
+        // re-notified of the same file.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let only = makeFile("only")
+        let source = MockPlaybackSource(files: [only])
+        source.urlByID[only.id] = url
+
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(only, at: url)
+
+        #expect(!engine.advanceToNext())
+        #expect(!engine.returnToPrevious())
+        #expect(source.advancedTo.isEmpty)
+        #expect(engine.currentFile === only)
+    }
+
+    @Test func advanceAfterShutdownIsANoOp() throws {
+        // A natural end-of-file event already in flight when the engine is torn down must
+        // not walk the source (whose models may be gone): shutdown drops the source, so a
+        // late advance returns false without loading or notifying.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try AudioPlaybackEngine()
+        engine.source = source
+        engine.load(first, at: url)
+        engine.shutdown()
+
+        #expect(!engine.advanceToNext())
+        #expect(source.advancedTo.isEmpty)
+    }
+
     @Test func loopToggleReachesClient() async throws {
         let engine = try AudioPlaybackEngine()
         defer { engine.shutdown() }

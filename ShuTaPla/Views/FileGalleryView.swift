@@ -55,7 +55,7 @@ private struct GalleryCell: View {
     @State private var image: NSImage?
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
-    private let maxPixelSize = 440
+    private let maxPixelSize = AppConstants.galleryThumbnailPixelSize
 
     var body: some View {
         VStack(spacing: 6) {
@@ -63,7 +63,7 @@ private struct GalleryCell: View {
             caption
         }
         .padding(6)
-        .background(isSelected ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         // Generation is deferrable background work, so it runs at `.utility` QoS
         // rather than the default user-initiated: the encoder blocks its worker
@@ -79,6 +79,9 @@ private struct GalleryCell: View {
                 image = cached
             } else {
                 let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
+                // On fast scroll/recycle this cell may already be showing a different file
+                // by the time generation lands; don't paint the stale image into it.
+                guard !Task.isCancelled else { return }
                 image = result.image
                 if let seconds = result.duration { file.duration = seconds }
             }

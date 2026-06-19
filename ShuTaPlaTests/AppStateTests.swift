@@ -794,6 +794,52 @@ struct AppStateTests {
         #expect(a.fileName == "a [beach].mp4")
     }
 
+    @Test func renameTagOntoTagHeldOnlyBySkippedFileIsRefused() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        // "shore" lives only on a skipped file, so it never enters `tagFrequency`; the
+        // collision check must still see it and refuse the merge.
+        addFile("x [shore].jpg", tags: ["shore"], status: .valid, skipped: true, order: 1, to: playlist, in: context)
+        playlist.tagFrequency = ["beach": 1]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+
+        #expect(error != nil)
+        #expect(a.fileName == "a [beach].mp4")   // untouched
+    }
+
+    @Test func reselectingTheSamePlaylistDoesNotRespawnTheScan() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", order: 0, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.select(playlist)
+        let firstScan = appState.updateTask
+        await appState.updateTask?.value
+
+        // Re-clicking the already-selected row is the re-center gesture; it must not cancel
+        // and respawn the folder scan.
+        appState.select(playlist)
+        #expect(appState.updateTask == firstScan)
+
+        // Selecting a different playlist does start a fresh scan.
+        let other = Playlist(name: "Q", folderBookmark: Data(), folderPath: "/q", mediaType: .video, sortOrder: 1)
+        context.insert(other)
+        appState.select(other)
+        #expect(appState.updateTask != firstScan)
+        await appState.updateTask?.value
+    }
+
     @Test func horizontalArrowInListIsConsumedWithoutChangingSelection() throws {
         let container = try makeContainer()
         let context = container.mainContext

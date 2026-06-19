@@ -107,6 +107,21 @@ struct FileSystemServiceTests {
         #expect(paths.contains("nested/inner.mp4"))
     }
 
+    @Test func scanKeepsSameNamedFilesInDifferentSubfoldersDistinct() async throws {
+        let dir = try TempFS.makeDir()
+        defer { TempFS.remove(dir) }
+        try TempFS.write("one/a.mp4", in: dir)
+        try TempFS.write("two/a.mp4", in: dir)
+
+        let result = try await FileSystemService().scanFolder(bookmark: bookmark(for: dir))
+        let paths = Set(result.files.map(\.relativePath))
+
+        // Each carries its full sub-path, so the two never collapse onto a single
+        // `lastPathComponent` key and drop one file.
+        #expect(result.files.count == 2)
+        #expect(paths == ["one/a.mp4", "two/a.mp4"])
+    }
+
     @Test func dominanceAutoSelectsAtThreshold() async throws {
         let dir = try TempFS.makeDir()
         defer { TempFS.remove(dir) }

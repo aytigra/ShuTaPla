@@ -150,7 +150,7 @@ struct PlaylistSidebar: View {
             }
             .buttonStyle(.plain)
             .disabled(appState.deletingPlaylistIDs.contains(playlist.id))
-            .listRowBackground(appState.selectedPlaylist === playlist ? Color.accentColor.opacity(0.18) : nil)
+            .listRowBackground(appState.selectedPlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }
                 Button("Delete", role: .destructive) { appState.pendingPlaylistDelete = playlist }

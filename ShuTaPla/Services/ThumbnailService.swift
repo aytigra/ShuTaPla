@@ -36,8 +36,8 @@ final class ThumbnailService {
     /// evicts least-recently-used entries.
     @ObservationIgnored private let memory = NSCache<NSString, NSImage>()
 
-    /// Decoded-pixel ceiling for `memory`. A 440 px thumbnail decodes to ~0.6 MB,
-    /// so 128 MB holds ~200 of them — comfortably more than any viewport plus its
+    /// Decoded-pixel ceiling for `memory`. An `AppConstants.galleryThumbnailPixelSize`
+    /// (440 px) thumbnail decodes to ~0.6 MB, so 128 MB holds ~200 of them — comfortably more than any viewport plus its
     /// scroll buffer, while capping the footprint of a large playlist.
     private static let cacheByteBudget = 128 * 1024 * 1024
 
@@ -76,10 +76,6 @@ final class ThumbnailService {
 
         if let cached = memory.object(forKey: memKey) { return (cached, nil) }
 
-        guard let key = await Self.cacheKey(
-            bookmark: bookmark, relativePath: relativePath, maxPixelSize: maxPixelSize
-        ) else { return (nil, nil) }
-
         // Generation *and* decode happen off the main actor, so the cell receives a
         // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
         let produced = await Self.produceImage(
@@ -87,7 +83,6 @@ final class ThumbnailService {
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
-            key: key,
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, nil) }
@@ -112,27 +107,24 @@ final class ThumbnailService {
         memory.object(forKey: memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize))
     }
 
-    /// Cheap, disk-I/O-free key for the in-memory cache: folder + relative path +
-    /// size. The on-disk cache keys additionally by modification date; an
-    /// in-memory entry is refreshed when the file is renamed (its relative path
-    /// changes) or on the next launch.
+    /// Cheap, disk-I/O-free key for the in-memory cache: playlist id + relative path +
+    /// size. The playlist's stable id is collision-free (unlike a per-process
+    /// `hashValue`, which two folders' bookmarks can share and cross-paint). The on-disk
+    /// cache keys additionally by modification date; an in-memory entry is refreshed when
+    /// the file is renamed (its relative path changes) or on the next launch.
     private func memoryKey(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSString {
-        "\(playlist.folderBookmark.hashValue)|\(file.relativePath)|\(maxPixelSize)" as NSString
+        "\(playlist.id.uuidString)|\(file.relativePath)|\(maxPixelSize)" as NSString
     }
 
     /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative
     /// path, without the in-memory `NSImage` layer. Used by the gallery's higher
     /// level path and exercised directly by tests.
     func thumbnailData(bookmark: Data, relativePath: String, isVideo: Bool, maxPixelSize: Int) async -> Data? {
-        guard let key = await Self.cacheKey(
-            bookmark: bookmark, relativePath: relativePath, maxPixelSize: maxPixelSize
-        ) else { return nil }
-        return await Self.produceData(
+        await Self.produceData(
             bookmark: bookmark,
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
-            key: key,
             cacheDirectory: cacheDirectory
         ).data
     }
@@ -141,15 +133,23 @@ final class ThumbnailService {
 
     /// `<relativePath>|<modDate>|<size>` hashed to a filesystem-safe name. A
     /// changed modification date yields a new key, invalidating the old thumbnail.
-    /// Returns `nil` when the file is gone.
+    /// Returns `nil` when the file is gone. The produce path computes the key inline
+    /// (`cacheKeyComponents`) to resolve the bookmark only once; this entry point is
+    /// exercised directly by tests.
     @concurrent
     nonisolated static func cacheKey(bookmark: Data, relativePath: String, maxPixelSize: Int) async -> String? {
         try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
-            let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate
-            let stamp = modDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "0"
-            return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
+            cacheKeyComponents(fileURL: fileURL, relativePath: relativePath, maxPixelSize: maxPixelSize)
         }
+    }
+
+    /// The disk-cache key from an already-resolved file URL: relative path, on-disk
+    /// modification date, and size, hashed to a filesystem-safe name.
+    private nonisolated static func cacheKeyComponents(fileURL: URL, relativePath: String, maxPixelSize: Int) -> String {
+        let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+        let stamp = modDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "0"
+        return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
     }
 
     /// Whether `data` decodes as a complete image, used to reject a 0-byte or truncated
@@ -179,21 +179,24 @@ final class ThumbnailService {
         relativePath: String,
         isVideo: Bool,
         maxPixelSize: Int,
-        key: String,
         cacheDirectory: URL
     ) async -> (data: Data?, duration: TimeInterval?) {
-        let diskURL = cacheDirectory.appending(path: "\(key).heic")
-        if let data = try? Data(contentsOf: diskURL) {
-            if isDecodableImage(data) { return (data, nil) }
-            // A 0-byte or truncated cache file (an interrupted prior write) reads fine but
-            // can't be decoded into a thumbnail — without this it would "hit" forever and
-            // leave the cell stuck on a placeholder. Drop it and regenerate.
-            try? FileManager.default.removeItem(at: diskURL)
-        }
-
+        // One resolve + scoped-access session for the whole produce: derive the key
+        // (which needs the on-disk modification date), check the disk cache, and render
+        // on a miss — rather than resolving once to key and again to render.
         let produced = try? await BookmarkService.withResolvedFile(
             bookmark: bookmark, relativePath: relativePath
         ) { fileURL -> (data: Data?, duration: TimeInterval?) in
+            let key = cacheKeyComponents(fileURL: fileURL, relativePath: relativePath, maxPixelSize: maxPixelSize)
+            let diskURL = cacheDirectory.appending(path: "\(key).heic")
+            if let data = try? Data(contentsOf: diskURL) {
+                if isDecodableImage(data) { return (data, nil) }
+                // A 0-byte or truncated cache file (an interrupted prior write) reads fine
+                // but can't be decoded into a thumbnail — without this it would "hit"
+                // forever and leave the cell stuck on a placeholder. Drop it and regenerate.
+                try? FileManager.default.removeItem(at: diskURL)
+            }
+
             let rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             guard let data = rendered.data else { return (nil, nil) }
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
@@ -213,7 +216,6 @@ final class ThumbnailService {
         relativePath: String,
         isVideo: Bool,
         maxPixelSize: Int,
-        key: String,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, duration: TimeInterval?) {
         let produced = await produceData(
@@ -221,7 +223,6 @@ final class ThumbnailService {
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
-            key: key,
             cacheDirectory: cacheDirectory
         )
         guard let data = produced.data else { return (nil, nil) }
@@ -236,7 +237,10 @@ final class ThumbnailService {
 
     /// Renders a thumbnail for a file on disk and encodes it as HEIC, reporting the
     /// running time alongside it for videos (a frame decode determines it anyway).
-    /// Used by `produceData` and exercised directly by tests.
+    /// Used by `produceData` and exercised directly by tests. `@concurrent` so the
+    /// CPU-bound encode is guaranteed off the main actor even for a caller already on it,
+    /// rather than relying on the one entry point that happens to hop.
+    @concurrent
     nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, duration: TimeInterval?) {
         if isVideo {
             let frame = await videoFrame(at: fileURL, maxPixelSize: maxPixelSize)
@@ -333,16 +337,19 @@ final class ThumbnailService {
     /// it — the webm/mkv case, where `videoFrame` falls back to libmpv.
     private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, duration: TimeInterval?) {
         let asset = AVURLAsset(url: url)
-        async let loadedDuration = asset.load(.duration)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
         generator.requestedTimeToleranceBefore = .positiveInfinity
         generator.requestedTimeToleranceAfter = .positiveInfinity
-        let time = CMTime(seconds: 1, preferredTimescale: 600)
-        let image = try? await generator.image(at: time).image
-        let seconds = (try? await loadedDuration).map(CMTimeGetSeconds)
+        let seconds = (try? await asset.load(.duration)).map(CMTimeGetSeconds)
         let duration = seconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        // Sample ~10% in (past the often-black opening), the same relative position the
+        // libmpv fallback uses, so the same content yields a comparable thumbnail across
+        // codecs. Fall back to 1s when the duration is unknown.
+        let position = duration.map { $0 * 0.1 } ?? 1
+        let time = CMTime(seconds: position, preferredTimescale: 600)
+        let image = try? await generator.image(at: time).image
         return (image, duration)
     }
 }

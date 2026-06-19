@@ -17,6 +17,14 @@ nonisolated enum AppConstants {
     /// Below this, the folder is Mixed and the user is prompted to choose.
     static let dominanceThreshold = 0.8
 
+    /// Longest-edge pixel size for gallery thumbnails. `ThumbnailService` sizes its
+    /// in-memory cache budget around this, so the two stay coupled through one value.
+    static let galleryThumbnailPixelSize = 440
+
+    /// Opacity of the accent-tinted selection highlight behind a selected row/cell,
+    /// shared by every list/grid so the selection reads consistently across them.
+    static let selectionHighlightOpacity = 0.22
+
     /// Classify a filename extension into a media type, or `nil` if unrecognized.
     static func mediaType(forExtension ext: String) -> MediaType? {
         let lower = ext.lowercased()

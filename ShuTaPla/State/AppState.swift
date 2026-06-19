@@ -102,6 +102,12 @@ final class AppState {
     /// it to completion.
     private(set) var updateTask: Task<Void, Never>?
 
+    /// In-flight confirmation operations (delete / strip-audio / tag removal) launched
+    /// from the modal confirm handlers, keyed by a token so each retains itself until it
+    /// finishes (and self-prunes). Retaining them keeps the SwiftData work from running as
+    /// an un-owned fire-and-forget Task; `cancelConfirmationTasks()` tears them down.
+    private(set) var confirmationTasks: [UUID: Task<Void, Never>] = [:]
+
     /// File-list selection in the Manager center panel, by file ID. Cleared when
     /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
@@ -395,8 +401,7 @@ final class AppState {
 
     /// Next sort order within a media type's sidebar section (appended last).
     private func nextSortOrder(for mediaType: MediaType) -> Int {
-        let all = (try? modelContext.fetch(FetchDescriptor<Playlist>())) ?? []
-        return all.filter { $0.mediaType == mediaType }.count
+        modelContext.playlists(ofType: mediaType).count
     }
 
     // MARK: - Manager operations
@@ -419,6 +424,10 @@ final class AppState {
             selectedFileIDs = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
+        // Re-clicking the already-selected row is the re-center gesture; only an actual
+        // selection change kicks off a fresh folder re-scan, so re-centering doesn't
+        // cancel and respawn a full scan on every click.
+        guard isNewSelection else { return }
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
     }
@@ -530,12 +539,15 @@ final class AppState {
             playerDeleteCandidate = nil
         }
         selectedFileIDs.subtract(removedIDs)
+        // Derive the next sort order from the files that survive this delta, not from the
+        // post-detach `playlist.files` — so a still-counted to-be-removed file can't lend
+        // its `sortOrder` to a new file and collide, breaking stable playback ordering.
+        var nextOrder = (playlist.files.filter { !removedIDs.contains($0.id) }.map(\.sortOrder).max() ?? -1) + 1
         for file in toRemove {
             file.playlist = nil  // detach so playlist.files updates synchronously
             modelContext.delete(file)
         }
 
-        var nextOrder = (playlist.files.map(\.sortOrder).max() ?? -1) + 1
         for scanned in delta.added {
             let file = PlaylistFile(
                 relativePath: scanned.relativePath,
@@ -566,11 +578,7 @@ final class AppState {
 
     /// Renumbers a section's `sortOrder` values to 0..<count after a deletion.
     private func compactSortOrder(for mediaType: MediaType) {
-        let all = (try? modelContext.fetch(FetchDescriptor<Playlist>())) ?? []
-        let section = all
-            .filter { $0.mediaType == mediaType }
-            .sorted { $0.sortOrder < $1.sortOrder }
-        for (index, playlist) in section.enumerated() {
+        for (index, playlist) in modelContext.playlists(ofType: mediaType).enumerated() {
             playlist.sortOrder = index
         }
     }
@@ -833,7 +841,23 @@ final class AppState {
         let targets = pendingManagerDelete
         pendingManagerDelete = []
         guard !targets.isEmpty else { return }
-        Task { if let error = await deleteFiles(targets) { managerDeleteError = error } }
+        runConfirmation { if let error = await self.deleteFiles(targets) { self.managerDeleteError = error } }
+    }
+
+    /// Runs a confirmation operation as a retained, self-pruning Task so the SwiftData work
+    /// it performs is owned (cancellable, awaitable) rather than fire-and-forget.
+    private func runConfirmation(_ operation: @escaping () async -> Void) {
+        let token = UUID()
+        confirmationTasks[token] = Task {
+            await operation()
+            confirmationTasks[token] = nil
+        }
+    }
+
+    /// Cancels any in-flight confirmation operations.
+    func cancelConfirmationTasks() {
+        for task in confirmationTasks.values { task.cancel() }
+        confirmationTasks.removeAll()
     }
 
     /// Requests confirmation to remove the audio track from a video-row's selection
@@ -855,7 +879,7 @@ final class AppState {
         let targets = pendingAudioStrip
         pendingAudioStrip = []
         guard !targets.isEmpty else { return }
-        Task { if let error = await stripAudio(from: targets) { audioStripError = error } }
+        runConfirmation { if let error = await self.stripAudio(from: targets) { self.audioStripError = error } }
     }
 
     /// Dismisses the playlist-wide tag-removal confirmation without removing anything.
@@ -871,7 +895,7 @@ final class AppState {
             return
         }
         pendingTagRemoval = nil
-        Task { if let error = await removeTagAcrossPlaylist(playlist, tag: tag) { tagRemovalError = error } }
+        runConfirmation { if let error = await self.removeTagAcrossPlaylist(playlist, tag: tag) { self.tagRemovalError = error } }
     }
 
     /// Live column count of the Manager gallery grid, reported by `FileGalleryView`
@@ -941,13 +965,13 @@ final class AppState {
     func confirmPlayerDelete() {
         guard let file = playerDeleteCandidate else { return }
         playerDeleteCandidate = nil
-        Task {
-            if let error = await deleteFiles([file]) {
+        runConfirmation {
+            if let error = await self.deleteFiles([file]) {
                 // The trash failed (permissions/locked): keep the player on the file and
                 // tell the user, rather than silently advancing past an undeleted file.
-                playerDeleteError = error
+                self.playerDeleteError = error
             } else {
-                coordinator.reconcileVisualSelection()
+                self.coordinator.reconcileVisualSelection()
             }
         }
     }
@@ -991,8 +1015,11 @@ final class AppState {
     /// refused with a message rather than silently merging the two.
     @discardableResult
     func renameTagAcrossPlaylist(_ playlist: Playlist, from oldTag: String, to newTag: String) async -> String? {
-        let collides = playlist.tagFrequency.keys.contains {
-            TagParser.sameTag($0, newTag) && !TagParser.sameTag($0, oldTag)
+        // Check every file's tags, not just `tagFrequency` (which counts only non-skipped
+        // files) — a target tag carried solely by a skipped/invalid file is still a tag the
+        // rename would silently merge onto.
+        let collides = playlist.files.contains { file in
+            file.tags.contains { TagParser.sameTag($0, newTag) && !TagParser.sameTag($0, oldTag) }
         }
         if collides { return "A tag named “\(newTag)” already exists." }
         let error = await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }

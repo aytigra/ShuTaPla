@@ -40,7 +40,12 @@ nonisolated enum TagParser {
 
     static func parseTags(from fileName: String) -> TagParseResult {
         let base = (fileName as NSString).deletingPathExtension
-        let scan = scanBracket(in: base)
+        return interpret(scanBracket(in: base))
+    }
+
+    /// Reads a bracket scan into a parse result. Split out from `parseTags` so an edit
+    /// can scan the base once and reuse that scan for both the result and the rewrite.
+    private static func interpret(_ scan: BracketScan) -> TagParseResult {
         if scan.invalid { return .invalid }
         guard let content = scan.content else { return .untagged }
 
@@ -73,15 +78,16 @@ nonisolated enum TagParser {
         guard isValidTag(tag) else { return fileName }
         let base = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension
+        let scan = scanBracket(in: base)
 
-        switch parseTags(from: fileName) {
+        switch interpret(scan) {
         case .invalid:
             return fileName
         case .untagged:
-            return safeCandidate(assemble(base: writeTags([tag], inBase: base), ext: ext), fallback: fileName)
+            return safeCandidate(assemble(base: writeTags([tag], inBase: base, scan: scan), ext: ext), fallback: fileName)
         case .valid(let tags):
             if tags.contains(where: { sameTag($0, tag) }) { return fileName }
-            return safeCandidate(assemble(base: writeTags(tags + [tag], inBase: base), ext: ext), fallback: fileName)
+            return safeCandidate(assemble(base: writeTags(tags + [tag], inBase: base, scan: scan), ext: ext), fallback: fileName)
         }
     }
 
@@ -90,11 +96,12 @@ nonisolated enum TagParser {
     static func removeTag(_ tag: String, from fileName: String) -> String {
         let base = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension
-        guard case .valid(let tags) = parseTags(from: fileName) else { return fileName }
+        let scan = scanBracket(in: base)
+        guard case .valid(let tags) = interpret(scan) else { return fileName }
 
         let remaining = tags.filter { !sameTag($0, tag) }
         if remaining.count == tags.count { return fileName }  // not present
-        return assemble(base: writeTags(remaining, inBase: base), ext: ext)
+        return assemble(base: writeTags(remaining, inBase: base, scan: scan), ext: ext)
     }
 
     /// Renames a tag, collapsing any resulting within-file duplicate to one
@@ -104,11 +111,12 @@ nonisolated enum TagParser {
         guard isValidTag(newTag) else { return fileName }
         let base = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension
-        guard case .valid(let tags) = parseTags(from: fileName) else { return fileName }
+        let scan = scanBracket(in: base)
+        guard case .valid(let tags) = interpret(scan) else { return fileName }
         guard tags.contains(where: { sameTag($0, oldTag) }) else { return fileName }
 
         let mapped = tags.map { sameTag($0, oldTag) ? newTag : $0 }
-        return assemble(base: writeTags(dedupe(mapped), inBase: base), ext: ext)
+        return assemble(base: writeTags(dedupe(mapped), inBase: base, scan: scan), ext: ext)
     }
 
     // MARK: - Bracket scanning
@@ -158,9 +166,7 @@ nonisolated enum TagParser {
     /// Returns a new base with the tag bracket set to `tags`. An empty `tags`
     /// removes the bracket (and an adjacent separating space). Reuses an
     /// existing bracket position; otherwise appends.
-    private static func writeTags(_ tags: [String], inBase base: String) -> String {
-        let scan = scanBracket(in: base)
-
+    private static func writeTags(_ tags: [String], inBase base: String, scan: BracketScan) -> String {
         if tags.isEmpty {
             guard let range = scan.range else { return base }
             return removingBracket(range: range, in: base)

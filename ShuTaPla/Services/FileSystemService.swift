@@ -165,25 +165,25 @@ actor FileSystemService {
             throw FileSystemError.operationFailed("Could not enumerate \(root.path)")
         }
 
-        let rootPath = root.standardizedFileURL.path
         var files: [ScannedFile] = []
         var counts: [MediaType: Int] = [:]
 
         for case let fileURL as URL in enumerator {
-            guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
-                continue
-            }
+            // One fetch for every key the loop needs (regular-file test and cloud status),
+            // reusing the values the enumerator prefetched rather than re-statting per use.
+            let values = try? fileURL.resourceValues(forKeys: Set(keys))
+            guard values?.isRegularFile == true else { continue }
             guard let type = AppConstants.mediaType(forExtension: fileURL.pathExtension) else { continue }
 
             let fileName = fileURL.lastPathComponent
             let (tags, status) = TagParser.fields(for: fileName)
             files.append(ScannedFile(
-                relativePath: relativePath(of: fileURL, under: rootPath),
+                relativePath: relativePath(of: fileURL, under: root),
                 fileName: fileName,
                 mediaType: type,
                 tags: tags,
                 taggingStatus: status,
-                cloudStatus: cloudStatus(for: fileURL)
+                cloudStatus: cloudStatus(from: values)
             ))
             counts[type, default: 0] += 1
         }
@@ -216,20 +216,23 @@ actor FileSystemService {
 
     // MARK: - Helpers
 
-    private nonisolated static func relativePath(of url: URL, under rootPath: String) -> String {
-        let full = url.standardizedFileURL.path
-        guard full.hasPrefix(rootPath) else { return url.lastPathComponent }
-        var rel = String(full.dropFirst(rootPath.count))
-        if rel.hasPrefix("/") { rel.removeFirst() }
-        return rel
+    /// The path of `url` relative to `root`, by path-component arithmetic on the
+    /// standardized URLs. Comparing components (rather than a raw-string prefix)
+    /// avoids a `/a/foo` root spuriously matching `/a/foobar`, and tolerates
+    /// trailing-slash and normalization differences between the two. Falls back to
+    /// the last component when `url` isn't actually under `root`.
+    private nonisolated static func relativePath(of url: URL, under root: URL) -> String {
+        let fileComponents = url.standardizedFileURL.pathComponents
+        let rootComponents = root.standardizedFileURL.pathComponents
+        guard fileComponents.count > rootComponents.count,
+              Array(fileComponents.prefix(rootComponents.count)) == rootComponents else {
+            return url.lastPathComponent
+        }
+        return fileComponents.dropFirst(rootComponents.count).joined(separator: "/")
     }
 
-    private nonisolated static func cloudStatus(for url: URL) -> CloudStatus {
-        guard let values = try? url.resourceValues(forKeys: [
-            .isUbiquitousItemKey,
-            .ubiquitousItemDownloadingStatusKey,
-            .ubiquitousItemIsDownloadingKey,
-        ]), values.isUbiquitousItem == true else {
+    private nonisolated static func cloudStatus(from values: URLResourceValues?) -> CloudStatus {
+        guard let values, values.isUbiquitousItem == true else {
             return .local
         }
         if values.ubiquitousItemIsDownloading == true { return .downloading }
@@ -242,8 +245,9 @@ actor FileSystemService {
     /// A type is dominant when it makes up ≥ 80% of recognized media files.
     private nonisolated static func dominantType(counts: [MediaType: Int]) -> MediaType? {
         let total = counts.values.reduce(0, +)
-        guard total > 0 else { return nil }
-        return counts.first { Double($0.value) / Double(total) >= AppConstants.dominanceThreshold }?.key
+        guard total > 0, let (type, count) = counts.max(by: { $0.value < $1.value }),
+              Double(count) / Double(total) >= AppConstants.dominanceThreshold else { return nil }
+        return type
     }
 }
 

@@ -71,7 +71,7 @@ struct PlaylistsOverlay: View {
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                appState.coordinator.visualPlaylist === playlist ? Color.accentColor.opacity(0.22) : Color.clear,
+                appState.coordinator.visualPlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear,
                 in: RoundedRectangle(cornerRadius: 6)
             )
             .contentShape(Rectangle())

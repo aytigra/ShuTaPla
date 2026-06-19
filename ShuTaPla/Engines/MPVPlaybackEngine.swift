@@ -74,6 +74,10 @@ class MPVPlaybackEngine: SourceNavigating {
     func shutdown() {
         eventTask?.cancel()
         eventTask = nil
+        // Drop the source so an end-of-file event already in flight when shutdown
+        // lands finds nothing to advance to and returns without walking the (now
+        // possibly torn-down) playlist's models.
+        source = nil
         client.shutdown()
     }
 
@@ -145,8 +149,9 @@ class MPVPlaybackEngine: SourceNavigating {
         case .pausedChanged(let paused):
             isPlaying = !paused
         case .endFile(.eof):
-            // Natural end. With looping on mpv replays internally and never reaches
-            // here, so this is unconditionally an advance.
+            // Natural end. With looping on, mpv replays internally and never reaches
+            // here. `advanceToNext` loads the successor, or holds the last frame when
+            // this file is the whole sequence (its successor is itself).
             advanceToNext()
         case .logMessage(let text):
             print("mpv \(text)")

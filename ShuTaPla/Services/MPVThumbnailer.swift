@@ -14,6 +14,7 @@
 
 import Foundation
 import ImageIO
+import Synchronization
 import Cmpv
 
 // `nonisolated`: this project defaults to `@MainActor` isolation, but every member
@@ -37,10 +38,17 @@ nonisolated enum MPVThumbnailer {
     /// the blocking extraction off the cooperative thread pool so a slow or stuck
     /// decode never ties up a concurrency-limited Swift task thread.
     static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, duration: TimeInterval?) {
-        await withCheckedContinuation { continuation in
-            pool.async {
-                continuation.resume(returning: extract(at: url, maxPixelSize: maxPixelSize))
+        let cancelled = Mutex(false)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pool.async {
+                    continuation.resume(returning: extract(
+                        at: url, maxPixelSize: maxPixelSize, isCancelled: { cancelled.withLock { $0 } }
+                    ))
+                }
             }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
         }
     }
 
@@ -49,18 +57,23 @@ nonisolated enum MPVThumbnailer {
     /// containers AVFoundation can't open. Runs the blocking probe off the shared
     /// pool so a stuck decode never ties up a concurrency-limited task thread.
     static func duration(at url: URL) async -> TimeInterval? {
-        await withCheckedContinuation { continuation in
-            pool.async {
-                continuation.resume(returning: probeDuration(at: url))
+        let cancelled = Mutex(false)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pool.async {
+                    continuation.resume(returning: probeDuration(at: url, isCancelled: { cancelled.withLock { $0 } }))
+                }
             }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
         }
     }
 
     /// Loads the file into a windowless, paused mpv instance just far enough to
     /// read the demuxer's `duration` property, decoding nothing. Synchronous and
     /// blocking — only called from `duration(at:)`.
-    private static func probeDuration(at url: URL) -> TimeInterval? {
-        guard let handle = mpv_create() else { return nil }
+    private static func probeDuration(at url: URL, isCancelled: () -> Bool) -> TimeInterval? {
+        guard !isCancelled(), let handle = mpv_create() else { return nil }
         defer { mpv_terminate_destroy(handle) }
 
         let options = [
@@ -78,6 +91,7 @@ nonisolated enum MPVThumbnailer {
 
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
+            if isCancelled() { return nil }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
@@ -103,8 +117,8 @@ nonisolated enum MPVThumbnailer {
     /// Drives a one-shot mpv instance to write a single frame, then downscales it,
     /// also reporting the file's duration the loaded instance knows. Synchronous and
     /// blocking — only called from `frame(at:maxPixelSize:)`.
-    private static func extract(at url: URL, maxPixelSize: Int) -> (image: CGImage?, duration: TimeInterval?) {
-        guard let handle = mpv_create() else { return (nil, nil) }
+    private static func extract(at url: URL, maxPixelSize: Int, isCancelled: () -> Bool) -> (image: CGImage?, duration: TimeInterval?) {
+        guard !isCancelled(), let handle = mpv_create() else { return (nil, nil) }
         defer { mpv_terminate_destroy(handle) }
 
         // mpv writes one PNG into a private directory we own and delete afterwards;
@@ -139,13 +153,14 @@ nonisolated enum MPVThumbnailer {
         loadFile(handle, path: url.path)
 
         // Pump events until the single frame ends the file, with a ceiling so a
-        // pathological decode can't block the pool thread indefinitely. The file is
-        // its duration comes along for free — captured at `FILE_LOADED`, while the
-        // file is open, so the length indicator needn't reopen it. Reading at
-        // `END_FILE` would be too late: the property reverts as mpv unloads the file.
+        // pathological decode can't block the pool thread indefinitely. The duration
+        // comes along for free — captured at `FILE_LOADED`, while the file is open, so
+        // the length indicator needn't reopen it. Reading at `END_FILE` would be too
+        // late: the property reverts as mpv unloads the file.
         var duration: TimeInterval?
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
+            if isCancelled() { return (nil, duration) }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
@@ -156,7 +171,10 @@ nonisolated enum MPVThumbnailer {
                 continue
             }
         }
-        return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), duration)
+        // Deadline reached without the file ending: mpv may not have finished writing the
+        // PNG, so the frame on disk could be truncated. Report no frame (keeping any
+        // duration captured at `FILE_LOADED`) rather than risk decoding a partial image.
+        return (nil, duration)
     }
 
     /// The PNG mpv wrote, downscaled to `maxPixelSize` through the shared image path.

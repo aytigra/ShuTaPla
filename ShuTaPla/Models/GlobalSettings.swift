@@ -21,10 +21,18 @@ final class GlobalSettings {
     /// duplicates ever exist, the extras are pruned so the singleton stays unique
     /// and later reads are deterministic.
     static func fetchOrCreate(in context: ModelContext) -> GlobalSettings {
-        let all = (try? context.fetch(FetchDescriptor<GlobalSettings>())) ?? []
-        if let first = all.first {
-            for extra in all.dropFirst() { context.delete(extra) }
-            return first
+        do {
+            let all = try context.fetch(FetchDescriptor<GlobalSettings>())
+            if let first = all.first {
+                for extra in all.dropFirst() { context.delete(extra) }
+                return first
+            }
+        } catch {
+            // A transient fetch failure must not be mistaken for "none exists": inserting
+            // then would write a second singleton that a later launch prunes, losing the
+            // stored defaults. Hand back a detached instance instead so this session
+            // degrades without persisting a duplicate.
+            return GlobalSettings()
         }
         let created = GlobalSettings()
         context.insert(created)

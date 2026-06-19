@@ -37,7 +37,7 @@ struct FileRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+        .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear)
         // Dim the row behind a spinner while its audio is being removed.
         .opacity(isStripping ? 0.5 : 1)
         .overlay(alignment: .trailing) {
@@ -47,9 +47,11 @@ struct FileRowView: View {
         }
         .contentShape(Rectangle())
         // Length is read once and cached on the model, so it appears instantly on
-        // later displays and across launches. Images have no timeline.
+        // later displays and across launches. Images have no timeline. A value already
+        // on the model is shown synchronously (see `durationColumn`); only a genuine
+        // miss awaits an extraction, so the column doesn't flash empty on scroll-in.
         .task(id: file.id) {
-            guard playlist.mediaType == .video else { return }
+            guard playlist.mediaType == .video, file.duration == nil else { return }
             duration = await durations.duration(for: file, in: playlist)
         }
     }
@@ -96,14 +98,14 @@ struct FileRowView: View {
     /// A fixed-width trailing column so the value right-aligns and the tag chips of
     /// every row keep a common right edge whatever each duration's width.
     private var durationColumn: some View {
-        Text(duration?.formattedDuration ?? "")
+        Text((duration ?? file.duration)?.formattedDuration ?? "")
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .frame(width: 56, alignment: .trailing)
     }
 }
 
-/// Compact, read-only tag chips. Editing lives in the tag panel (Task 7).
+/// Compact, read-only tag chips. Editing lives in the tag panel.
 private struct TagChips: View {
     let tags: [String]
 

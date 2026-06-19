@@ -286,6 +286,54 @@ import SwiftData
         #expect(coordinator.visualCurrentFile?.id == currentID)
     }
 
+    @Test func reconcileClearsCurrentFileWhenSequenceEmpties() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("1.jpg", ["a"]), ("2.jpg", ["a"])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        #expect(coordinator.visualCurrentFile != nil)
+
+        // A filter that matches nothing empties the sequence. The channel stays set (so the
+        // player shows its "no files" placeholder), but the engine's current file is cleared
+        // so a later advance/seek can't act on a file no longer in the playlist.
+        image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
+        coordinator.reconcileVisualSelection()
+
+        #expect(image.playbackSequence.isEmpty)
+        #expect(coordinator.visualPlaylist === image)   // still in Player mode
+        #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
+    }
+
+    @Test func shutdownResetsChannelBookkeeping() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4", "a.mp3"])
+        let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
+        let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        coordinator.play(video)
+        coordinator.play(audio)
+        coordinator.suppress()
+
+        coordinator.shutdown()
+
+        #expect(coordinator.visualPlaylist == nil)
+        #expect(coordinator.visualKind == nil)
+        #expect(coordinator.audioPlaylist == nil)
+        #expect(!coordinator.isSuppressed)
+        #expect(!coordinator.visualHaltedForOverlay)
+    }
+
     @Test func togglePauseFlipsBetweenPlayingAndPaused() throws {
         let container = try makeContainer()
         let context = container.mainContext

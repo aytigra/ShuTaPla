@@ -31,7 +31,12 @@ nonisolated enum AudioStripper {
     static func stripAudio(at input: URL, to output: URL) async -> Bool {
         await withCheckedContinuation { continuation in
             pool.async {
-                continuation.resume(returning: remux(input: input.path, output: output.path))
+                let ok = remux(input: input.path, output: output.path)
+                // A mid-stream failure (write header/frame/trailer) can leave a truncated,
+                // unplayable file at the destination. Remove it so callers never see a
+                // corrupt output — `remux`'s `defer`s have already closed the file handles.
+                if !ok { try? FileManager.default.removeItem(at: output) }
+                continuation.resume(returning: ok)
             }
         }
     }
@@ -109,7 +114,8 @@ nonisolated enum AudioStripper {
     private static func errorString(_ code: Int32) -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         av_strerror(code, &buffer, buffer.count)
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func log(_ message: String) {
