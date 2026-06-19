@@ -2,10 +2,10 @@
 //  ArrayExtensionsTests.swift
 //  ShuTaPlaTests
 //
-//  The pure wrap-around stepping behind motion playback (`cyclicSuccessor` /
-//  `cyclicPredecessor`): standalone value-type logic, exercised without any model or
-//  engine. The reordering helper `move(fromOffsets:toOffset:)` is covered through its
-//  production entry point in `AppStateTests.reorderUpdatesSortOrder`.
+//  The pure value-type array helpers: the reordering helper `move(fromOffsets:toOffset:)`
+//  matching SwiftUI's `onMove`, and the wrap-around stepping behind motion playback
+//  (`cyclicSuccessor` / `cyclicPredecessor`). Standalone logic, exercised without any
+//  model or engine.
 //
 
 import Testing

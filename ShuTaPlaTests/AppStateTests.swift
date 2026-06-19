@@ -10,6 +10,7 @@
 import Testing
 import Foundation
 import SwiftData
+import AVFoundation
 @testable import ShuTaPla
 
 // MARK: - Helpers
@@ -425,6 +426,84 @@ struct AppStateTests {
 
         #expect(error == nil)
         #expect(Set(playlist.files.map(\.fileName)) == ["b.mp4"])
+    }
+
+    // MARK: - Strip audio (orchestration around AudioStripper)
+
+    /// The first real codec-labeled sample whose filename starts with `prefix`,
+    /// from `test_media/videos` two levels up from this test file (the repo root).
+    private func videoSample(prefix: String) throws -> URL {
+        let videos = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "test_media/videos", directoryHint: .isDirectory)
+        let files = try FileManager.default.contentsOfDirectory(at: videos, includingPropertiesForKeys: nil)
+        return try #require(
+            files.first { $0.lastPathComponent.hasPrefix(prefix) },
+            "no sample with prefix \(prefix) in \(videos.path)"
+        )
+    }
+
+    /// True when no leftover `.shutapla-strip-…` sidecar remains in `dir`.
+    private func noStripSidecar(in dir: URL) throws -> Bool {
+        let names = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+        return !names.contains { $0.hasPrefix(".shutapla-strip-") }
+    }
+
+    @Test func stripAudioSwapsInAudioFreeFileBalancesSpinnerAndLeavesNoSidecar() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // A real h264 sample copied into the playlist folder; the file isn't on screen,
+        // so the swap runs without touching the coordinator's visual channel.
+        let source = dir.appending(path: "clip.mp4")
+        try FileManager.default.copyItem(at: try videoSample(prefix: "h264"), to: source)
+
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "clip.mp4", fileName: "clip.mp4", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.stripAudio(from: [file])
+
+        #expect(error == nil)
+        #expect(appState.strippingFileIDs.isEmpty)         // spinner inserted then removed
+        #expect(try noStripSidecar(in: dir))               // hidden sibling cleaned up
+
+        // The audio-free remux took the original's place at the same path.
+        let asset = AVURLAsset(url: source)
+        let video = try await asset.loadTracks(withMediaType: .video)
+        let audio = try await asset.loadTracks(withMediaType: .audio)
+        #expect(!video.isEmpty, "video track was dropped")
+        #expect(audio.isEmpty, "audio track survived the swap")
+    }
+
+    @Test func stripAudioReportsFailureBalancesSpinnerAndLeavesNoSidecarWhenSourceMissing() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // No file on disk: the early existence guard fails before AudioStripper runs.
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "missing.mp4", fileName: "missing.mp4", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.stripAudio(from: [file])
+
+        #expect(error == "Couldn't remove the audio.")
+        #expect(appState.strippingFileIDs.isEmpty)         // balanced even on the failure path
+        #expect(try noStripSidecar(in: dir))
     }
 
     // MARK: - Filtering (Task 7)
