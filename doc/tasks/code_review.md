@@ -20,6 +20,9 @@ started. This review covers **completed code only**; features that belong to uns
 (audio overlay, settings/persistence/lifecycle, cloud, HDR, accessibility) are out of scope
 and not listed as defects.
 
+**Status.** A ✅ on a heading means that finding is fixed (on `code-review-fixes`); an
+unmarked heading is still open. Done so far: A1, A3, A7, A8, A11, A16, B1, D2, G1–G5, I1–I7.
+
 ## Severity summary
 
 | # | Area | High | Medium | Low |
@@ -38,7 +41,7 @@ and not listed as defects.
 
 ## A. Correctness & resource
 
-### A1 — mpv command/setter methods are not gated on `isTerminated` (use-after-free after shutdown) **[verified] · High**
+### ✅ A1 — mpv command/setter methods are not gated on `isTerminated` (use-after-free after shutdown) **[verified] · High**
 `MPVClient.swift:242–301, 372–384`. The reads (`volume` getter `:276`, `isLooping`
 getter `:289`, `drainEvents` `:307`) all `guard !isTerminated`, but every **write** —
 `loadFile`, `play`/`pause`, `stop`, `seek(to:)`, `seek(by:)`, the `volume`/`isLooping`
@@ -49,7 +52,7 @@ block (which sets `isTerminated` and calls `mpv_terminate_destroy`) executes `mp
 commands become no-ops at the C layer" is false. **Fix:** add `guard !self.isTerminated`
 inside each command/setter `queue.async`, mirroring the reads.
 
-### A3 — Renaming/removing a tag across a playlist doesn't update the active filter → filtered list silently empties **[verified] · High**
+### ✅ A3 — Renaming/removing a tag across a playlist doesn't update the active filter → filtered list silently empties **[verified] · High**
 `AppState.swift:914–927` (`renameTagAcrossPlaylist`, `removeTagAcrossPlaylist`, `removeTag`)
 funnel through `editTags` (`:932–949`), which calls `rebuildTagFrequency` + `recomputeIfSelected`
 but never touches `playlist.filterState.selectedTags` or `savedSearches`. Filtering by
@@ -81,7 +84,7 @@ host and during real teardown.
 caller sees the error, but a corrupt, unplayable file is left at the destination path.
 **Fix:** `try? FileManager.removeItem(at: output)` on every failure path.
 
-### A7 — Corrupt/0-byte cached thumbnail is treated as a valid hit → cell stuck on placeholder · Medium
+### ✅ A7 — Corrupt/0-byte cached thumbnail is treated as a valid hit → cell stuck on placeholder · Medium
 `ThumbnailService.swift:178`. `produceData` reads the disk-cache `.heic` with `try?`; a
 0-byte or truncated file (interrupted prior write) reads successfully and is returned as
 valid data. `produceImage`'s `NSBitmapImageRep(data:)` then returns `nil`, so the cell
@@ -89,7 +92,7 @@ shows a placeholder **permanently** — the bad key still "hits" so it's never r
 **Fix:** validate decode (or non-empty length) before treating the cached bytes as a hit;
 delete and regenerate on decode failure.
 
-### A8 — `confirmPlayerDelete` discards the delete error → failed trash silently advances the player · Medium
+### ✅ A8 — `confirmPlayerDelete` discards the delete error → failed trash silently advances the player · Medium
 `AppState.swift:872`: `_ = await deleteFiles([file])`. If the trash fails (permissions/
 locked), the model is not deleted but `reconcileVisualSelection` runs and the user gets no
 feedback. Every other delete path surfaces the message. **Fix:** present the returned
@@ -111,7 +114,7 @@ uses `appState.fileGridColumns`) steps by the wrong stride and selection jumps t
 unexpected cell. **Fix:** measure the actual column count from rendered cell frames rather
 than recomputing it.
 
-### A11 — `TagParser.parseTags` splits on a single ASCII space while the emptiness check uses `.whitespaces` · Medium
+### ✅ A11 — `TagParser.parseTags` splits on a single ASCII space while the emptiness check uses `.whitespaces` · Medium
 `TagParser.swift:51`. `split(separator: " ")` treats a tab/NBSP-separated bracket as one
 token, which fails `isValidTag`, so `clip [beach\tsunset].mp4` is classified `.invalid`
 even though the earlier `.whitespaces` check considered the tab whitespace. The two paths
@@ -144,7 +147,7 @@ non-skipped files only). A target tag carried solely by an invalid/skipped file 
 detected, so the rename proceeds and merges onto it on disk. **Fix:** check against all
 files' tags, not just `tagFrequency`.
 
-### A16 — `load()` doesn't reset looping on explicit next/previous · Low
+### ✅ A16 — `load()` doesn't reset looping on explicit next/previous · Low
 `MPVPlaybackEngine.swift:83` / `:143`. `loop-file=inf` and the engine `isLooping` flag
 persist across `loadFile`, so toggling loop on file A then pressing next leaves B looping
 forever (and the indicator lit), despite the property doc describing it as "whether the
@@ -193,7 +196,7 @@ count)` for robustness.
 
 ## B. Concurrency
 
-### B1 — `DurationService.extract`/`avDuration` are not `@concurrent` → uncached duration extraction hitches the UI **High**
+### ✅ B1 — `DurationService.extract`/`avDuration` are not `@concurrent` → uncached duration extraction hitches the UI **High**
 `DurationService.swift:42`. `nonisolated async` under MainActor-default isolation runs on the
 caller's actor; `duration(for:)` awaits `AVURLAsset.load(.duration)` plus the libmpv fallback
 **on the main actor** for each uncached file, freezing the UI while the file list/gallery
@@ -257,7 +260,7 @@ exempt). Two kinds, with different weight:
 
 Low severity overall — cosmetic, no behavioral impact.
 
-### D2 — Modal confirmations/errors not registered in `HotkeyRouter.hasBlockingConfirmation` → bare keys leak behind them · High
+### ✅ D2 — Modal confirmations/errors not registered in `HotkeyRouter.hasBlockingConfirmation` → bare keys leak behind them · High
 - `PlayerView.swift:96` — the "Couldn't remove audio" alert (`appState.audioStripError`).
 - `FilesTagsOverlayView.swift:45–48` — the rename-error alert (view-local `@State errorMessage`,
   with no AppState flag to register).
@@ -335,33 +338,33 @@ select gesture. **Fix:** enlarge the hit area / separate the targets.
 
 ## G. Code reuse / duplication
 
-### G1 — Security-scoped-access dance duplicated across 5 sites · High
+### ✅ G1 — Security-scoped-access dance duplicated across 5 sites · High
 `DurationService.swift:43`, `ThumbnailService.swift:147` & `:180`, `FileSystemService.swift:146`,
 `ImagePlaybackEngine.swift:166`. Each open-codes `resolve` + `startAccessingSecurityScopedResource`
 + `defer stop` + `appending(relativePath)` + `fileExists`. A forgotten `defer` in any copy leaks
 the grant. **Fix:** one `BookmarkService.withScopedAccess(_:) { url in … }` / `withResolvedFile`
 helper that guarantees the balance — matches the project's extract-to-helpers convention.
 
-### G2 — `FileListView` and `FileGalleryView` duplicate the entire selection/scroll/rename scaffolding · High
+### ✅ G2 — `FileListView` and `FileGalleryView` duplicate the entire selection/scroll/rename scaffolding · High
 `FileListView.swift:22–148` vs `FileGalleryView.swift:22–171`. `anchor`/`renamingID`/`draftName`/
 `skipSelectionScroll` state, `handleTap`/`handleClick`/`beginRename`/`commitRename`/`targets(for:)`/
 `visibleFiles`, and the three `onChange`/`onAppear` scroll-centering blocks are byte-for-byte
 identical. Bug fixes must be mirrored or the two presentations drift (already a risk — see A9).
 **Fix:** extract a shared `FileBrowser` model / `ViewModifier` in `Shared/`.
 
-### G3 — `WelcomeView` and `PlaylistSidebar` duplicate the Mixed-folder add flow verbatim · High
+### ✅ G3 — `WelcomeView` and `PlaylistSidebar` duplicate the Mixed-folder add flow verbatim · High
 `WelcomeView.swift:90–122` vs `PlaylistSidebar.swift:236–269`. `add(_:)`, `typeChoices(for:)`,
 `label(for:in:)`, plus the `pending`/`errorMessage`/`isWorking` state and the type-choice prompt
 are duplicated — the code comment even says "shared with WelcomeView's logic." **Fix:** one
 `AddPlaylistFlow` view-model/modifier.
 
-### G4 — `advanceToNext()`/`returnToPrevious()` duplicated across the two engine families · High
+### ✅ G4 — `advanceToNext()`/`returnToPrevious()` duplicated across the two engine families · High
 `MPVPlaybackEngine.swift:116–138` vs `ImagePlaybackEngine.swift:89–107` — identical
 `guard source / fileAfter / url / load / engineDidAdvance` bodies. **Fix:** a default
 implementation on a shared protocol over the `PlaybackSource` seam (both already hold a weak
 `source` and a `load`).
 
-### G5 — Enum display logic switched inline in views (already drifted) · High-medium
+### ✅ G5 — Enum display logic switched inline in views (already drifted) · High-medium
 `MediaType` noun: `WelcomeView.swift:113–122` & `PlaylistSidebar.swift:260–269`. `ServiceFilter`
 glyph/label: `FilterBar.swift:131–145` & `PlaylistCenterView.swift:168–170` — the labels already
 disagree ("files with invalid tagging" vs "invalid tagging"). **Fix:** `MediaType.displayName`
@@ -444,7 +447,7 @@ AppState (or `@Bindable`) consistently.
 
 ## I. Test suite
 
-### I1 — `endOfFileAdvancesViaSource` drives a real engine to natural EOF (trap-class-3 risk) · Medium
+### ✅ I1 — `endOfFileAdvancesViaSource` drives a real engine to natural EOF (trap-class-3 risk) · Medium
 `PlaybackEngineTests.swift:68`. It loads a real 1s sine into `AudioPlaybackEngine` and waits up
 to 12s for natural EOF → `advanceToNext` — exactly the post-teardown advance the rules say to
 avoid (the rules mandate **empty** placeholder files so loads fail without reaching `advanceToNext`).
@@ -452,20 +455,20 @@ It relies entirely on the `isTerminated` gate holding under timing pressure; a l
 the whole run. **Fix:** use an empty fixture / a mock source, or assert advance via the
 synchronous path.
 
-### I2 — `slideshowAdvancesAfterInterval` can leave a timer tick scheduled past teardown · Low
+### ✅ I2 — `slideshowAdvancesAfterInterval` can leave a timer tick scheduled past teardown · Low
 `PlaybackEngineTests.swift:182`. The 0.1s slideshow `Task` keeps calling `advanceToNext`; if it
 lands after the body returns it matches trap-class-2 (benign here only because the files aren't
 context-backed). `stopSlideshow` runs only if the poll returned. **Fix:** `defer` the stop.
 
-### I3 — Triple `select()` awaits only the last task (trap-class-2 risk) · Low
+### ✅ I3 — Triple `select()` awaits only the last task (trap-class-2 risk) · Low
 `AppStateTests.swift:427`. Each `select` launches an un-awaited `updateTask`; the intermediate
 ones are left running. A cancelled-but-still-running `apply(delta:)` after teardown traps
 intermittently. **Fix:** set state directly or await each.
 
-### I4 — `ShuTaPlaTests.example` is an empty template test · High (cleanup)
+### ✅ I4 — `ShuTaPlaTests.example` is an empty template test · High (cleanup)
 `ShuTaPlaTests.swift:13`. No assertions — can never fail, only noise. **Fix:** delete it.
 
-### I5 — Coverage gaps for testable core logic · Medium
+### ✅ I5 — Coverage gaps for testable core logic · Medium
 None of these are covered: `Array+Move` multi-index/downward move (`Array+Move.swift:15`),
 `Array+Cyclic` no-match (`→ first/last`) and empty (`→ nil`) branches (`Array+Cyclic.swift:17`),
 `moveFileSelection` grid-edge clamp branches (`AppState.swift:813`), `stripAudio` orchestration
@@ -477,14 +480,14 @@ None of these are covered: `Array+Move` multi-index/downward move (`Array+Move.s
 the cheap, high-value tests the project's own "tests lead the work" rule asks for. **Fix:** add
 targeted unit tests (several can be parameterized).
 
-### I6 — Shuffle-order-sensitive assertions are theoretically flaky · Low
+### ✅ I6 — Shuffle-order-sensitive assertions are theoretically flaky · Low
 `FileSystemServiceTests.swift:222` asserts `s1 != input` (a correct shuffle can leave order
 unchanged for some seeds), and `AppStateTests.swift:188` asserts an exact skipped-name order over
 Fisher-Yates-shuffled input (holds only because one element is skipped). **Fix:** assert the
 permutation/determinism invariants (sorted equality, `s1 == s2`) and use sets where order is
 irrelevant.
 
-### I7 — Repetitive routing tests rebuild the fixture inline · Low
+### ✅ I7 — Repetitive routing tests rebuild the fixture inline · Low
 `HotkeyRouterTests.swift:122`. Many near-identical player/manager tests rebuild
 container+folder+playlist+appState+router by hand. **Fix:** a shared suite `init`/helper or a
 parameterized `@Test(arguments:)` over (key, expected effect), per the swift-testing guide.
