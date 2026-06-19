@@ -58,8 +58,8 @@ struct FilterBar: View {
 
     private var modePicker: some View {
         Picker("Match", selection: Binding(
-            get: { playlist.filterState.filterMode },
-            set: { appState.setFilterMode($0) }
+            get: { appState.filterMode },
+            set: { appState.filterMode = $0 }
         )) {
             Text("All tags").tag(FilterMode.and)
             Text("Any tag").tag(FilterMode.or)
@@ -98,7 +98,7 @@ struct FilterBar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(playlist.savedSearches, id: \.self) { search in
+                ForEach(playlist.savedSearches) { search in
                     savedSearchRow(search)
                 }
             }

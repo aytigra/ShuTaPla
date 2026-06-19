@@ -10,8 +10,8 @@
 //  observation, looping, seeking, and end-of-file advance — lives here once.
 //
 //  The engine is `@MainActor @Observable`: it consumes its client's event stream
-//  on the main actor and writes its observable state directly, so SwiftUI (and
-//  the Task 11 coordinator) track `currentTime`/`duration`/`isPlaying` with no
+//  on the main actor and writes its observable state directly, so SwiftUI (and the
+//  `PlaybackCoordinator`) track `currentTime`/`duration`/`isPlaying` with no
 //  extra plumbing. `currentFile` is the engine's notion of "now playing"; the
 //  `source` decides what comes next.
 //

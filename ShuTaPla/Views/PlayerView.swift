@@ -4,10 +4,10 @@
 //
 //  The fullscreen playback container. It shows the active visual channel (video or
 //  image), drives the window into fullscreen while it is on screen, and hosts the
-//  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter` (Task 12). The
-//  edge hover zones (Task 13) drive the `OverlayManager`; this view composes its
-//  overlay content (Task 14): the bottom controls bar, the left playlists selector,
-//  and the Files & Tags overlay. (Compact/extended audio content arrives in Task 15.)
+//  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
+//  zones drive the `OverlayManager`; this view composes its overlay content: the bottom
+//  controls bar, the left playlists selector, and the Files & Tags overlay.
+//  (Compact/extended audio content arrives in Task 15.)
 //
 
 import SwiftUI

@@ -33,11 +33,7 @@ struct FilesTagsOverlayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // A solid translucent panel (no live blur) keeps the light text legible over the
-        // player while staying cheap to composite, so animating it in/out doesn't stall
-        // the video's redraw on the main thread.
-        .background(Color.black.opacity(0.92))
-        .environment(\.colorScheme, .dark)
+        .playerOverlayPanel()
         // A click on empty chrome resigns the tag field so it can be unfocused
         // anywhere, not just by tabbing to another control.
         .contentShape(Rectangle())
@@ -132,9 +128,14 @@ struct FilesTagsOverlayView: View {
             onCommitRename: { commitRename(file) },
             onCancelRename: { renamingID = nil }
         )
+        // One tap gesture branching on the event's click count: a separate `count: 2`
+        // gesture here would stack against the panel-wide single tap below, so a
+        // double-click could lose a click to the background's resign-focus handler.
         // Double-click means "play this one": switch to it, resume if paused, and close
-        // the overlay so playback continues unobstructed.
-        .onTapGesture(count: 2) {
+        // the overlay so playback continues unobstructed. A single click does nothing
+        // (the panel tap still resigns the tag field).
+        .onTapGesture {
+            guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
             coordinator.playNow(playlist, file: file)
             overlays.closeFilesTags()
         }

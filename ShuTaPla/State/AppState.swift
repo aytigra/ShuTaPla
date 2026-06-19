@@ -1043,7 +1043,7 @@ final class AppState {
     private func rewriteTagInFilters(_ playlist: Playlist, _ transform: (String) -> String) {
         playlist.filterState.selectedTags = TagParser.dedupe(playlist.filterState.selectedTags.map(transform))
         playlist.savedSearches = playlist.savedSearches.map {
-            SavedSearch(tags: TagParser.dedupe($0.tags.map(transform)), mode: $0.mode)
+            SavedSearch(id: $0.id, tags: TagParser.dedupe($0.tags.map(transform)), mode: $0.mode)
         }
     }
 
@@ -1053,7 +1053,7 @@ final class AppState {
         playlist.filterState.selectedTags.removeAll { TagParser.sameTag($0, tag) }
         playlist.savedSearches = playlist.savedSearches.compactMap {
             let tags = $0.tags.filter { !TagParser.sameTag($0, tag) }
-            return tags.isEmpty ? nil : SavedSearch(tags: tags, mode: $0.mode)
+            return tags.isEmpty ? nil : SavedSearch(id: $0.id, tags: tags, mode: $0.mode)
         }
     }
 
@@ -1101,6 +1101,14 @@ final class AppState {
         }
         playlist.filterState.selectedTags = tags
         filterDidChange()
+    }
+
+    /// The selected playlist's AND/OR filter operator, as one binding source for the
+    /// mode picker: the read and the write both run through here (the write recomputes
+    /// the filtered files), so the control can't display one value while writing another.
+    var filterMode: FilterMode {
+        get { selectedPlaylist?.filterState.filterMode ?? .and }
+        set { setFilterMode(newValue) }
     }
 
     /// Sets the AND/OR operator on the selected playlist's tag filter.

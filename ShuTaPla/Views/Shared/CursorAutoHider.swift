@@ -39,7 +39,7 @@ struct CursorAutoHider: NSViewRepresentable {
     }
 
     @MainActor
-    final class CursorTrackingView: NSView {
+    final class CursorTrackingView: TrackingAreaView {
         var idleDelay: TimeInterval = 2.5
 
         var isActive = false {
@@ -50,19 +50,8 @@ struct CursorAutoHider: NSViewRepresentable {
         }
 
         private var hideWork: DispatchWorkItem?
-        private var trackingArea: NSTrackingArea?
 
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let trackingArea { removeTrackingArea(trackingArea) }
-            let area = NSTrackingArea(
-                rect: bounds,
-                options: [.mouseMoved, .activeAlways, .inVisibleRect],
-                owner: self
-            )
-            addTrackingArea(area)
-            trackingArea = area
-        }
+        override var trackingEventOptions: NSTrackingArea.Options { [.mouseMoved] }
 
         override func mouseMoved(with event: NSEvent) {
             guard isActive else { return }

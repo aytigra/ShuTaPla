@@ -20,17 +20,29 @@ nonisolated enum FileCollectionLayout {
     case list
     case gallery
 
-    /// Gallery grid metrics, shared by the `LazyVGrid` columns and the keyboard
-    /// navigator's column-count derivation.
+    /// Gallery grid metrics for the `LazyVGrid` columns.
     static let galleryMinItemWidth: CGFloat = 150
+    static let galleryMaxItemWidth: CGFloat = 220
     static let gallerySpacing: CGFloat = 12
 
-    /// Mirrors `LazyVGrid`'s adaptive packing: as many `galleryMinItemWidth` columns
-    /// as fit in the padded width, separated by `gallerySpacing`.
-    static func galleryColumnCount(for width: CGFloat) -> Int {
-        let available = width - gallerySpacing * 2          // outer padding
-        guard available > 0 else { return 1 }
-        return max(1, Int((available + gallerySpacing) / (galleryMinItemWidth + gallerySpacing)))
+    /// Derives the gallery's column count from the leading-edge x of every laid-out
+    /// cell: cells in the same column share a leading edge, so the number of distinct
+    /// edges (to the nearest point, absorbing sub-pixel drift) is the column count.
+    /// Measuring the rendered frames keeps the keyboard navigator's stride matched to
+    /// whatever `LazyVGrid`'s adaptive packing actually produced, rather than
+    /// re-deriving the packing and risking a drift at the `galleryMaxItemWidth` cap.
+    static func columnCount(fromCellMinXs minXs: [CGFloat]) -> Int {
+        let distinct = Set(minXs.map { $0.rounded() })
+        return max(1, distinct.count)
+    }
+}
+
+/// Leading-edge x of each laid-out gallery cell, collected so the column count can be
+/// measured from the real layout (see `FileCollectionLayout.columnCount(fromCellMinXs:)`).
+private struct GalleryCellMinXKey: PreferenceKey {
+    static let defaultValue: [CGFloat] = []
+    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
@@ -56,6 +68,10 @@ struct FileCollectionView<Cell: View>: View {
 
     @Environment(AppState.self) private var appState
 
+    /// Coordinate space the gallery cells report their frames in, so a cell's leading
+    /// edge is stable under vertical scroll.
+    private let gridSpace = "fileGrid"
+
     @State private var anchor: UUID?
     @State private var renamingID: UUID?
     @State private var draftName = ""
@@ -66,7 +82,7 @@ struct FileCollectionView<Cell: View>: View {
 
     private var columns: [GridItem] {
         [GridItem(
-            .adaptive(minimum: FileCollectionLayout.galleryMinItemWidth, maximum: 220),
+            .adaptive(minimum: FileCollectionLayout.galleryMinItemWidth, maximum: FileCollectionLayout.galleryMaxItemWidth),
             spacing: FileCollectionLayout.gallerySpacing
         )]
     }
@@ -90,26 +106,33 @@ struct FileCollectionView<Cell: View>: View {
                                 // one- and two-line captions line up at the thumbnail
                                 // rather than centering against each other.
                                 .frame(maxHeight: .infinity, alignment: .top)
+                                // Publish this cell's leading edge so the live column
+                                // count can be measured from the real layout. Vertical
+                                // scroll doesn't move it, so the set of edges is stable.
+                                .background {
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: GalleryCellMinXKey.self,
+                                            value: [geo.frame(in: .named(gridSpace)).minX]
+                                        )
+                                    }
+                                }
                         }
                     }
                     .padding(FileCollectionLayout.gallerySpacing)
                 }
             }
+            .coordinateSpace(name: gridSpace)
             .overlay {
                 if visibleFiles.isEmpty {
                     ContentUnavailableView("No Files", systemImage: "doc")
                 }
             }
             // Track the live column count so keyboard arrows can navigate the grid in 2D.
-            .background {
-                if layout == .gallery {
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { appState.fileGridColumns = FileCollectionLayout.galleryColumnCount(for: geo.size.width) }
-                            .onChange(of: geo.size.width) { _, width in
-                                appState.fileGridColumns = FileCollectionLayout.galleryColumnCount(for: width)
-                            }
-                    }
+            .onPreferenceChange(GalleryCellMinXKey.self) { minXs in
+                let count = FileCollectionLayout.columnCount(fromCellMinXs: minXs)
+                Task { @MainActor in
+                    if appState.fileGridColumns != count { appState.fileGridColumns = count }
                 }
             }
             // Keep the keyboard-driven selection (single item) visible as it moves. A
@@ -192,9 +215,13 @@ struct FileCollectionView<Cell: View>: View {
 
     private func handleClick(_ file: PlaylistFile) {
         let before = appState.selectedFileIDs
+        // Read the modifiers from the click that triggered this handler, not the
+        // global keyboard state at handler-run time: `onTapGesture` fires on mouse-up,
+        // so a shift/cmd released a few milliseconds early would otherwise downgrade a
+        // range/toggle click to a plain select and collapse the multi-selection.
         FileSelection.apply(
             click: file.id,
-            modifiers: NSEvent.modifierFlags,
+            modifiers: NSApp.currentEvent?.modifierFlags ?? [],
             in: visibleFiles,
             selection: &appState.selectedFileIDs,
             anchor: &anchor

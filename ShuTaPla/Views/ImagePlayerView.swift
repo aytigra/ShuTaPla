@@ -15,6 +15,11 @@ struct ImagePlayerView: View {
 
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var magnifyBy: CGFloat = 1
+    @GestureState private var magnifyAnchor: UnitPoint = .center
+
+    /// Floor for the zoom scale, applied to both the live preview and the committed
+    /// value so a pinch can't drive the image toward zero and snap back on release.
+    private static let minScale: CGFloat = 0.1
 
     private var engine: ImagePlaybackEngine { coordinator.imageEngine }
 
@@ -29,7 +34,7 @@ struct ImagePlayerView: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
             .contentShape(Rectangle())
-            .gesture(panGesture.simultaneously(with: zoomGesture))
+            .gesture(panGesture.simultaneously(with: zoomGesture(in: proxy.size)))
         }
         .ignoresSafeArea()
     }
@@ -41,10 +46,12 @@ struct ImagePlayerView: View {
             width: transform.offset.width + dragTranslation.width,
             height: transform.offset.height + dragTranslation.height
         )
-        let scale = transform.scale * magnifyBy
+        let scale = max(Self.minScale, transform.scale * magnifyBy)
 
         base(image, in: size)
-            .scaleEffect(scale)
+            // Zoom about the pinch point during the gesture (anchor settles back to
+            // center when idle), so the content under the fingers stays put.
+            .scaleEffect(scale, anchor: magnifyAnchor)
             .offset(offset)
     }
 
@@ -78,11 +85,19 @@ struct ImagePlayerView: View {
             }
     }
 
-    private var zoomGesture: some Gesture {
+    private func zoomGesture(in size: CGSize) -> some Gesture {
         MagnifyGesture()
             .updating($magnifyBy) { value, state, _ in state = value.magnification }
+            .updating($magnifyAnchor) { value, state, _ in state = value.startAnchor }
             .onEnded { value in
-                engine.transform.scale = max(0.1, engine.transform.scale * value.magnification)
+                let newScale = max(Self.minScale, engine.transform.scale * value.magnification)
+                // The live preview scaled about the pinch point; the committed transform
+                // scales about the center. Fold the difference into the offset so the
+                // image doesn't jump when the gesture hands back to the centered render.
+                let anchor = value.startAnchor
+                engine.transform.offset.width += (anchor.x - 0.5) * size.width * (1 - newScale)
+                engine.transform.offset.height += (anchor.y - 0.5) * size.height * (1 - newScale)
+                engine.transform.scale = newScale
             }
     }
 }

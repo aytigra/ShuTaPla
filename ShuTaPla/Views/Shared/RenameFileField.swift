@@ -5,7 +5,7 @@
 //  An inline rename field for files. On focus it selects only the base name —
 //  everything before the file extension — matching Finder's rename behavior, so
 //  a quick edit changes the name and leaves the extension untouched. Commits on
-//  [return], cancels on [esc].
+//  [return] or when focus is lost (a click away), cancels on [esc].
 //
 
 import SwiftUI
@@ -45,6 +45,9 @@ struct RenameFileField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: RenameFileField
+        /// Set once `[return]`/`[esc]` has resolved the edit, so the end-editing that
+        /// follows (the field losing first responder) doesn't fire a second outcome.
+        private var resolved = false
 
         init(_ parent: RenameFileField) { self.parent = parent }
 
@@ -53,13 +56,24 @@ struct RenameFileField: NSViewRepresentable {
             parent.text = field.stringValue
         }
 
+        /// Clicking away (losing focus without `[return]`/`[esc]`) commits the edit
+        /// rather than stranding the field in rename mode.
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard !resolved else { return }
+            resolved = true
+            if let field = notification.object as? NSTextField { parent.text = field.stringValue }
+            parent.onCommit()
+        }
+
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
+                resolved = true
                 parent.text = textView.string
                 parent.onCommit()
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
+                resolved = true
                 parent.onCancel()
                 return true
             default:

@@ -25,11 +25,13 @@ struct PauseOverlay: View {
                     .foregroundStyle(.white)
 
                 HStack(spacing: 16) {
+                    // `[space]` lifts suppression too, but `HotkeyRouter`'s app-wide
+                    // monitor owns that key and routes it before any button shortcut
+                    // fires, so the button carries no `.keyboardShortcut`.
                     Button(action: onUnpause) {
                         Label("Unpause", systemImage: "play.fill")
                             .frame(minWidth: 120)
                     }
-                    .keyboardShortcut(.space, modifiers: [])
 
                     Button(role: .destructive, action: onStop) {
                         Label("Stop", systemImage: "stop.fill")

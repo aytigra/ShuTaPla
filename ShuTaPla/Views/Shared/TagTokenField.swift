@@ -87,7 +87,10 @@ struct TagTokenField<ChipMenu: View>: View {
 
     private var field: some View {
         FlowLayout {
-            ForEach(Array(tokens.enumerated()), id: \.offset) { index, tag in
+            // Keyed by the tag itself (unique per field), so removing a middle chip
+            // keeps each remaining chip's identity — the selection highlight, an open
+            // per-chip menu, and the remove transition stay on the right pill.
+            ForEach(Array(tokens.enumerated()), id: \.element) { index, tag in
                 chip(tag, index: index)
             }
             inputSlot
@@ -131,7 +134,11 @@ struct TagTokenField<ChipMenu: View>: View {
         HStack(spacing: 4) {
             Text(tag)
             Button { onRemove(tag) } label: {
+                // A padded square hit area around the small glyph so a near-miss removes
+                // the tag rather than falling through to the chip's select gesture.
                 Image(systemName: "xmark.circle.fill")
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -354,8 +361,9 @@ struct TagTokenField<ChipMenu: View>: View {
     }
 
     /// The window within which two presses of the same arrow read as a "jump to end"
-    /// rather than two single steps.
-    private var doublePressInterval: TimeInterval { 0.09 }
+    /// rather than two single steps — the system double-click interval, so a deliberate
+    /// double-press is as reachable as a double-click.
+    private var doublePressInterval: TimeInterval { NSEvent.doubleClickInterval }
 }
 
 extension TagTokenField where ChipMenu == EmptyView {

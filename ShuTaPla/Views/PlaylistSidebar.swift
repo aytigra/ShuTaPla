@@ -19,7 +19,6 @@ struct PlaylistSidebar: View {
     // Inline rename: the playlist being edited and its draft text.
     @State private var renaming: Playlist?
     @State private var draftName = ""
-    @FocusState private var renameFieldFocused: Bool
 
     var body: some View {
         List {
@@ -119,12 +118,11 @@ struct PlaylistSidebar: View {
     @ViewBuilder
     private func row(_ playlist: Playlist) -> some View {
         if renaming === playlist {
-            TextField("Name", text: $draftName)
-                .textFieldStyle(.roundedBorder)
-                .focused($renameFieldFocused)
-                .onAppear { renameFieldFocused = true }
-                .onSubmit { commitRename() }
-                .onExitCommand { renaming = nil }
+            RenameFileField(
+                text: $draftName,
+                onCommit: { commitRename() },
+                onCancel: { renaming = nil }
+            )
         } else {
             Button {
                 appState.select(playlist)

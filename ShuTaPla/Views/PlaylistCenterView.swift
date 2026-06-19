@@ -93,22 +93,25 @@ struct PlaylistCenterView: View {
 
     private var deleteTitle: String {
         let files = appState.pendingManagerDelete
-        return files.count == 1
-            ? "Move “\(files[0].fileName)” to the Trash?"
-            : "Move \(files.count) files to the Trash?"
+        return files.count.pluralized(
+            one: "Move “\(files[0].fileName)” to the Trash?",
+            many: "Move \(files.count) files to the Trash?"
+        )
     }
 
     private var audioStripTitle: String {
         let files = appState.pendingAudioStrip
-        return files.count == 1
-            ? "Remove the audio from “\(files[0].fileName)”?"
-            : "Remove the audio from \(files.count) files?"
+        return files.count.pluralized(
+            one: "Remove the audio from “\(files[0].fileName)”?",
+            many: "Remove the audio from \(files.count) files?"
+        )
     }
 
     // MARK: - Header
 
     @ViewBuilder
     private func header(_ playlist: Playlist) -> some View {
+        @Bindable var playlist = playlist
         HStack(spacing: 12) {
             Text(playlist.name)
                 .font(.title2.weight(.semibold))
@@ -129,7 +132,7 @@ struct PlaylistCenterView: View {
                 Label("Reshuffle", systemImage: "shuffle")
             }
 
-            Picker("View", selection: viewMode(playlist)) {
+            Picker("View", selection: $playlist.preferences.viewMode) {
                 Image(systemName: "list.bullet").tag(ViewMode.list)
                 Image(systemName: "square.grid.2x2").tag(ViewMode.gallery)
             }
@@ -140,13 +143,6 @@ struct PlaylistCenterView: View {
         .labelStyle(.iconOnly)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-    }
-
-    private func viewMode(_ playlist: Playlist) -> Binding<ViewMode> {
-        Binding(
-            get: { playlist.preferences.viewMode },
-            set: { playlist.preferences.viewMode = $0 }
-        )
     }
 
     private func hasPlayableFiles(_ playlist: Playlist) -> Bool {

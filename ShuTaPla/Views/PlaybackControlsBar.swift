@@ -23,13 +23,9 @@ struct PlaybackControlsBar: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        // A solid translucent fill (no live blur) reads over any frame yet stays cheap to
-        // composite, so revealing the bar over video doesn't stall the video's redraw.
-        .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 16))
+        .playerOverlayPanel(opacity: 0.85, cornerRadius: 16)
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.08)))
         .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
-        // Light controls/text over the dark fill.
-        .environment(\.colorScheme, .dark)
     }
 
     // MARK: - Transport row

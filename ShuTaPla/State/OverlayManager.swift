@@ -29,7 +29,7 @@ final class OverlayManager: HotkeyOverlayContext {
     }
 
     /// The overlays currently on screen. Read by the player view layer to compose its
-    /// `.overlay()`/`.transition()` modifiers (Task 14).
+    /// `.overlay()`/`.transition()` modifiers.
     private(set) var active: Set<Overlay> = []
 
     /// Set by the audio overlay once its slide-in animation completes (Task 15) and

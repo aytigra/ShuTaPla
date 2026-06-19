@@ -6,8 +6,8 @@
 //  An engine knows how to play the current file and, on a natural end or a
 //  next/previous command, asks its source for the adjacent file and a URL to
 //  load it from. The source owns the playback order (already filtered) and the
-//  bookmark→URL resolution — concerns that belong to the `PlaybackCoordinator`
-//  (Task 11), which conforms to this protocol. Tests supply a mock.
+//  bookmark→URL resolution — concerns that belong to the `PlaybackCoordinator`,
+//  which conforms to this protocol. Tests supply a mock.
 //
 
 import Foundation

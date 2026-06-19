@@ -8,10 +8,6 @@
 //  and positions the strip along a window edge; this view only tracks the cursor over
 //  whatever bounds it is given and fires the callbacks.
 //
-//  `.activeAlways` keeps tracking live in fullscreen and when the app isn't key;
-//  `.inVisibleRect` makes the tracking rect follow the view's bounds automatically, so it
-//  stays correct across resizes without rebuilding geometry by hand.
-//
 
 import SwiftUI
 import AppKit
@@ -33,23 +29,11 @@ struct HoverZone: NSViewRepresentable {
     }
 
     @MainActor
-    final class TrackingNSView: NSView {
+    final class TrackingNSView: TrackingAreaView {
         var onEnter: () -> Void = {}
         var onExit: () -> Void = {}
 
-        private var hoverArea: NSTrackingArea?
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let hoverArea { removeTrackingArea(hoverArea) }
-            let area = NSTrackingArea(
-                rect: bounds,
-                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                owner: self
-            )
-            addTrackingArea(area)
-            hoverArea = area
-        }
+        override var trackingEventOptions: NSTrackingArea.Options { [.mouseEnteredAndExited] }
 
         override func mouseEntered(with event: NSEvent) { onEnter() }
         override func mouseExited(with event: NSEvent) { onExit() }

@@ -31,11 +31,7 @@ struct PlaylistsOverlay: View {
         }
         .frame(width: 280)
         .frame(maxHeight: .infinity)
-        // A solid translucent panel (no live blur) keeps the light text legible over any
-        // frame behind it while staying cheap to composite, so sliding it in/out doesn't
-        // stall the video's redraw on the main thread.
-        .background(Color.black.opacity(0.92))
-        .environment(\.colorScheme, .dark)
+        .playerOverlayPanel()
     }
 
     // MARK: - Sections

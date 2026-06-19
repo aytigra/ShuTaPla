@@ -709,7 +709,9 @@ struct AppStateTests {
         // The removed tag is gone from the active filter; the beach-only saved search is
         // dropped (no tags left) and the combined one keeps only "sun".
         #expect(playlist.filterState.selectedTags == ["sun"])
-        #expect(playlist.savedSearches == [SavedSearch(tags: ["sun"], mode: .or)])
+        #expect(playlist.savedSearches.count == 1)
+        #expect(playlist.savedSearches.first?.tags == ["sun"])
+        #expect(playlist.savedSearches.first?.mode == .or)
         #expect(appState.filteredFiles.count == 1)   // only the file that still has "sun"
 
         await appState.updateTask?.value

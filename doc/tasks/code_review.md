@@ -21,9 +21,9 @@ started. This review covers **completed code only**; features that belong to uns
 and not listed as defects.
 
 **Status.** A ✅ on a heading means that finding is fixed (on `code-review-fixes`); an
-unmarked heading is still open. Done: A1, A3, A4, A5, A6, A7, A8, A11, A12, A13, A15, A16, A17,
-A18, A19, A20, A21, A22, B1–B5, C4, D2, D3, E3, E4, G1–G6, H2–H6, I1–I7. Deferred (out of scope or
-needs a schema/design change, see each note): A14, H1, H8.
+unmarked heading is still open. Done: A1, A3–A13, A15–A22, B1–B5, C4, D1–D4, E1–E6, F3, F4,
+G1–G8, H2–H7, H9, H10, H11, I1–I7. Deferred (out of scope or needs a schema/design change, see
+each note): A14, H1, H8.
 
 ## Severity summary
 
@@ -100,7 +100,7 @@ locked), the model is not deleted but `reconcileVisualSelection` runs and the us
 feedback. Every other delete path surfaces the message. **Fix:** present the returned
 message (the player has an alert channel — see D2).
 
-### A9 — `handleClick` reads global `NSEvent.modifierFlags` instead of the tap event's modifiers · Medium
+### ✅ A9 — `handleClick` reads global `NSEvent.modifierFlags` instead of the tap event's modifiers · Medium
 `FileListView.swift:121` and `FileGalleryView.swift:144`. `onTapGesture` fires on mouse-up;
 `NSEvent.modifierFlags` reflects keyboard state at handler-run time, not click time. The
 click-count is read from `NSApp.currentEvent` but the modifiers from the global flags —
@@ -108,7 +108,7 @@ inconsistent. Releasing shift/cmd a few ms before mouse-up degrades a shift/cmd-
 plain select, collapsing the multi-selection. **Fix:** read both from the same originating
 event (`NSApp.currentEvent?.modifierFlags`).
 
-### A10 — `FileGalleryView.columnCount(for:)` ignores the `.adaptive` maximum → keyboard nav stride mismatch · Medium
+### ✅ A10 — `FileGalleryView.columnCount(for:)` ignores the `.adaptive` maximum → keyboard nav stride mismatch · Medium
 `FileGalleryView.swift:86`. The grid uses `GridItem(.adaptive(minimum:150, maximum:220))`;
 `columnCount` models only `minimum + spacing`. At wide widths `LazyVGrid` may render fewer
 columns (capped by the 220 max) than `columnCount` returns, so 2-D arrow navigation (which
@@ -247,7 +247,7 @@ compute `nextOrder` from the surviving set explicitly.
 
 ## D. CLAUDE.md rule adherence
 
-### D1 — 19 source comments cross-reference "Task N" — writing-rule smell (split by kind) **[verified] · Low**
+### ✅ D1 — 19 source comments cross-reference "Task N" — writing-rule smell (split by kind) **[verified] · Low**
 `OverlayManager.swift:32,35,136`, `AppState.swift:176,702`, `HotkeyRouter.swift:15,16,104`,
 `MPVPlaybackEngine.swift:14`, `PlaybackSource.swift:10`, `SettingsView.swift:6`,
 `FileRowView.swift:106`, `PlayerView.swift:7–10,178`, `FullscreenView.swift:8`,
@@ -262,7 +262,10 @@ exempt). Two kinds, with different weight:
   "Animated, polished transitions are Task 18". These honestly mark absent functionality; the
   only nit is the bare tracker number. Acceptable to leave until those tasks land, then remove.
 
-Low severity overall — cosmetic, no behavioral impact.
+Low severity overall — cosmetic, no behavioral impact. *(Done: the completed-task references
+(Tasks 11–14) were dropped and reworded to describe the present structure. The not-yet-built
+markers (Tasks 15/16/18) are left as honest flags of absent functionality, per this finding's
+own note, to be removed when those tasks land.)*
 
 ### ✅ D2 — Modal confirmations/errors not registered in `HotkeyRouter.hasBlockingConfirmation` → bare keys leak behind them · High
 - `PlayerView.swift:96` — the "Couldn't remove audio" alert (`appState.audioStripError`).
@@ -282,7 +285,7 @@ never fire. CLAUDE.md requires the modal's AppState flag to be registered (passi
 merged sentence — fails the writing rule's clarity bar and obscures why duration is captured
 at `FILE_LOADED`. **Fix:** rewrite the sentence.
 
-### D4 — Files & Tags background single-tap competes with per-row double-tap · Medium-low
+### ✅ D4 — Files & Tags background single-tap competes with per-row double-tap · Medium-low
 `FilesTagsOverlayView.swift:45`. A container `.onTapGesture` (resign first responder) coexists
 with each row's `.onTapGesture(count: 2)`; a double-click to play can be partly consumed by
 the background tap, reintroducing the disambiguation lag the tap-gesture rule warns against
@@ -293,16 +296,20 @@ background tap so it can't intercept row clicks.
 
 ## E. SwiftUI correctness (identity / state)
 
-### E1 — Tag-chip `ForEach` uses enumeration offset as identity · Medium
+### ✅ E1 — Tag-chip `ForEach` uses enumeration offset as identity · Medium
 `TagTokenField.swift:90`. Removing a middle chip shifts every later offset, so SwiftUI rebinds
 chip views to different tags; the `selectedChip` highlight, an open per-chip context menu, and
 the remove transition target the wrong pill. Tags are unique per field. **Fix:** `id: \.element`
 (the tag string).
 
-### E2 — Order-/name-coupled identities in saved-search and tag rows · Low
+### ✅ E2 — Order-/name-coupled identities in saved-search and tag rows · Low
 `FilterBar.swift:101` (`id: \.self` on `SavedSearch`, whose `Hashable` is over the ordered tag
 array) and `PlaylistTagsView.swift:78` (`id: \.name`). In-flight reorders/renames can momentarily
 collide identities and animate the wrong row. **Fix:** give these a stable id field.
+*(`SavedSearch` carries a stable `UUID id` — backward-compatibly Codable, preserved across
+playlist-wide tag rewrites, and used by the `ForEach`. The tag rows keep `id: \.name`: a tag's
+identity is its name and `tagFrequency` keys are unique, so distinct rows can't collide; a rename
+is a genuine identity change, which is correct.)*
 
 ### ✅ E3 — `FileRowView` ignores persisted `file.duration` and always re-fetches on appear · Low
 `FileRowView.swift:51`. The duration column flashes empty on every list scroll-in even when the
@@ -314,12 +321,12 @@ value is already on the model (the gallery badge reads it synchronously). **Fix:
 image into a cell now showing file B until the new task lands — a brief wrong-thumbnail flash.
 **Fix:** `guard !Task.isCancelled` before assigning.
 
-### E5 — Playlist inline-rename field lacks select-all and a lost-focus commit path · Low
+### ✅ E5 — Playlist inline-rename field lacks select-all and a lost-focus commit path · Low
 `PlaylistSidebar.swift:165`. No select-all on focus (unlike `RenameFileField`); clicking away
 without submit never fires `onSubmit`/exit, leaving `renaming` set and the draft silently
 abandoned. **Fix:** select-all on focus and commit/cancel on focus loss.
 
-### E6 — Image pinch zoom is unclamped mid-gesture and anchored at center · Medium-low
+### ✅ E6 — Image pinch zoom is unclamped mid-gesture and anchored at center · Medium-low
 `ImagePlayerView.swift:44–46`. The live preview scale (`transform.scale * magnifyBy`) is
 unclamped, so pinching past the 0.1 floor scales toward zero then snaps back on release; and
 `scaleEffect` has no anchor, so zoom pivots about the view center rather than the pinch point —
@@ -330,11 +337,11 @@ location.
 
 ## F. HIG / interaction
 
-### F3 — `doublePressInterval` 0.09s makes the documented double-arrow chip jump nearly unreachable · Low
+### ✅ F3 — `doublePressInterval` 0.09s makes the documented double-arrow chip jump nearly unreachable · Low
 `TagTokenField.swift:358`. 90 ms is shorter than a deliberate double-press, so two left presses
 usually register as two single steps. **Fix:** raise toward the system double-click interval.
 
-### F4 — Chip remove (x) target is small and overlaps the chip-select tap · Low
+### ✅ F4 — Chip remove (x) target is small and overlaps the chip-select tap · Low
 `TagTokenField.swift:152`. A near-miss on the caption-size `xmark` falls through to the chip's
 select gesture. **Fix:** enlarge the hit area / separate the targets.
 
@@ -379,12 +386,12 @@ and `ServiceFilter.systemImage`/`.label` on the enums.
 unbounded `FetchDescriptor<Playlist>()` and filters by `mediaType`. **Fix:** a
 `modelContext.playlists(ofType:)` helper (predicate-scoped + sorted) used by all three.
 
-### G7 — Overlay-panel styling duplicated · Low
+### ✅ G7 — Overlay-panel styling duplicated · Low
 `PlaybackControlsBar.swift:28`, `PlaylistsOverlay`, `FilesTagsOverlayView` each apply the same
 translucent fill + `.environment(\.colorScheme, .dark)` with near-identical comments. **Fix:** a
 shared `.playerOverlayPanel()` modifier.
 
-### G8 — `HoverZone` and `CursorAutoHider` duplicate `NSTrackingArea` setup · Low
+### ✅ G8 — `HoverZone` and `CursorAutoHider` duplicate `NSTrackingArea` setup · Low
 `HoverZone.swift:42`. Both rebuild a tracking area (`bounds`, `[.activeAlways, .inVisibleRect]`)
 in `updateTrackingAreas`. **Fix:** a shared base `NSView`/helper (event sets differ, so keep that
 parameterized).
@@ -422,7 +429,7 @@ breaks the budget assumption. **Fix:** one `AppConstants` value referenced by bo
 (0.22), `PlaylistSidebar.swift:193` (0.18), `FileGalleryView.swift:199` (0.15). **Fix:**
 `AppConstants.selectionHighlight` / a `.selectionBackground()` modifier.
 
-### H7 — `FlowLayout` ignores its `Layout` cache and measures subviews twice per pass · Low
+### ✅ H7 — `FlowLayout` ignores its `Layout` cache and measures subviews twice per pass · Low
 `FlowLayout.swift:16`. `sizeThatFits` and `placeSubviews` each call `sizeThatFits` on every
 subview, and the chip field re-measures on each keystroke. **Fix:** memoize via the `cache`
 parameter.
@@ -435,16 +442,16 @@ mutation — in place or wholesale — re-encodes the entire blob; avoiding that
 SwiftData entity for saved searches, a schema change beyond this finding's scope. The lists are
 ≤10 items, so the re-encode is negligible.)*
 
-### H9 — Count-aware singular/plural titles hand-built twice · Low
+### ✅ H9 — Count-aware singular/plural titles hand-built twice · Low
 `PlaylistCenterView.swift:94` (`deleteTitle`) and `:101` (`audioStripTitle`) share the same
 `count == 1 ? … : …` shape. **Fix:** a small pluralization helper / `AttributedString` inflection.
 
-### H10 — `PauseOverlay` Unpause `.keyboardShortcut(.space)` is dead · Low
+### ✅ H10 — `PauseOverlay` Unpause `.keyboardShortcut(.space)` is dead · Low
 `PauseOverlay.swift:32`. The router intercepts `[space]` before it reaches the button, so the
 shortcut never fires — misleading dead code that looks like a fallback. **Fix:** remove it (or
 document that routing owns it).
 
-### H11 — Manual get/set Bindings mutate SwiftData directly, bypassing the AppState mutation pattern · Low
+### ✅ H11 — Manual get/set Bindings mutate SwiftData directly, bypassing the AppState mutation pattern · Low
 `PlaylistCenterView.swift:145` (viewMode) and `FilterBar.swift:60` (filter mode) build manual
 Bindings whose read source differs from the setter's write path, so displayed value and written
 value can momentarily disagree and the write is untestable in isolation. **Fix:** route through

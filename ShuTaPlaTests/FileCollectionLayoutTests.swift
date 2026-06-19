@@ -2,9 +2,10 @@
 //  FileCollectionLayoutTests.swift
 //  ShuTaPlaTests
 //
-//  The gallery's adaptive column count drives 2D keyboard navigation, so it must
-//  match the packing `LazyVGrid` actually lays out (min item width 150, spacing 12,
-//  outer padding one spacing on each side). A degenerate width floors at one column.
+//  The gallery's column count drives 2D keyboard navigation, so it must match the
+//  columns `LazyVGrid` actually laid out. It is measured from the laid-out cells'
+//  leading edges: cells in one column share an edge, so the count of distinct edges
+//  (to the nearest point) is the column count. No cells floors at one column.
 //
 
 import Testing
@@ -13,15 +14,24 @@ import CoreGraphics
 
 @Suite struct FileCollectionLayoutTests {
 
-    @Test(arguments: [
-        (CGFloat(0), 1),     // no room → one column
-        (CGFloat(10), 1),    // narrower than the padding → one column
-        (CGFloat(200), 1),
-        (CGFloat(500), 3),
-        (CGFloat(800), 4),
-        (CGFloat(1000), 6),
-    ])
-    func galleryColumnCount(_ width: CGFloat, _ expected: Int) {
-        #expect(FileCollectionLayout.galleryColumnCount(for: width) == expected)
+    @Test func distinctEdgesCountAsColumns() {
+        // Three columns over two rows: six cells, three distinct leading edges.
+        let minXs: [CGFloat] = [12, 174, 336, 12, 174, 336]
+        #expect(FileCollectionLayout.columnCount(fromCellMinXs: minXs) == 3)
+    }
+
+    @Test func subPixelDriftCollapsesToOneEdge() {
+        // The same column measured across rows can drift by a fraction of a point;
+        // rounding keeps it one column rather than inflating the count.
+        let minXs: [CGFloat] = [12.0, 12.4, 11.6, 12.49]
+        #expect(FileCollectionLayout.columnCount(fromCellMinXs: minXs) == 1)
+    }
+
+    @Test func noCellsFloorsAtOneColumn() {
+        #expect(FileCollectionLayout.columnCount(fromCellMinXs: []) == 1)
+    }
+
+    @Test func oneCellIsOneColumn() {
+        #expect(FileCollectionLayout.columnCount(fromCellMinXs: [12]) == 1)
     }
 }

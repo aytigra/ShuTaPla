@@ -12,10 +12,10 @@
 //  system's exit-from-fullscreen, and player keys never leak to controls); returning
 //  the event lets it continue to normal dispatch (so a focused text field still types).
 //
-//  Overlay state and the audio key-context live in an `OverlayManager` (Task 13) and
-//  the audio overlay (Task 15); the router reads them through `HotkeyOverlayContext`.
-//  Until those land it consults `NoOverlayContext`, so the player/manager transport
-//  keys all work and the overlay branches are inert.
+//  Overlay state lives in an `OverlayManager`; the audio key-context comes from the
+//  audio overlay (Task 15). The router reads both through `HotkeyOverlayContext`, falling
+//  back to `NoOverlayContext` when none is set, so the player/manager transport keys all
+//  work and the audio overlay branches stay inert until that overlay lands.
 //
 
 import AppKit
@@ -101,7 +101,7 @@ final class HotkeyRouter {
     /// router only acts on it while the window is up.
     weak var appState: AppState?
 
-    /// Filled by Task 13's `OverlayManager`; `NoOverlayContext` until then.
+    /// The app's `OverlayManager` once installed; `NoOverlayContext` before then.
     var overlayContext: HotkeyOverlayContext = NoOverlayContext()
 
     /// Whether a focused text field should swallow keys. Injectable so tests drive the
