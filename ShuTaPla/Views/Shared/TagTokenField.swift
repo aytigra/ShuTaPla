@@ -176,14 +176,19 @@ struct TagTokenField<ChipMenu: View>: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    // Identify each row by the option's stable id — the same key the
+                    // `ForEach` diffs on — so narrowing the list re-renders rows with
+                    // the matching tag instead of pinning stale content to a position.
                     ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                         optionRow(option, index: index)
-                            .id(index)
+                            .id(option.id)
                     }
                 }
             }
             // Follow the arrow-key highlight so it never moves past the visible rows.
-            .onChange(of: highlighted) { _, index in proxy.scrollTo(index, anchor: .center) }
+            .onChange(of: highlighted) { _, index in
+                if options.indices.contains(index) { proxy.scrollTo(options[index].id, anchor: .center) }
+            }
         }
         .frame(maxWidth: .infinity)
         .frame(height: CGFloat(min(options.count, 6)) * rowHeight)
