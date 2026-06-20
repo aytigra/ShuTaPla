@@ -1171,6 +1171,255 @@ struct AppStateTests {
         #expect(appState.currentAudioFile == nil)
     }
 
+    // MARK: - Manager audio scope (audio manager redesign — Phase 2)
+    //
+    // Stop-on-switch and the inlet Play cascade. These exercise the live audio channel, so
+    // each backs its playlist with a real temp folder holding an empty placeholder file: the
+    // window-free `AudioPlaybackEngine` (`vo=null`) plays it, the empty file fails to load
+    // (so no natural-EOF advance touches a model after teardown), and `shutdown()` is deferred.
+
+    /// Builds an audio playlist backed by a real temp folder with one empty placeholder file,
+    /// so `coordinator.play` can engage the engine. Returns the folder so the caller can
+    /// remove it; the caller owns (and holds) the `ModelContainer` behind `context`.
+    @MainActor
+    private func makeLiveAudioPlaylist(_ name: String, file: String, in context: ModelContext) throws -> (Playlist, URL) {
+        let dir = try makeTempDir()
+        try Data().write(to: dir.appending(path: file))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: name, folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(playlist)
+        addFile(file, order: 0, to: playlist, in: context)
+        return (playlist, dir)
+    }
+
+    @Test func managerAudioSelectStopsThePreviouslyPlayingPlaylist() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dirA) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
+        let (b, dirB) = try makeLiveAudioPlaylist("B", file: "b.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dirA); try? FileManager.default.removeItem(at: dirB) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: a)
+        #expect(appState.coordinator.audioPlaylist === a)
+
+        // Switching to a different audio playlist in Manager stops the live one and leaves the
+        // new one active but stopped — only ever one audio playlist live.
+        appState.selectAudioInManager(b)
+        #expect(a.playbackState == .stopped)
+        #expect(appState.activeAudioPlaylist === b)
+        #expect(b.playbackState == .stopped)
+        #expect(appState.coordinator.audioPlaylist == nil)
+
+        await appState.updateTask?.value
+    }
+
+    @Test func reselectingTheActiveAudioPlaylistKeepsItPlaying() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dir) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: a)
+        #expect(appState.coordinator.audioPlaylist === a)
+
+        // Re-selecting the already-active playlist re-scans and re-centers without stopping it.
+        appState.selectAudioInManager(a)
+        #expect(appState.coordinator.audioPlaylist === a)
+        #expect(a.playbackState == .playing)
+
+        await appState.updateTask?.value
+    }
+
+    @Test func inletPlayWithNoAudioPlaylistsRaisesTheAddFlow() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.startFirstAudioPlaylistOrAdd()
+        #expect(appState.isImportingPlaylist)
+        #expect(appState.activeAudioPlaylist == nil)
+    }
+
+    @Test func inletPlayStartsTheFirstAudioPlaylistWhenSomeExist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (audio, dir) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.startFirstAudioPlaylistOrAdd()
+        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.coordinator.audioPlaylist === audio)
+        #expect(!appState.isImportingPlaylist)
+    }
+
+    // MARK: - New Playlist switches scope (audio manager redesign — Phase 3)
+    //
+    // The toolbar's New Playlist runs through the same `addPlaylist` creation chokepoint as
+    // every other add path, so creating a playlist switches the Manager to the created type's
+    // scope and makes it that scope's selection. No engine: a visual create stays off libmpv,
+    // and an audio create activates the playlist without starting it.
+
+    @Test func creatingVisualPlaylistSwitchesToVisualScopeAndSelectsIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video)], counts: [.video: 1], dominantType: .video
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
+        defer { appState.coordinator.shutdown() }
+        appState.managerScope = .audio   // start in the other scope to prove the switch
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let outcome = await appState.addPlaylist(from: dir)
+        guard case .created(let playlist) = outcome else {
+            Issue.record("expected .created, got \(outcome)")
+            return
+        }
+        #expect(appState.managerScope == .visual)
+        #expect(appState.selectedPlaylist === playlist)
+    }
+
+    @Test func creatingAudioPlaylistSwitchesToAudioScopeWithoutPlaying() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp3", .audio)], counts: [.audio: 1], dominantType: .audio
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
+        defer { appState.coordinator.shutdown() }
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let outcome = await appState.addPlaylist(from: dir)
+        guard case .created(let playlist) = outcome else {
+            Issue.record("expected .created, got \(outcome)")
+            return
+        }
+        #expect(appState.managerScope == .audio)
+        #expect(appState.activeAudioPlaylist === playlist)
+        #expect(appState.coordinator.audioPlaylist == nil)   // created, never started
+        #expect(appState.selectedPlaylist == nil)            // visual scope untouched
+    }
+
+    // MARK: - Manager scope routing (audio manager redesign — Phase 1)
+    //
+    // Pure bookkeeping: the scoped accessors route to the active scope's own slot, and
+    // the two scopes stay fully parallel. Image-backed visual fixtures keep these off any
+    // engine (the image channel has no libmpv); audio fixtures never start playback.
+
+    /// A two-scope Manager fixture: one image playlist (visual scope) and one audio
+    /// playlist (audio scope), each with two files filled into their filtered caches.
+    /// Holds the `ModelContainer` so the test body keeps it alive — returning only the
+    /// `AppState` would let the container deallocate and the orphaned context trap.
+    private struct TwoScopeEnv {
+        let container: ModelContainer
+        let appState: AppState
+        let image: Playlist
+        let audio: Playlist
+    }
+
+    @MainActor
+    private func makeTwoScopeState() throws -> TwoScopeEnv {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let image = Playlist(name: "Pics", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(image)
+        context.insert(audio)
+        addFile("p1.jpg", order: 0, to: image, in: context)
+        addFile("p2.jpg", order: 1, to: image, in: context)
+        addFile("a1.mp3", order: 0, to: audio, in: context)
+        addFile("a2.mp3", order: 1, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = image
+        appState.recomputeFilteredFiles()
+        appState.activeAudioPlaylist = audio
+        appState.recomputeAudioFilteredFiles()
+        return TwoScopeEnv(container: container, appState: appState, image: image, audio: audio)
+    }
+
+    @Test func scopeAccessorsRouteToVisualSlotsByDefault() throws {
+        let env = try makeTwoScopeState()
+        let appState = env.appState
+        #expect(appState.managerScope == .visual)
+        #expect(appState.managerPlaylist === env.image)
+        #expect(appState.managerFiles.map(\.fileName) == ["p1.jpg", "p2.jpg"])
+        #expect(appState.managerFilterMode == appState.filterMode)
+    }
+
+    @Test func scopeAccessorsRouteToAudioSlotsInAudioScope() throws {
+        let env = try makeTwoScopeState()
+        let appState = env.appState
+        appState.managerScope = .audio
+        #expect(appState.managerPlaylist === env.audio)
+        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp3", "a2.mp3"])
+        #expect(appState.managerFilterMode == appState.audioFilterMode)
+    }
+
+    @Test func managerSelectionReadsAndWritesTheActiveScopeOnly() throws {
+        let env = try makeTwoScopeState()
+        let appState = env.appState
+        let imageFileID = appState.filteredFiles[0].id
+        let audioFileID = appState.audioFilteredFiles[1].id
+
+        // Visual scope: writing routes to selectedFileIDs and leaves audio untouched.
+        appState.managerSelection = [imageFileID]
+        #expect(appState.selectedFileIDs == [imageFileID])
+        #expect(appState.audioSelectedFileIDs.isEmpty)
+        #expect(appState.managerSelection == [imageFileID])
+
+        // Audio scope: writing routes to audioSelectedFileIDs and leaves visual untouched.
+        appState.managerScope = .audio
+        #expect(appState.managerSelection.isEmpty)   // audio scope started with no selection
+        appState.managerSelection = [audioFileID]
+        #expect(appState.audioSelectedFileIDs == [audioFileID])
+        #expect(appState.selectedFileIDs == [imageFileID])
+    }
+
+    @Test func managerFilterModeWritesToTheActiveScopeOnly() throws {
+        let env = try makeTwoScopeState()
+        let appState = env.appState
+
+        // Visual scope: flipping the operator changes only the image playlist's filter.
+        appState.managerFilterMode = .or
+        #expect(appState.filterMode == .or)
+        #expect(appState.audioFilterMode == .and)
+
+        // Audio scope: flipping changes only the audio playlist's filter.
+        appState.managerScope = .audio
+        appState.managerFilterMode = .or
+        #expect(appState.audioFilterMode == .or)
+        #expect(appState.filterMode == .or)   // unchanged from the visual write above
+    }
+
+    @Test func flippingScopeNeverMutatesEitherScopesSlots() throws {
+        let env = try makeTwoScopeState()
+        let appState = env.appState
+        appState.selectedFileIDs = [appState.filteredFiles[0].id]
+        appState.audioSelectedFileIDs = [appState.audioFilteredFiles[0].id]
+        let visualSelection = appState.selectedFileIDs
+        let audioSelection = appState.audioSelectedFileIDs
+
+        // Reading through the accessors across a scope flip is observation only.
+        appState.managerScope = .audio
+        _ = (appState.managerPlaylist, appState.managerFiles, appState.managerSelection, appState.managerFilterMode)
+        appState.managerScope = .visual
+        _ = (appState.managerPlaylist, appState.managerFiles, appState.managerSelection, appState.managerFilterMode)
+
+        #expect(appState.selectedPlaylist === env.image)
+        #expect(appState.activeAudioPlaylist === env.audio)
+        #expect(appState.selectedFileIDs == visualSelection)
+        #expect(appState.audioSelectedFileIDs == audioSelection)
+    }
+
     private var emptyResult: ScanResult {
         ScanResult(files: [], counts: [:], dominantType: nil)
     }

@@ -2,9 +2,10 @@
 //  PlaylistCenterView.swift
 //  ShuTaPla
 //
-//  The Manager center panel: a header (name, Play, Reshuffle, view-mode toggle),
-//  the tagging counter notices, and the file list. Owns the shared
-//  delete, remove-audio, and error confirmations used by the list's interactions.
+//  The Manager center panel for the active scope: the tagging counter notices and the
+//  file list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the
+//  Manager toolbar. Owns the shared delete, remove-audio, and error confirmations used
+//  by the list's interactions.
 //
 
 import SwiftUI
@@ -16,27 +17,9 @@ struct PlaylistCenterView: View {
 
     var body: some View {
         Group {
-            if let playlist = appState.selectedPlaylist {
-                VStack(spacing: 0) {
-                    header(playlist)
-                    Divider()
-                    noticeBar(playlist)
-                    if playlist.preferences.viewMode == .gallery {
-                        FileGalleryView(
-                            playlist: playlist,
-                            confirmDelete: { appState.requestManagerDelete($0) },
-                            reportError: { errorMessage = $0 }
-                        )
-                    } else {
-                        FileListView(
-                            playlist: playlist,
-                            confirmDelete: { appState.requestManagerDelete($0) },
-                            reportError: { errorMessage = $0 }
-                        )
-                    }
-                }
-            } else {
-                ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
+            switch appState.managerScope {
+            case .visual: visualCenter
+            case .audio: audioCenter
             }
         }
         .alert(
@@ -107,46 +90,46 @@ struct PlaylistCenterView: View {
         )
     }
 
-    // MARK: - Header
+    // MARK: - Scope centers
 
+    /// The visual scope's center: notices and the list or gallery for the selected playlist.
     @ViewBuilder
-    private func header(_ playlist: Playlist) -> some View {
-        @Bindable var playlist = playlist
-        HStack(spacing: 12) {
-            Text(playlist.name)
-                .font(.title2.weight(.semibold))
-                .lineLimit(1)
-
-            Spacer()
-
-            Button {
-                appState.beginPlayback(of: playlist)
-            } label: {
-                Label("Play", systemImage: "play.fill")
+    private var visualCenter: some View {
+        if let playlist = appState.selectedPlaylist {
+            VStack(spacing: 0) {
+                noticeBar(playlist)
+                if playlist.preferences.viewMode == .gallery {
+                    FileGalleryView(
+                        playlist: playlist,
+                        confirmDelete: { appState.requestManagerDelete($0) },
+                        reportError: { errorMessage = $0 }
+                    )
+                } else {
+                    FileListView(
+                        playlist: playlist,
+                        confirmDelete: { appState.requestManagerDelete($0) },
+                        reportError: { errorMessage = $0 }
+                    )
+                }
             }
-            .disabled(!hasPlayableFiles(playlist))
-
-            Button {
-                appState.reshuffle(playlist)
-            } label: {
-                Label("Reshuffle", systemImage: "shuffle")
-            }
-
-            Picker("View", selection: $playlist.preferences.viewMode) {
-                Image(systemName: "list.bullet").tag(ViewMode.list)
-                Image(systemName: "square.grid.2x2").tag(ViewMode.gallery)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+        } else {
+            ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
         }
-        .labelStyle(.iconOnly)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
-    private func hasPlayableFiles(_ playlist: Playlist) -> Bool {
-        playlist.files.contains { !$0.isSkipped }
+    /// The audio scope's center. The active playlist's files and tags are managed from the
+    /// player-mode overlay; the inlet keeps the channel controllable while browsing here.
+    @ViewBuilder
+    private var audioCenter: some View {
+        if let audio = appState.activeAudioPlaylist {
+            ContentUnavailableView {
+                Label(audio.name, systemImage: "music.note.list")
+            } description: {
+                Text("Audio files are managed from the player overlay.")
+            }
+        } else {
+            ContentUnavailableView("Select an Audio Playlist", systemImage: "music.note.list")
+        }
     }
 
     // MARK: - Counter notices

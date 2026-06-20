@@ -2,10 +2,10 @@
 //  PlaylistSidebar.swift
 //  ShuTaPla
 //
-//  The Manager-mode left panel: playlists grouped into Video and Image sections
-//  with full management (create, rename inline, delete, reorder via drag) and a
-//  collapsed Audio hint at the top. Rows are driven from a `@Query` sorted by
-//  `sortOrder` and filtered into sections in memory.
+//  The Manager-mode left panel. Its sections follow the active scope — Video + Image
+//  (visual) or Audio — with full management (create, rename inline, delete, reorder via
+//  drag), and the audio transport inlet pinned at the top, parallel to either scope. Rows
+//  are driven from a `@Query` sorted by `sortOrder` and filtered into sections in memory.
 //
 
 import SwiftUI
@@ -13,7 +13,6 @@ import SwiftData
 
 struct PlaylistSidebar: View {
     @Environment(AppState.self) private var appState
-    @Environment(OverlayManager.self) private var overlays
 
     @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
 
@@ -23,40 +22,13 @@ struct PlaylistSidebar: View {
 
     var body: some View {
         List {
-            audioHint
-
             importingSection
-
-            section(title: "Video", mediaType: .video)
-            section(title: "Image", mediaType: .image)
+            sections
         }
         .listStyle(.sidebar)
-        .overlay {
-            if videoPlaylists.isEmpty && imagePlaylists.isEmpty {
-                ContentUnavailableView {
-                    Label("No Playlists", systemImage: "rectangle.stack")
-                } description: {
-                    Text("Add a folder of videos or images.")
-                }
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 0) {
-                Button {
-                    appState.isImportingPlaylist = true
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(appState.isAddingPlaylist)
-                .help("Add a playlist from a folder")
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.bar)
+        .overlay { emptyOverlay }
+        .safeAreaInset(edge: .top) {
+            AudioInlet()
         }
         // Video/image only: an audio playlist's delete confirmation is presented from the
         // extended audio overlay, so the two surfaces never both present on the shared state.
@@ -82,6 +54,39 @@ struct PlaylistSidebar: View {
     private var videoPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .video } }
     private var imagePlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .image } }
     private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
+
+    /// The playlist sections for the active scope: Video + Image (visual) or Audio.
+    @ViewBuilder
+    private var sections: some View {
+        switch appState.managerScope {
+        case .visual:
+            section(title: "Video", mediaType: .video)
+            section(title: "Image", mediaType: .image)
+        case .audio:
+            section(title: "Audio", mediaType: .audio)
+        }
+    }
+
+    /// The placeholder shown when the active scope has no playlists.
+    @ViewBuilder
+    private var emptyOverlay: some View {
+        switch appState.managerScope {
+        case .visual where videoPlaylists.isEmpty && imagePlaylists.isEmpty:
+            ContentUnavailableView {
+                Label("No Playlists", systemImage: "rectangle.stack")
+            } description: {
+                Text("Add a folder of videos or images.")
+            }
+        case .audio where audioPlaylists.isEmpty:
+            ContentUnavailableView {
+                Label("No Audio Playlists", systemImage: "music.note.list")
+            } description: {
+                Text("Add a folder of audio files.")
+            }
+        default:
+            EmptyView()
+        }
+    }
 
     /// Transient rows for folders still being scanned, each with a spinner. They
     /// disappear once the finished playlist appears in its section.
@@ -127,7 +132,10 @@ struct PlaylistSidebar: View {
             )
         } else {
             Button {
-                appState.select(playlist)
+                switch appState.managerScope {
+                case .visual: appState.select(playlist)
+                case .audio: appState.selectAudioInManager(playlist)
+                }
             } label: {
                 HStack {
                     Text(playlist.name)
@@ -150,7 +158,7 @@ struct PlaylistSidebar: View {
             }
             .buttonStyle(.plain)
             .disabled(appState.deletingPlaylistIDs.contains(playlist.id))
-            .listRowBackground(appState.selectedPlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
+            .listRowBackground(isSelectedRow(playlist) ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }
                 Button("Delete", role: .destructive) { appState.pendingPlaylistDelete = playlist }
@@ -158,31 +166,12 @@ struct PlaylistSidebar: View {
         }
     }
 
-    /// Collapsed Audio hint. Pressing it opens the extended audio overlay, where audio
-    /// playlists are managed (they never appear in the Video/Image sections).
-    private var audioHint: some View {
-        Section {
-            Button {
-                overlays.expandAudioToExtended()
-            } label: {
-                Label {
-                    HStack {
-                        Text("Audio")
-                        Spacer()
-                        if !audioPlaylists.isEmpty {
-                            Text("\(audioPlaylists.count)")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                        Image(systemName: "chevron.right").font(.caption2)
-                    }
-                } icon: {
-                    Image(systemName: "music.note.list")
-                }
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+    /// Whether `playlist` is the active scope's current selection — the visual selection or
+    /// the active audio playlist — so its row reads as highlighted.
+    private func isSelectedRow(_ playlist: Playlist) -> Bool {
+        switch appState.managerScope {
+        case .visual: return appState.selectedPlaylist === playlist
+        case .audio: return appState.activeAudioPlaylist === playlist
         }
     }
 

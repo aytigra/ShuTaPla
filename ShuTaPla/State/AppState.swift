@@ -25,6 +25,15 @@ enum MoveDirection {
     case up, down, left, right
 }
 
+/// Which library the Manager is browsing. The visual scope spans video + image
+/// playlists (one shared channel); the audio scope is the independent audio channel.
+/// Switching scope is a view switch only — it never starts, stops, or loads a channel,
+/// and the two scopes' state never overwrite each other.
+enum ManagerScope {
+    case visual
+    case audio
+}
+
 /// A scanned folder awaiting a media-type decision because no type dominated it
 /// (a Mixed folder). The view presents the choice and calls back with the type.
 struct PendingPlaylist {
@@ -87,6 +96,12 @@ final class AppState {
 
     var mode: AppMode
 
+    /// Which library the Manager center/sidebar/toolbar act on. Transient — the Manager
+    /// always opens in the visual scope; it is never persisted. Flipping it re-routes the
+    /// scoped accessors (`managerPlaylist`/`managerFiles`/`managerSelection`/`managerFilterMode`)
+    /// without touching either scope's underlying state.
+    var managerScope: ManagerScope = .visual
+
     // Runtime references to the active playlists. The visual channel is shared:
     // at most one of video/image is non-nil. Audio is an independent channel.
     var activeVideoPlaylist: Playlist?
@@ -111,6 +126,11 @@ final class AppState {
     /// File-list selection in the Manager center panel, by file ID. Cleared when
     /// the selected playlist changes. The tag panel reads this.
     var selectedFileIDs: Set<UUID> = []
+
+    /// The audio scope's file-list selection, parallel to `selectedFileIDs`. Kept
+    /// separate so switching Manager scope never disturbs the other scope's selection;
+    /// `managerSelection` routes to whichever the active scope owns.
+    var audioSelectedFileIDs: Set<UUID> = []
 
     /// Bumped by `select` to ask the file list to scroll its selection into view,
     /// even when the selection itself didn't change — so re-clicking the current
@@ -304,6 +324,63 @@ final class AppState {
         }
     }
 
+    // MARK: - Manager scope routing
+    //
+    // The Manager's sidebar, center panel, filter bar, and tag inspector read and write
+    // through these accessors so one set of views serves both scopes. Each routes to the
+    // active scope's own slot, so the scopes stay fully parallel — reading or writing one
+    // never touches the other.
+
+    /// The playlist the Manager center panel shows for the active scope: the selected
+    /// video/image playlist (visual) or the active audio playlist (audio).
+    var managerPlaylist: Playlist? {
+        switch managerScope {
+        case .visual: return selectedPlaylist
+        case .audio: return activeAudioPlaylist
+        }
+    }
+
+    /// The active scope's filtered, display-ordered files.
+    var managerFiles: [PlaylistFile] {
+        switch managerScope {
+        case .visual: return filteredFiles
+        case .audio: return audioFilteredFiles
+        }
+    }
+
+    /// The active scope's file-list selection.
+    var managerSelection: Set<UUID> {
+        get {
+            switch managerScope {
+            case .visual: return selectedFileIDs
+            case .audio: return audioSelectedFileIDs
+            }
+        }
+        set {
+            switch managerScope {
+            case .visual: selectedFileIDs = newValue
+            case .audio: audioSelectedFileIDs = newValue
+            }
+        }
+    }
+
+    /// The active scope's AND/OR tag-filter operator, delegating to the scope's own
+    /// `filterMode` / `audioFilterMode` binding source.
+    var managerFilterMode: FilterMode {
+        get {
+            switch managerScope {
+            case .visual: return filterMode
+            case .audio: return audioFilterMode
+            }
+        }
+        set {
+            switch managerScope {
+            case .visual: filterMode = newValue
+            case .audio: audioFilterMode = newValue
+            }
+        }
+    }
+
     // MARK: - Playlist creation
 
     /// Picks up a user-selected folder: creates a bookmark, scans, and either
@@ -426,11 +503,14 @@ final class AppState {
         rebuildTagFrequency(playlist)
 
         activate(playlist)
-        // An audio playlist lives in the extended overlay, not a Manager section, so it
-        // never becomes the Manager selection; only its own file list is refreshed.
+        // Switch the Manager to the new playlist's scope and make it that scope's selection:
+        // a visual playlist becomes `selectedPlaylist`, an audio playlist becomes the active
+        // audio playlist (stopped — creation never starts playback).
         if mediaType == .audio {
+            managerScope = .audio
             recomputeAudioFilteredFiles()
         } else {
+            managerScope = .visual
             selectedPlaylist = playlist
             activeServiceFilter = nil
             recomputeFilteredFiles()
@@ -483,6 +563,44 @@ final class AppState {
         audioScrollToken += 1   // re-center the overlay file list on the current track
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
+    }
+
+    /// The Manager's analog of `selectAudioPlaylist(_:)` for the audio scope sidebar:
+    /// makes `playlist` the active audio playlist and re-scans its folder, but — unlike the
+    /// overlay's play-on-select — does **not** start playback. Choosing a *different* playlist
+    /// stops whichever audio playlist is live, so only one is ever playing and the newly
+    /// selected one becomes active and stopped. Re-selecting the active playlist re-scans and
+    /// re-centers without disturbing its playback.
+    func selectAudioInManager(_ playlist: Playlist) {
+        let isNewSelection = activeAudioPlaylist !== playlist
+        if isNewSelection {
+            audioSelectedFileIDs = []
+            // Only one audio playlist is ever live; releasing the channel here keeps a
+            // background playlist from playing on behind the new selection.
+            if let live = coordinator.audioPlaylist { coordinator.stop(live) }
+        }
+        activate(playlist)
+        recomputeAudioFilteredFiles()
+        // Highlight where playback would resume, mirroring the visual `select`. Skipped when
+        // the resume file is filtered out of view (or none has played yet).
+        if let currentID = playlist.currentFileID,
+           audioFilteredFiles.contains(where: { $0.id == currentID }) {
+            audioSelectedFileIDs = [currentID]
+        }
+        audioScrollToken += 1
+        updateTask?.cancel()
+        updateTask = Task { await update(playlist) }
+    }
+
+    /// The audio inlet's Play when no audio playlist is active: start the first audio playlist
+    /// if any exist, otherwise raise the add-folder flow to create one. (Once a playlist is
+    /// active, the inlet shows the transport instead, whose Play continues that playlist.)
+    func startFirstAudioPlaylistOrAdd() {
+        if let first = modelContext.playlists(ofType: .audio).first {
+            beginPlayback(of: first)
+        } else {
+            isImportingPlaylist = true
+        }
     }
 
     /// Renames a playlist; an empty or whitespace-only name is rejected.

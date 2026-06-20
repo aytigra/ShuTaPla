@@ -489,9 +489,10 @@ struct ShuTaPlaApp: App {
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  ┌──────────┐  ┌─────────────────────────┐  ┌─────────┐ │
-│  │          │  │                         │  │         │ │
+│  │          │  │                         │  │  Filter | |
+|  |          |  |                         |  | controls│ │
 │  │ Playlists│  │  Playlist header        │  │  Tag    │ │
-│  │ panel    │  │  Filter controls        │  │  panel  │ │
+│  │ panel    │  │                         │  │  panel  │ │
 │  │          │  │  File list / gallery    │  │         │ │
 │  │ (collaps-│  │                         │  │ (collaps│ │
 │  │  ible)   │  │                         │  │  -ible) │ │

@@ -28,7 +28,7 @@ struct RootView: View {
                 PlayerView()
             }
 
-            if appState.mode != .welcome {
+            if appState.mode == .player {
                 audioOverlayLayer
             }
         }
