@@ -13,6 +13,7 @@ import SwiftData
 
 struct PlaylistSidebar: View {
     @Environment(AppState.self) private var appState
+    @Environment(OverlayManager.self) private var overlays
 
     @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
 
@@ -57,10 +58,11 @@ struct PlaylistSidebar: View {
             .padding(.vertical, 4)
             .background(.bar)
         }
-        .addPlaylistFlow()
+        // Video/image only: an audio playlist's delete confirmation is presented from the
+        // extended audio overlay, so the two surfaces never both present on the shared state.
         .confirmationDialog(
             "Delete playlist?",
-            isPresented: Binding(get: { appState.pendingPlaylistDelete != nil }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
+            isPresented: Binding(get: { appState.pendingPlaylistDelete.map { $0.mediaType != .audio } ?? false }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
             titleVisibility: .visible,
             presenting: appState.pendingPlaylistDelete
         ) { playlist in
@@ -156,24 +158,31 @@ struct PlaylistSidebar: View {
         }
     }
 
-    /// Collapsed Audio hint. Selecting it will open the extended audio overlay
-    /// where audio playlists are managed (Task 15).
+    /// Collapsed Audio hint. Pressing it opens the extended audio overlay, where audio
+    /// playlists are managed (they never appear in the Video/Image sections).
     private var audioHint: some View {
         Section {
-            Label {
-                HStack {
-                    Text("Audio")
-                    Spacer()
-                    if !audioPlaylists.isEmpty {
-                        Text("\(audioPlaylists.count)")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+            Button {
+                overlays.expandAudioToExtended()
+            } label: {
+                Label {
+                    HStack {
+                        Text("Audio")
+                        Spacer()
+                        if !audioPlaylists.isEmpty {
+                            Text("\(audioPlaylists.count)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        Image(systemName: "chevron.right").font(.caption2)
                     }
+                } icon: {
+                    Image(systemName: "music.note.list")
                 }
-            } icon: {
-                Image(systemName: "music.note.list")
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
         }
     }
 

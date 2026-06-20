@@ -228,10 +228,14 @@ method returns and is neither retained nor cancelled when the referenced playlis
 away (CLAUDE.md trap class 2; also a real production hazard on rapid delete-then-switch).
 **Fix:** retain and cancel like `updateTask`, or `await` them.
 
-### ✅ B5 — `select()` respawns a full folder re-scan on every (re-)select with no debounce · Low
-`AppState.swift:350`. Re-clicking the already-selected sidebar row (the documented re-center
-gesture) cancels and respawns a full scan Task each click. **Fix:** skip the rescan when the
-selection is unchanged, or debounce.
+### ↩︎ B5 (reverted) — re-selecting a playlist *should* re-scan · invalid
+`AppState.swift`. This finding treated re-clicking the open playlist as a pure re-center gesture
+and skipped the re-scan on an unchanged selection. That contradicts the spec: `features.md` —
+"Update … runs automatically whenever a playlist becomes active — **including re-selecting the
+open playlist** — so new files appear without a dedicated control." The skip removed the only way
+to refresh a playlist from disk (there is no Update button). `select(_:)` re-scans on every
+(re-)select, cancelling any in-flight scan first so rapid clicks don't pile up; `selectAudioPlaylist(_:)`
+does the same for the extended audio overlay.
 
 ---
 

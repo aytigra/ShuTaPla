@@ -289,7 +289,7 @@ While the player holds key context:
 
 | Key | Action |
 |-----|--------|
-| `[space]` | Unpause (when paused). Next file (when playing). |
+| `[space]` | Lift suppression when the pause overlay is active (leaving each playlist's own pause state untouched). Otherwise pause / unpause the active playlist. |
 | `[arrow right]` | Next file in active playlist |
 | `[arrow left]` | Previous file in active playlist |
 | `[tab]` | Toggle the Files & Tags overlay: opens it when closed, closes it when open (however it was opened). |
@@ -312,7 +312,7 @@ The `[delete]` confirmation dialog **holds key context until it closes**: `[ente
 |-----|--------|
 | `[arrow left]` | Previous track in audio playlist |
 | `[arrow right]` | Next track in audio playlist |
-| `[space]` | Unpause audio (when paused). Next audio track (when playing). |
+| `[space]` | Lift suppression when the pause overlay is active (leaving each playlist's own pause state untouched). Otherwise pause / unpause the audio playlist. |
 | `[arrow up]` | Close the audio overlay to Hidden (from either Compact or Extended). A Files & Tags overlay that is also open stays open; key context returns to the player. |
 | `[arrow down]` | Step the audio overlay Compact → Extended. (Extended is exclusive and closes the Files & Tags overlay.) |
 | `[l]` | Toggle loop on the current audio track |

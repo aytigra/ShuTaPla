@@ -156,30 +156,3 @@ struct PlaybackControlsBar: View {
     private var isPaused: Bool { playlist.playbackState == .paused }
 
 }
-
-/// A control-bar button style that reads as a button: padding gives it a real hit
-/// target, and a rounded fill appears on hover and deepens on press, so the controls
-/// are visibly interactive rather than bare glyphs.
-private struct ControlButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HoverBody(configuration: configuration)
-    }
-
-    private struct HoverBody: View {
-        let configuration: ButtonStyle.Configuration
-        @State private var hovering = false
-
-        var body: some View {
-            configuration.label
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    Color.primary.opacity(configuration.isPressed ? 0.22 : (hovering ? 0.13 : 0)),
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8))
-                .onHover { hovering = $0 }
-                .animation(.easeOut(duration: 0.12), value: hovering)
-        }
-    }
-}

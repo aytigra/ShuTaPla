@@ -120,6 +120,32 @@ import Testing
         #expect(!m.audioHoldsKeyContext)
     }
 
+    // MARK: - Compact audio: hover vs. hotkey
+
+    @Test func hoverRevealedCompactClosesOnHoverExit() {
+        let m = OverlayManager()
+        m.revealCompactAudioOnHover()
+        #expect(m.active.contains(.audioCompact))
+        m.hideCompactAudioOnHoverExit()                  // cursor leaves → auto-close
+        #expect(!m.active.contains(.audioCompact))
+    }
+
+    @Test func hotkeyRevealedCompactStaysOnHoverExit() {
+        let m = OverlayManager()
+        m.revealCompactAudio()                           // [arrow down] — pinned open
+        #expect(m.active.contains(.audioCompact))
+        m.hideCompactAudioOnHoverExit()                  // a stray hover-exit must not close it
+        #expect(m.active.contains(.audioCompact))
+    }
+
+    @Test func hoverRevealIsANoOpWhileExtendedOpen() {
+        let m = OverlayManager()
+        m.expandAudioToExtended()
+        m.revealCompactAudioOnHover()                    // must not disturb the extended overlay
+        #expect(m.active.contains(.audioExtended))
+        #expect(!m.active.contains(.audioCompact))
+    }
+
     @Test func expandToExtendedKeepsKeyContext() {
         let m = OverlayManager()
         m.revealCompactAudio()

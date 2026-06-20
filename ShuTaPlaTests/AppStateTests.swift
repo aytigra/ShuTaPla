@@ -817,29 +817,27 @@ struct AppStateTests {
         #expect(a.fileName == "a [beach].mp4")   // untouched
     }
 
-    @Test func reselectingTheSamePlaylistDoesNotRespawnTheScan() async throws {
+    @Test func reselectingTheSamePlaylistReScansTheFolder() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
         addFile("a.mp4", order: 0, to: playlist, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        // Each (re-)scan rediscovers the same extra file, so a re-read shows as another append.
+        let delta = UpdateDelta(added: [scanned("new.mp4", .video)], removedRelativePaths: [])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
 
         appState.select(playlist)
         let firstScan = appState.updateTask
         await appState.updateTask?.value
+        #expect(playlist.files.count == 2)        // a.mp4 + the discovered new.mp4
 
-        // Re-clicking the already-selected row is the re-center gesture; it must not cancel
-        // and respawn the folder scan.
+        // Re-clicking the already-selected row re-reads the folder — the automatic Update, the
+        // reason there's no dedicated control — so it spawns a fresh scan rather than no-op'ing.
         appState.select(playlist)
-        #expect(appState.updateTask == firstScan)
-
-        // Selecting a different playlist does start a fresh scan.
-        let other = Playlist(name: "Q", folderBookmark: Data(), folderPath: "/q", mediaType: .video, sortOrder: 1)
-        context.insert(other)
-        appState.select(other)
         #expect(appState.updateTask != firstScan)
         await appState.updateTask?.value
+        #expect(playlist.files.count == 3)
     }
 
     @Test func horizontalArrowInListIsConsumedWithoutChangingSelection() throws {
@@ -948,6 +946,229 @@ struct AppStateTests {
         await appState.update(playlist)
 
         #expect(appState.pendingManagerDelete.isEmpty)
+    }
+
+    // MARK: - Audio overlay (Task 15)
+
+    @Test func audioFilterTogglesAndRecomputesIndependently() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(audio)
+        addFile("1.mp3", tags: ["jazz", "mellow"], status: .valid, order: 0, to: audio, in: context)
+        addFile("2.mp3", tags: ["jazz"], status: .valid, order: 1, to: audio, in: context)
+        addFile("3.mp3", order: 2, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.activate(audio)
+        appState.recomputeAudioFilteredFiles()
+        #expect(appState.audioFilteredFiles.count == 3)
+
+        appState.toggleAudioFilterTag("jazz")
+        #expect(Set(appState.audioFilteredFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+
+        appState.toggleAudioFilterTag("mellow")             // AND jazz + mellow
+        #expect(appState.audioFilteredFiles.map(\.fileName) == ["1.mp3"])
+
+        appState.audioFilterMode = .or                      // jazz OR mellow
+        #expect(Set(appState.audioFilteredFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+
+        appState.clearAudioFilter()
+        #expect(appState.audioFilteredFiles.count == 3)
+    }
+
+    @Test func beginPlaybackOfAudioLeavesManagerSelectionUntouched() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let video = Playlist(name: "V", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(video)
+        context.insert(audio)
+        addFile("v.mp4", order: 0, to: video, in: context)
+        addFile("a.mp3", order: 0, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.select(video)
+        #expect(appState.selectedPlaylist === video)
+
+        // Audio plays on its own independent channel: the Manager keeps showing the
+        // video playlist and the window does not enter Player mode.
+        appState.beginPlayback(of: audio)
+        #expect(appState.selectedPlaylist === video)
+        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.mode == .manager)
+
+        await appState.updateTask?.value
+    }
+
+    @Test func deletingThePlayingAudioPlaylistStopsTheCoordinator() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "a.mp3"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        addFile("a.mp3", order: 0, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: audio)
+        #expect(appState.coordinator.audioPlaylist === audio)
+
+        // Deleting the playlist must release the audio channel, or the engine keeps playing
+        // (and the next advance dereferences) files that no longer exist.
+        await appState.delete(audio)
+        #expect(appState.coordinator.audioPlaylist == nil)
+    }
+
+    @Test func confirmAudioDeleteAdvancesPastTheTrashedTrack() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "1.mp3"))
+        try Data().write(to: dir.appending(path: "2.mp3"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        let first = addFile("1.mp3", order: 0, to: audio, in: context)
+        let second = addFile("2.mp3", order: 1, to: audio, in: context)
+        let secondID = second.id
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: audio)
+        #expect(audio.currentFileID == first.id)
+
+        // Trashing the playing track must advance the channel to the survivor, mirroring the
+        // visual confirmPlayerDelete; otherwise the engine stays on the deleted file.
+        appState.audioDeleteCandidate = first
+        appState.confirmAudioDelete()
+
+        var waited = 0
+        while audio.files.count > 1 && waited < 100 {
+            try? await Task.sleep(for: .milliseconds(20))
+            waited += 1
+        }
+        #expect(audio.files.count == 1)
+        #expect(audio.currentFileID == secondID)   // reconciled past the trashed track
+    }
+
+    @Test func selectAudioPlaylistStartsPlaybackAndReScansEachClick() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "a.mp3"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        addFile("a.mp3", order: 0, to: audio, in: context)
+        let delta = UpdateDelta(added: [scanned("new.mp3", .audio)], removedRelativePaths: [])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        defer { appState.coordinator.shutdown() }
+
+        let tokenBefore = appState.audioScrollToken
+        appState.selectAudioPlaylist(audio)
+        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.coordinator.audioPlaylist === audio)   // a new selection starts playing
+        #expect(appState.audioScrollToken > tokenBefore)        // asks the file list to re-center
+        await appState.updateTask?.value
+        #expect(audio.files.count == 2)                         // re-read the folder
+
+        // Re-selecting the active audio playlist re-reads the folder again (no dedicated control)
+        // and re-centers the list once more.
+        let tokenAfterFirst = appState.audioScrollToken
+        appState.selectAudioPlaylist(audio)
+        #expect(appState.audioScrollToken > tokenAfterFirst)
+        await appState.updateTask?.value
+        #expect(audio.files.count == 3)
+    }
+
+    @Test func audioRescanAdvancesOffARemovedPlayingTrack() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "1.mp3"))
+        try Data().write(to: dir.appending(path: "2.mp3"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        let first = addFile("1.mp3", order: 0, to: audio, in: context)
+        let second = addFile("2.mp3", order: 1, to: audio, in: context)
+        let secondID = second.id
+        // The re-scan prunes the track that's currently playing.
+        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.mp3"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: audio)
+        #expect(audio.currentFileID == first.id)
+
+        await appState.update(audio)            // a re-scan that removes the playing track
+        #expect(audio.files.count == 1)
+        #expect(audio.currentFileID == secondID)   // reconciled off the pruned track
+    }
+
+    @Test func audioRescanRemovalClearsPendingAudioDelete() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(audio)
+        let doomed = addFile("1.mp3", order: 0, to: audio, in: context)
+        addFile("2.mp3", order: 1, to: audio, in: context)
+        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.mp3"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+
+        // A trash confirmation pointing at a file the re-scan prunes must not survive to act
+        // on a destroyed model.
+        appState.audioDeleteCandidate = doomed
+        await appState.update(audio)
+        #expect(appState.audioDeleteCandidate == nil)
+    }
+
+    @Test func currentAudioFileResolvesFromTheModelWhenStopped() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(audio)
+        addFile("1.mp3", order: 0, to: audio, in: context)
+        let second = addFile("2.mp3", order: 1, to: audio, in: context)
+        audio.currentFileID = second.id
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.activate(audio)
+        appState.recomputeAudioFilteredFiles()
+
+        // Nothing is playing, so the engine holds no live track — yet the overlay still resolves
+        // the current file from the playlist's persisted resume position, exactly as the Manager
+        // does. A stopped audio playlist shows (and resumes from) where it left off.
+        #expect(appState.coordinator.audioCurrentFile == nil)
+        #expect(appState.currentAudioFile?.id == second.id)
+    }
+
+    @Test func currentAudioFileIsNilWhenTheResumeTrackIsFilteredOut() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(audio)
+        let tagged = addFile("1.mp3", tags: ["jazz"], status: .valid, order: 0, to: audio, in: context)
+        addFile("2.mp3", order: 1, to: audio, in: context)
+        audio.currentFileID = tagged.id
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.activate(audio)
+        appState.toggleAudioFilterTag("blues")   // a filter the resume track does not match
+
+        // Mirrors the Manager: when the remembered file is filtered out of view, there's
+        // nothing to highlight or center on.
+        #expect(appState.currentAudioFile == nil)
     }
 
     private var emptyResult: ScanResult {

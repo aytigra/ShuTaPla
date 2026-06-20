@@ -136,6 +136,9 @@ final class HotkeyRouter {
             || appState.tagRemovalError != nil
             || appState.playerDeleteError != nil
             || appState.playerRenameError != nil
+            || appState.audioDeleteCandidate != nil
+            || appState.audioDeleteError != nil
+            || appState.audioRenameError != nil
             || appState.pendingTypeChoice != nil
             || appState.addPlaylistError != nil
     }
@@ -234,6 +237,14 @@ final class HotkeyRouter {
             return true
         }
 
+        // `[space]` while suppressed lifts suppression globally — whichever target holds key
+        // context, and without disturbing any playlist's own pause state. Only when not
+        // suppressed does it fall through to the context's pause toggle.
+        if key == .space, coordinator.isSuppressed {
+            coordinator.unsuppress()
+            return true
+        }
+
         // `[s]` stops the visual playlist and returns to Manager.
         if key == .s {
             appState.stopAndExitPlayer()
@@ -257,10 +268,7 @@ final class HotkeyRouter {
         if rightOption, key == .arrowRight { coordinator.seek(visual, by: 3); return true }
 
         switch key {
-        case .space:
-            if coordinator.isSuppressed { coordinator.unsuppress() }
-            else if visual.playbackState == .paused { coordinator.unpause(visual) }
-            else { coordinator.next(visual) }
+        case .space: coordinator.togglePause(visual)
         case .arrowRight: coordinator.next(visual)
         case .arrowLeft: coordinator.previous(visual)
         case .tab:
@@ -279,19 +287,25 @@ final class HotkeyRouter {
     }
 
     private func routeAudio(_ key: Hotkey, rightOption: Bool) -> Bool {
+        // Overlay navigation acts on the overlay, not the audio channel, so it works whether
+        // or not a track is playing — the overlay can be opened (and must be closeable) while
+        // the channel is idle.
+        switch key {
+        case .arrowUp: overlayContext.closeAudioOverlay(); return true
+        case .arrowDown: overlayContext.expandAudioToExtended(); return true
+        default: break
+        }
+
+        // Transport, seek, and loop need an active audio playlist.
         guard let coordinator, let audio = coordinator.audioPlaylist else { return false }
 
         if rightOption, key == .arrowLeft { coordinator.seek(audio, by: -3); return true }
         if rightOption, key == .arrowRight { coordinator.seek(audio, by: 3); return true }
 
         switch key {
-        case .space:
-            if audio.playbackState == .paused { coordinator.unpause(audio) }
-            else { coordinator.next(audio) }
+        case .space: coordinator.togglePause(audio)
         case .arrowRight: coordinator.next(audio)
         case .arrowLeft: coordinator.previous(audio)
-        case .arrowUp: overlayContext.closeAudioOverlay()
-        case .arrowDown: overlayContext.expandAudioToExtended()
         case .l: coordinator.toggleLoop(audio)
         default: return false
         }

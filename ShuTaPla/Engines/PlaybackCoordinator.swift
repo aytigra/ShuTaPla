@@ -196,6 +196,14 @@ final class PlaybackCoordinator: PlaybackSource {
         playlist.playbackState == .playing ? pause(playlist) : unpause(playlist)
     }
 
+    /// The play/pause button's full action: a playlist on the channel toggles between Playing
+    /// and Paused; a stopped one (Stop removed it from the channel) starts, resuming from its
+    /// remembered file. `togglePause` alone can't start a stopped playlist — `unpause` guards on
+    /// `isActive` — so the audio overlay's transport would otherwise be a dead end after Stop.
+    func togglePlayback(_ playlist: Playlist) {
+        if isActive(playlist) { togglePause(playlist) } else { play(playlist) }
+    }
+
     // MARK: - Suppression (pause overlay)
 
     /// Halts both channels without touching their persisted states.
@@ -282,13 +290,26 @@ final class PlaybackCoordinator: PlaybackSource {
     var visualCurrentTime: TimeInterval { visualKind == .video ? (videoEngine?.currentTime ?? 0) : 0 }
     var visualDuration: TimeInterval { visualKind == .video ? (videoEngine?.duration ?? 0) : 0 }
 
+    /// The track the audio channel is playing, and its position/duration in seconds.
+    /// The audio overlay's transport, scrubber, and tag editor anchor on these.
+    var audioCurrentFile: PlaylistFile? { audioEngine?.currentFile }
+    var audioCurrentTime: TimeInterval { audioEngine?.currentTime ?? 0 }
+    var audioDuration: TimeInterval { audioEngine?.duration ?? 0 }
+
     /// Plays `file` on `playlist`'s channel right away: lifts a global pause, clears the
     /// playlist's own pause, then jumps to it. The "play this one now" intent behind a
     /// double-click in the Files & Tags overlay.
     func playNow(_ playlist: Playlist, file: PlaylistFile) {
         if isSuppressed { unsuppress() }
         if playlist.playbackState == .paused { unpause(playlist) }
-        jump(playlist, to: file)
+        // Jump within the running channel; if the playlist isn't on a channel yet (never
+        // started, or stopped — as when the extended audio overlay shows a restored playlist),
+        // start it on its channel at this file.
+        if channel(of: playlist) == nil {
+            play(playlist, startingAt: file)
+        } else {
+            jump(playlist, to: file)
+        }
     }
 
     /// Jumps `playlist` to a specific file without leaving it, loading it on whichever
@@ -303,12 +324,19 @@ final class PlaybackCoordinator: PlaybackSource {
         case .audio: audioEngine?.load(file, at: url)
         case nil: break
         }
-        // `load` starts the new file playing; if the visual channel is halted for an
-        // overlay (e.g. a filter change inside Files & Tags reshaped the sequence) or
-        // globally suppressed, re-halt it so the jump doesn't resume playback behind it.
-        if visualPlaylist === playlist, visualHaltedForOverlay || isSuppressed {
-            suspend(playlist)
-        }
+        // `load` always starts the new file playing. Re-halt it if this playlist shouldn't be
+        // playing right now — globally suppressed, paused on its own, or (visual) halted for an
+        // overlay — so a jump driven by a filter/deletion reconcile doesn't resume it.
+        if !shouldBePlaying(playlist) { suspend(playlist) }
+    }
+
+    /// Whether `playlist` should currently be advancing, given global suppression, its own
+    /// paused state, and a visual overlay halt. A `jump`'s `load` auto-starts the file, so this
+    /// gates whether to immediately re-suspend it.
+    private func shouldBePlaying(_ playlist: Playlist) -> Bool {
+        guard playlist.playbackState == .playing, !isSuppressed else { return false }
+        if visualPlaylist === playlist, visualHaltedForOverlay { return false }
+        return true
     }
 
     /// After a filter (or a deletion) reshapes the playback sequence, if the visual
@@ -330,6 +358,21 @@ final class PlaybackCoordinator: PlaybackSource {
             case .image: imageEngine.stop()
             default: videoEngine?.stop()
             }
+        }
+    }
+
+    /// After a filter reshapes the audio playback sequence, if the audio channel's
+    /// current track is no longer in it, jump to the first remaining track. When
+    /// nothing remains, the engine's loaded file is cleared so a later advance/seek
+    /// can't act on a track no longer in the playlist.
+    func reconcileAudioSelection() {
+        guard let playlist = audioPlaylist else { return }
+        let sequence = playlist.playbackSequence
+        if let current = audioCurrentFile, sequence.contains(where: { $0.id == current.id }) { return }
+        if let first = sequence.first {
+            jump(playlist, to: first)
+        } else {
+            audioEngine?.stop()
         }
     }
 

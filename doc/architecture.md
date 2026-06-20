@@ -179,6 +179,7 @@ The app uses two layers of state:
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
 - Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
 - Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
+- Maintaining an **audio editing surface parallel to the Manager's**. Because the audio channel is independent of the selected video/image playlist, the active audio playlist carries its own cached `audioFilteredFiles` and tag-filter API alongside the Manager's, and its own selection entry point `selectAudioPlaylist` — the audio analog of `select`: activate, restore the persisted filter, re-read the folder on every (re-)select (the automatic Update, since there is no dedicated control), bump `audioScrollToken` to re-center the overlay list, and start a genuinely new selection playing. The overlay's highlighted/scrolled/tag-edited "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against `audioFilteredFiles` (the audio analog of the Manager's `selectedFileIDs`) — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off. The extended audio overlay is the manager view for these playlists; the Manager center panel's selection stays video/image only.
 - Centralizing scoped folder access for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt.
 - Exposing optimistic-progress state that the sidebar renders as spinners: folders being scanned into new playlists, playlists with a background re-scan in flight, and playlists being deleted (whose files are removed in batches, yielding between each so the UI stays responsive).
 
@@ -191,7 +192,7 @@ Owns both mpv instances (video, audio) and the image slideshow timer. Enforces c
 
 It also owns the single transient **suppression** flag: effective playback is `playing && !suppression`. `[p]`/`[esc]` (pause overlay) and window close activate suppression; Unpause (or `[p]`/`[space]` on the pause overlay) and window reopen lift it. Playlist states are untouched either way.
 
-Exposes playback state (playing/paused/stopped, current time, duration) as observable properties for UI binding.
+Keeps each channel's loaded file consistent with its playback sequence. When a filter, re-scan, or deletion reshapes a sequence, `reconcileVisualSelection()` / `reconcileAudioSelection()` jump the engine to the first surviving file if the current one was dropped, or clear the engine when nothing matches. Because loading a file auto-starts it, a `jump` re-suspends the channel afterward unless it should be playing (a paused, suppressed, or overlay-halted channel stays halted). Deleting a playing playlist stops its channel first, so the engine never references models that are about to be freed. Exposes playback state (playing/paused/stopped, current time, duration) as observable properties for UI binding, per channel (`visualCurrentFile`/`audioCurrentFile`, etc.).
 
 #### OverlayManager
 
@@ -1040,8 +1041,9 @@ ShuTaPla/                            (app source)
 │   │   └── PlaylistsOverlay.swift       // left hover playlist selector
 │   │
 │   ├── Audio/
-│   │   ├── AudioOverlayCompact.swift
-│   │   └── AudioOverlayExtended.swift
+│   │   ├── AudioOverlayCompact.swift    // slim top bar: track info, transport, scrub, volume, loop (also AudioVolumeControl)
+│   │   ├── AudioOverlayExtended.swift   // manager view for audio playlists (list, filtered files, tag editor)
+│   │   └── AudioFilterBar.swift         // audio-scoped tag filter + saved searches (mirrors FilterBar, search-only)
 │   │
 │   ├── Shared/
 │   │   ├── TagEditorView.swift          // tag editor (TagTokenField, create-enabled) + invalid-name rename
@@ -1049,6 +1051,7 @@ ShuTaPla/                            (app source)
 │   │   ├── FlowLayout.swift             // wrapping chip layout
 │   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
+│   │   ├── ControlButtonStyle.swift     // shared button style for the bottom bar + audio controls
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
 │   │   ├── FileSelection.swift          // shared click-selection + delete-target logic (list + gallery)
 │   │   └── FileRowView.swift            // single file row in list

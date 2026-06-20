@@ -203,13 +203,35 @@ import AppKit
         #expect(!f.appState.coordinator.isSuppressed)
     }
 
-    @Test func spaceAdvancesVisualWhenPlaying() throws {
+    @Test func spacePausesVisualWhenPlaying() throws {
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
         defer { f.appState.coordinator.shutdown() }
         let first = f.playlist.currentFileID
 
         #expect(f.router.route(.space, rightOption: false))
-        #expect(f.playlist.currentFileID != first)
+        #expect(f.playlist.playbackState == .paused)   // pauses, never advances
+        #expect(f.playlist.currentFileID == first)
+    }
+
+    @Test func spacePausesAudioWhenPlaying() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        defer { f.appState.coordinator.shutdown() }
+        let first = f.playlist.currentFileID
+
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(f.playlist.playbackState == .paused)   // pauses, never advances
+        #expect(f.playlist.currentFileID == first)
+    }
+
+    @Test func spaceEndsSuppressionWhenAudioHoldsContext() throws {
+        // Suppression is global, so [space] lifts it whichever target holds key context — and
+        // only lifts it, leaving the playlist's own play/pause state alone.
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.coordinator.suppress()
+        defer { f.appState.coordinator.shutdown() }
+
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(!f.appState.coordinator.isSuppressed)
     }
 
     // MARK: - Player: esc priority chain
@@ -410,6 +432,21 @@ import AppKit
 
         #expect(f.router.route(.arrowDown, rightOption: false))
         #expect(overlay.expandAudioCalls == 1)
+    }
+
+    @Test func audioOverlayNavigatesWithNoTrackPlaying() throws {
+        // The audio overlay can be opened (e.g. from the sidebar's Audio hint) with nothing
+        // playing; its [arrow up]/[arrow down] must still close and expand it. Those keys act
+        // on the overlay, not the audio channel, so they can't depend on an active playlist.
+        let overlay = audioOverlay()
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"], overlay: overlay)
+        defer { f.appState.coordinator.shutdown() }
+        #expect(f.appState.coordinator.audioPlaylist == nil)
+
+        #expect(f.router.route(.arrowDown, rightOption: false))
+        #expect(overlay.expandAudioCalls == 1)
+        #expect(f.router.route(.arrowUp, rightOption: false))
+        #expect(overlay.closeAudioCalls == 1)
     }
 
     // MARK: - Text input passthrough

@@ -50,7 +50,6 @@ struct PlayerView: View {
         .background(CursorAutoHider(isActive: cursorShouldAutoHide))
         .overlay(alignment: .leading) { playlistsContainer }
         .overlay(alignment: .bottom) { bottomControlsContainer }
-        .overlay(alignment: .top) { topAudioHoverStrip }
         .overlay { filesTagsContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
         .animation(.easeInOut(duration: 0.2), value: visualHasNoFiles)
@@ -180,18 +179,6 @@ struct PlayerView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .leading)
-        .allowsHitTesting(!coordinator.isSuppressed)
-    }
-
-    /// Top-edge trigger for the compact audio overlay. Its content lands in Task 15; the
-    /// strip already drives the `OverlayManager` so the wiring is in place.
-    private var topAudioHoverStrip: some View {
-        HoverZone(
-            onEnter: { if !coordinator.isSuppressed { overlays.revealCompactAudio() } },
-            onExit: { overlays.hide(.audioCompact) }
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: hoverThickness)
         .allowsHitTesting(!coordinator.isSuppressed)
     }
 
