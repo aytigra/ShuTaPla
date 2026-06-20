@@ -212,9 +212,60 @@ state, so there's no migration.
 - *The audio-scope center is a placeholder (`ContentUnavailableView`, "files managed from
   the player overlay") — accurate while the overlay still mounts in Manager. Phase 4
   replaces it with the real scoped center; Phase 5 removes the overlay from Manager.*
-- *`NavigationSplitView` still injects its automatic sidebar-toggle button; SwiftUI exposes
-  no public way to suppress it, so the scope tabs drive collapse/expand alongside it rather
-  than replacing it.*
+
+#### Toolbar shell — Option B2 (AppKit), status and findings
+
+The Manager shell is an `NSSplitViewController` (`ManagerSplitScene.swift`) hosting the three
+SwiftUI panes, with a custom `NSToolbar` whose three regions (sidebar / center / inspector) are
+bounded by `NSTrackingSeparatorToolbarItem`s pinned to the split dividers. `ManagerChrome`
+(`@Observable`) is the shared source of truth for sidebar collapse, inspector visibility, and
+tag-management mode. The controller is hosted *inside* the SwiftUI `WindowGroup` via
+`NSViewControllerRepresentable` (`ManagerView` → `ManagerSplitScene`).
+
+**Working:**
+- *Pane resize.* The representable's `sizeThatFits` returns the full proposed size. Without it,
+  SwiftUI's default pass sizes the controller to its fitting width (sum of pane minimums) and
+  centers it, leaving margins — so a divider drag couldn't hand freed width to the center pane and
+  a collapsing pane detached from the window edge. Returning the proposed size pins the split edge
+  to edge; with center at the lowest `holdingPriority`, a center↔inspector drag resizes those two
+  panes and inspector drag-collapse stays pinned.
+- *Scope tabs.* Custom toggle buttons (`ScopeTabButton`) with a subtle gray capsule highlight on
+  the active scope (no accent fill), gray-on-hover for the inactive one — matching the system
+  toolbar's selected-toggle look. They also drive collapse: click the active scope to collapse the
+  sidebar, click either while collapsed to expand + select. A native segmented `Picker` gives the
+  exact look for free but **can't** report a click on the already-selected segment, so it can't
+  drive the reclick-collapse — hence the custom button.
+
+**Known limitation — New Playlist `+` overflow on collapse (accepted for now):**
+`+` is pinned to the sidebar's trailing (divider) edge (a `flexibleSpace` before it, ahead of the
+sidebar tracking separator), so it moves with a sidebar resize. The desired Xcode behavior also
+**relocates** it next to the leading scope-tab cluster when the sidebar collapses, never falling into
+the overflow menu — that part does not work in the current architecture, and item reordering can't
+fix it: even leading-grouped right next to the (surviving) scope tabs, `+` overflows. The overflow on
+collapse is accepted for now.
+
+Root cause: AppKit's full-height-sidebar toolbar coordination — reserving a sidebar *region* of
+toolbar width, pinning its items to the divider, and relocating them on collapse — engages only when
+the `NSSplitViewController` is the **window's `contentViewController`**. Here the window's content
+controller is SwiftUI's hosting controller (the split is hosted inside the `WindowGroup`), so AppKit
+reserves no region and simply overflows whatever leading items don't fit. The `NSTrackingSeparator`
+still draws the divider line, but the region/relocate behavior never turns on.
+
+Proper fix (deferred) — the literal intent of B2, "host the whole shell in AppKit": let **AppKit own
+the window content**. A container controller swaps between the Manager split controller (native
+toolbar coordination) and SwiftUI-hosted Welcome/Player. This requires moving the two global concerns
+that currently live in `RootView`'s view lifecycle — the add-playlist flow (`.addPlaylistFlow()`) and
+the `HotkeyRouter` `NSEvent` monitor — out to app/`AppState` level so they survive when SwiftUI no
+longer owns the content.
+
+Pragmatic fallback (if the refactor isn't taken): put `+` in the sidebar's own bottom bar
+(`.safeAreaInset(edge: .bottom)` on `PlaylistSidebar`) — which is where Xcode's actual *add* buttons
+live (navigator bottom bar, not the toolbar), so it never overflows and collapses with the panel.
+
+Reference: full-height-sidebar + toolbar coordination needs the split controller as the window's
+`contentViewController` with `.fullSizeContentView` and `sidebarTrackingSeparator` — see Apple's
+[`sidebarTrackingSeparator`](https://developer.apple.com/documentation/appkit/nstoolbaritem/identifier/sidebartrackingseparator)
+docs and the [WWDC20 "new look of macOS" notes](https://mackuba.eu/notes/wwdc20/adopt-new-look-of-macos/).
 
 ### Phase 4 — Center-panel parity (filter, tags, multi-select, durations)
 
