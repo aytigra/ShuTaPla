@@ -4,39 +4,52 @@
 //
 //  The player-mode audio overlay: a single layout with a compact and an expanded state. The
 //  compact transport bar slides down from the top edge with the current track and its
-//  controls; a chevron expands a lower section — an audio playlists selector, the active
-//  playlist's filtered file list, and a tag editor for the current track. It drives the
-//  coordinator's independent audio channel, so it coexists with the visual player.
+//  controls; a chevron expands the shared `LibrarySurface` below it — the audio playlists
+//  selector, the active playlist's filtered file list, and a tag editor for the current
+//  track. It drives the coordinator's independent audio channel, so it coexists with the
+//  visual player.
 //
-//  The lower section is built from the same components as the visual player overlays
-//  (`AudioTransport`, `FileRowView`, `FileContextMenu`, `AudioFilterBar`, `TagEditorView`).
-//  Playlist creation lives behind the `+`; rename / delete / reorder live in Manager's audio
-//  scope, so the playlists panel here is a pure selector — choosing one plays it immediately.
+//  The lower body comes from `LibrarySurface`, wired through `audioContext`. Playlist
+//  creation lives behind the `+`; rename / delete / reorder live in Manager's audio scope,
+//  so the playlists panel here is a pure selector — choosing one plays it immediately.
 //
 
 import SwiftUI
-import SwiftData
 import AppKit
 
 struct AudioOverlay: View {
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
     @Environment(OverlayManager.self) private var overlays
-    @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
-
-    @State private var fileRenamingID: UUID?
-    @State private var fileDraftName = ""
 
     private var isExpanded: Bool { overlays.active.contains(.audioExtended) }
-    private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
     private var activePlaylist: Playlist? { appState.activeAudioPlaylist }
+
+    /// The audio channel's wiring for the shared library surface: lists audio playlists,
+    /// plays on select, and routes deletes/rename errors to the audio alerts the overlay hosts.
+    private var audioContext: LibraryContext {
+        LibraryContext(
+            mediaType: .audio,
+            activePlaylist: activePlaylist,
+            files: appState.audioFilteredFiles,
+            currentFile: appState.currentAudioFile,
+            scrollTrigger: appState.audioScrollToken,
+            tagAutoFocus: false,
+            onSelectPlaylist: { appState.selectAudioPlaylist($0) },
+            onAddPlaylist: { appState.isImportingPlaylist = true },
+            onPlayFile: { coordinator.playNow($0, file: $1) },
+            onDeleteFile: { appState.requestAudioDelete($0) },
+            onRemoveAudio: { _ in },
+            onRenameError: { appState.audioRenameError = $0 }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             compactBar
             if isExpanded {
                 Divider()
-                lowerSection
+                LibrarySurface(context: audioContext) { AudioFilterBar() }
             }
         }
         .frame(maxWidth: .infinity)
@@ -164,176 +177,4 @@ struct AudioOverlay: View {
         }
     }
 
-    // MARK: - Lower section
-
-    private var lowerSection: some View {
-        HStack(spacing: 0) {
-            playlistsColumn.frame(width: 240)
-            Divider()
-            fileColumn
-            Divider()
-            tagColumn.frame(width: 300)
-        }
-    }
-
-    // MARK: - Playlists column
-
-    private var playlistsColumn: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(audioPlaylists) { playlist in
-                    playlistRow(playlist)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if audioPlaylists.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Audio Playlists", systemImage: "music.note.list")
-                    } description: {
-                        Text("Add a folder of audio files.")
-                    }
-                }
-            }
-
-            Divider()
-            HStack {
-                Button { appState.isImportingPlaylist = true } label: {
-                    Image(systemName: "plus").frame(width: 24, height: 24).contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(appState.isAddingPlaylist)
-                .help("Add an audio playlist from a folder")
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-        }
-    }
-
-    private func playlistRow(_ playlist: Playlist) -> some View {
-        Button { appState.selectAudioPlaylist(playlist) } label: {
-            HStack {
-                Text(playlist.name).lineLimit(1)
-                Spacer()
-                if appState.deletingPlaylistIDs.contains(playlist.id) {
-                    ProgressView().controlSize(.small).tint(.red)
-                } else if appState.busyPlaylistIDs.contains(playlist.id) {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("\(playlist.files.count)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
-    }
-
-    // MARK: - File column
-
-    private var fileColumn: some View {
-        VStack(spacing: 0) {
-            AudioFilterBar().zIndex(1)
-            Divider()
-            if appState.audioFilteredFiles.isEmpty {
-                emptyFiles
-            } else {
-                fileList
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyFiles: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "music.note")
-                .font(.system(size: 40))
-            Text(activePlaylist == nil ? "No Audio Playing" : "No Files")
-                .font(.title3.weight(.semibold))
-        }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var fileList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(appState.audioFilteredFiles) { file in
-                        fileRow(file).id(file.id)
-                        Divider()
-                    }
-                }
-            }
-            .onAppear {
-                if let id = appState.currentAudioFile?.id { proxy.scrollTo(id, anchor: .center) }
-            }
-            // (Re-)selecting a playlist while the overlay is open switches the list in place,
-            // so `onAppear` won't fire — re-center on the token instead, deferred a layout pass
-            // so the just-switched playlist's rows exist for `scrollTo` to land on.
-            .onChange(of: appState.audioScrollToken) { _, _ in
-                guard let id = appState.currentAudioFile?.id else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func fileRow(_ file: PlaylistFile) -> some View {
-        if let playlist = activePlaylist {
-            FileRowView(
-                file: file,
-                playlist: playlist,
-                isSelected: appState.currentAudioFile?.id == file.id,
-                isRenaming: fileRenamingID == file.id,
-                isStripping: false,
-                draftName: $fileDraftName,
-                onCommitRename: { commitFileRename(file) },
-                onCancelRename: { fileRenamingID = nil }
-            )
-            .onTapGesture {
-                guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
-                coordinator.playNow(playlist, file: file)
-            }
-            .contextMenu {
-                FileContextMenu(
-                    file: file,
-                    playlist: playlist,
-                    onRename: { fileDraftName = file.fileName; fileRenamingID = file.id },
-                    onRemoveAudio: {},   // never shown for audio playlists
-                    onDelete: { appState.requestAudioDelete(file) }
-                )
-            }
-        }
-    }
-
-    private func commitFileRename(_ file: PlaylistFile) {
-        let name = fileDraftName
-        fileRenamingID = nil
-        Task { if let error = await appState.renameFile(file, to: name) { appState.audioRenameError = error } }
-    }
-
-    // MARK: - Tag column
-
-    @ViewBuilder
-    private var tagColumn: some View {
-        if let playlist = activePlaylist, let current = appState.currentAudioFile {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(current.fileName)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                Divider().padding(.top, 8)
-                TagEditorView(playlist: playlist, files: [current])
-                Spacer(minLength: 0)
-            }
-        } else {
-            ContentUnavailableView("No Track Playing", systemImage: "tag")
-        }
-    }
 }

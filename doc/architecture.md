@@ -198,9 +198,9 @@ Keeps each channel's loaded file consistent with its playback sequence. When a f
 #### OverlayManager
 
 Tracks visibility of all overlays in Player mode and enforces exclusivity rules from the feature spec:
-- Expanded audio (`.audioExtended`) is exclusive — opening it closes Files & Tags and Playlists.
+- Expanded audio (`.audioExtended`) is exclusive — opening it closes Files & Tags.
 - Compact audio (`.audioCompact`) closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
-- Files & Tags suppresses hover triggers for Playlists and bottom controls; it closes automatically only when Expanded audio opens.
+- Files & Tags suppresses the bottom controls' hover trigger; it closes automatically only when Expanded audio opens.
 - Owns **key context** — which target (player vs. audio overlay) currently receives arrow/space/loop/seek. The audio overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
 
 `.audioCompact` and `.audioExtended` are two states of one view, `AudioOverlay`: it always draws the compact transport bar and, while `.audioExtended` is active, reveals the expanded lower section. `expandAudioToExtended()` / `collapseAudioToCompact()` toggle between them (collapse pins the compact bar so a stray hover-exit can't dismiss it); `closeAudioOverlay()` returns to Hidden. The overlay mounts only in Player mode.
@@ -514,7 +514,7 @@ The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `M
 
 **Sidebar structure**: `PlaylistSidebar` pins the **audio inlet** (`AudioInlet`) at the top via `.safeAreaInset(edge: .top)` in both scopes, then lists the active scope's sections — Video + Image (visual) or Audio — each with full management (inline rename, delete with confirmation, drag reorder). Create is the toolbar's New Playlist. The playlist delete confirmation is presented here for every scope. Rows come from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro), filtered by `mediaType`, sorted by `sortOrder`.
 
-**Playlists overlay (Player mode)**: The left-hover overlay in Player mode mirrors the visual section structure but is read-only — no create/rename/delete/reorder. Selecting a playlist immediately starts playing it. The bottom Audio hint opens the expanded audio overlay's selector.
+**Player-mode playlist switching**: Quick switching lives in the overlays' selectors, not a separate panel — the `LibrarySurface` selector column lists the active channel's single media type and is a pure switcher (no create/rename/delete/reorder). Selecting a playlist immediately starts playing it. Full management stays in Manager's sidebar.
 
 ### Player mode layout
 
@@ -549,7 +549,6 @@ The OverlayManager maintains a set of active overlays and enforces rules declara
 ```swift
 enum Overlay: Hashable {
     case filesTags
-    case playlistsSidebar
     case audioCompact
     case audioExtended
     case pauseOverlay
@@ -565,19 +564,17 @@ final class OverlayManager {
         switch overlay {
         case .audioExtended:                 // exclusive — closes everything else
             active.remove(.filesTags)
-            active.remove(.playlistsSidebar)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
             active.remove(.audioCompact)
-            active.remove(.playlistsSidebar)
             active.remove(.bottomControls)
         case .audioCompact:
             // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
-        case .playlistsSidebar, .bottomControls:
-            // Hover overlays are suppressed while Files & Tags or Extended audio is open.
+        case .bottomControls:
+            // Passive hover chrome is suppressed while Files & Tags or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
@@ -1050,8 +1047,7 @@ ShuTaPla/                            (app source)
 │   │   ├── VideoPlayerView.swift        // hosts MPVVideoView via NSViewRepresentable
 │   │   ├── ImagePlayerView.swift        // image display + pan/zoom
 │   │   ├── PauseOverlay.swift
-│   │   ├── PlaybackControlsBar.swift    // bottom hover controls (both: prev/play-pause/stop/next; video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
-│   │   └── PlaylistsOverlay.swift       // left hover playlist selector
+│   │   └── PlaybackControlsBar.swift    // bottom hover controls (both: prev/play-pause/stop/next; video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
 │   │
 │   ├── Audio/
 │   │   ├── AudioInlet.swift             // Manager sidebar inlet + shared AudioTransport + AudioVolumeControl
@@ -1062,7 +1058,8 @@ ShuTaPla/                            (app source)
 │   │   ├── TagEditorView.swift          // tag editor (TagTokenField, create-enabled) + invalid-name rename
 │   │   ├── TagTokenField.swift          // shared multiselect-autocomplete tag control
 │   │   ├── FlowLayout.swift             // wrapping chip layout
-│   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
+│   │   ├── FilesTagsOverlayView.swift   // visual player library overlay (wraps LibrarySurface)
+│   │   ├── LibrarySurface.swift         // shared selector | files | tags surface (audio + visual)
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
 │   │   ├── ControlButtonStyle.swift     // shared button style for the bottom bar + audio controls
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator

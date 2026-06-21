@@ -258,6 +258,16 @@ final class AppState {
         return audioFilteredFiles.first { $0.id == id }
     }
 
+    /// The visual channel's current file — the Files & Tags overlay's analog of
+    /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`
+    /// against `filteredFiles`, not the live engine, so it's available synchronously when
+    /// the overlay's file list re-centers after a playlist switch (the video engine reports
+    /// its current file asynchronously). `nil` when the remembered file is filtered out of view.
+    var currentVisualFile: PlaylistFile? {
+        guard let id = coordinator.visualPlaylist?.currentFileID else { return nil }
+        return filteredFiles.first { $0.id == id }
+    }
+
     /// Folders currently being scanned into new playlists, shown in the sidebar as
     /// transient spinner rows so a large import gives immediate feedback.
     private(set) var importingPlaylists: [ImportingPlaylist] = []
@@ -575,16 +585,28 @@ final class AppState {
         rebuildTagFrequency(playlist)
 
         activate(playlist)
-        // Switch the Manager to the new playlist's scope and make it that scope's selection:
-        // a visual playlist becomes `selectedPlaylist`, an audio playlist becomes the active
-        // audio playlist (stopped — creation never starts playback).
+        // Player-mode creation comes from a playback overlay (the visual Files & Tags or the
+        // audio overlay) and starts the new playlist playing; Manager-mode creation selects it
+        // stopped. Only one playlist is ever live per channel, so a stopped audio creation still
+        // releases whatever audio playlist was playing behind the new selection.
+        let startsPlaying = mode == .player
+        // The Manager scope only follows the new playlist's type when creating *for management*
+        // (Manager or Welcome). A player-mode creation leaves the scope alone, so stopping back
+        // into Manager returns to whatever was being managed rather than dropping into the new
+        // playlist's scope.
         if mediaType == .audio {
-            managerScope = .audio
+            if !startsPlaying { managerScope = .audio }
+            if startsPlaying {
+                coordinator.play(playlist)
+            } else if let live = coordinator.audioPlaylist {
+                coordinator.stop(live)
+            }
             recomputeAudioFilteredFiles()
         } else {
-            managerScope = .visual
+            if !startsPlaying { managerScope = .visual }
             selectedPlaylist = playlist
             activeServiceFilter = nil
+            if startsPlaying { coordinator.play(playlist) }
             recomputeFilteredFiles()
         }
         if mode == .welcome { mode = .manager }
@@ -621,6 +643,17 @@ final class AppState {
         // An in-flight scan is cancelled first so rapid clicks don't pile up.
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
+    }
+
+    /// The visual Files & Tags overlay's analog of `selectAudioPlaylist(_:)`: switches the
+    /// visual channel to `playlist` through `select(_:)` — restoring its filter, re-reading its
+    /// folder (every click, the automatic Update), and re-centering the file list — and starts a
+    /// genuinely new selection playing. Re-selecting the playing playlist re-scans and re-centers
+    /// without restarting it.
+    func selectVisualPlaylistInPlayer(_ playlist: Playlist) {
+        let isNewSelection = coordinator.visualPlaylist !== playlist
+        select(playlist)
+        if isNewSelection { coordinator.play(playlist) }
     }
 
     /// The extended audio overlay's analog of `select(_:)`: makes `playlist` the active audio

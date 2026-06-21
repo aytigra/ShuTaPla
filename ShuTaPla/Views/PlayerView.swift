@@ -17,9 +17,6 @@ struct PlayerView: View {
     @Environment(PlaybackCoordinator.self) private var coordinator
     @Environment(OverlayManager.self) private var overlays
 
-    /// Thickness of the invisible edge strips that trigger the hover overlays.
-    private let hoverThickness: CGFloat = 4
-
     /// Width of the bottom controls and their matching hover trigger, so revealing
     /// the bar never pulls the cursor off the strip that triggered it.
     private let bottomControlsWidth: CGFloat = 640
@@ -48,7 +45,6 @@ struct PlayerView: View {
         }
         .background(FullscreenView())
         .background(CursorAutoHider(isActive: cursorShouldAutoHide))
-        .overlay(alignment: .leading) { playlistsContainer }
         .overlay(alignment: .bottom) { bottomControlsContainer }
         .overlay { filesTagsContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
@@ -142,8 +138,6 @@ struct PlayerView: View {
     //
     // The bottom controls occupy a fixed bottom-center spot and stay transparent until the
     // cursor hovers their footprint, then fade in (an opacity-0 view keeps receiving hover).
-    // The left Playlists overlay is triggered by a thin edge `HoverZone`, and the revealed
-    // panel carries `.onHover` to dismiss itself when the cursor leaves.
 
     @ViewBuilder
     private var bottomControlsContainer: some View {
@@ -158,28 +152,6 @@ struct PlayerView: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: revealed)
         }
-    }
-
-    @ViewBuilder
-    private var playlistsContainer: some View {
-        let open = overlays.active.contains(.playlistsSidebar) && !coordinator.isSuppressed
-        ZStack(alignment: .leading) {
-            HoverZone(
-                onEnter: { if !coordinator.isSuppressed { overlays.show(.playlistsSidebar) } },
-                onExit: {}
-            )
-            .frame(width: hoverThickness)
-            .frame(maxHeight: .infinity)
-
-            if open {
-                PlaylistsOverlay()
-                    .contentShape(Rectangle())
-                    .onHover { if !$0 { overlays.hide(.playlistsSidebar) } }
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .leading)
-        .allowsHitTesting(!coordinator.isSuppressed)
     }
 
     /// Opened by `[tab]`/`[arrow up]` or the bottom bar's button — not by hover — and

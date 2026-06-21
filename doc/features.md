@@ -45,7 +45,7 @@ A playlist can be created in three equivalent ways:
 2. The New Playlist (`+`) button in the Manager toolbar.
 3. The application menu.
 
-Each path opens a folder picker. Once the new playlist's media type is known, the Manager switches to the matching scope (visual or audio) and selects the new playlist.
+Each path opens a folder picker. Once the new playlist's media type is known, the Manager switches to the matching scope (visual or audio) and selects the new playlist, **Stopped** — these paths create it for management without starting playback (an audio creation, like an audio selection, first stops whichever audio playlist was live). The player-mode overlays add a fourth and fifth entry point through the `+` in their playlist selectors; there, consistent with selecting in those overlays, the new playlist **starts playing** immediately on its channel, and the Manager scope is left unchanged — so stopping back into Manager returns to whatever was being managed rather than dropping into the new playlist's scope.
 
 When a folder is read, the app classifies its contents by media type. A folder is **dominant** in one type when the other types are only an incidental minority (for example, a handful of album-cover images among many audio tracks) — concretely, when at least 80% of the recognized media files are of that type:
 
@@ -100,7 +100,7 @@ A playlist is always in one of three states:
 ### Transitions between states
 
 - **Selecting** a visual playlist in Manager mode (from the left playlists panel) puts it in **Stopped** state and shows it in the Manager view. **Selecting an audio playlist** in Manager mode makes it the active, **Stopped** audio playlist; because only one audio playlist is ever live, this first stops whichever audio playlist was playing.
-- **Selecting** a playlist from the Playlists overlay during Player mode immediately starts **Playing** the selected playlist. Likewise, selecting an audio playlist from the player-mode audio overlay starts it playing.
+- **Selecting** a playlist from the Files & Tags overlay's selector during Player mode immediately starts **Playing** the selected playlist. Likewise, selecting an audio playlist from the player-mode audio overlay starts it playing.
 - **Play** (the visual toolbar's Play button, or the audio inlet's / overlay's Play control) transitions to **Playing**. Playback resumes from the playlist's last-played or first file. If file-position persistence is enabled for the playlist, playback also resumes from the last position within that file; otherwise it starts from the beginning of the file.
 - **Double-clicking a file** in the file list (whether in Manager mode or in the Files & Tags overlay during play) transitions to **Playing** starting from that file (always from the start).
 - **`[p]`** activates suppression (see Suppression vs per-playlist pause); playlist states are unchanged.
@@ -115,7 +115,7 @@ At any time:
 - At most one audio playlist may be in **Playing** or **Paused** state in parallel with the above.
 - Any number of playlists may exist in **Stopped** state. The Manager view shows one **scope** at a time — visual (video + image) or audio — and within it one playlist's contents. Switching the Manager between scopes, or to a different playlist, is a view change only: it never interrupts an audio playlist that is currently Playing in parallel (and vice versa).
 
-Switching to a different visual playlist (within or between video and image) cleanly stops the previous one (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears in its Manager view. In Player mode (via the left-hover Playlists overlay) the selected playlist starts playing immediately. Selecting a different **audio** playlist in Manager mode stops whichever audio playlist was live and leaves the new one active and Stopped (selecting from the player-mode audio overlay starts it playing instead). Each playlist's last-played file and optional position-within-file are preserved, so returning to it later resumes where it was.
+Switching to a different visual playlist (within or between video and image) cleanly stops the previous one (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears in its Manager view. In Player mode (via the Files & Tags overlay's playlist selector) the selected playlist starts playing immediately. Selecting a different **audio** playlist in Manager mode stops whichever audio playlist was live and leaves the new one active and Stopped (selecting from the player-mode audio overlay starts it playing instead). Each playlist's last-played file and optional position-within-file are preserved, so returning to it later resumes where it was.
 
 ## Manager mode
 
@@ -281,7 +281,7 @@ Per-search AND/OR toggling and grouped expressions (e.g. `A AND B AND (C OR D)`)
 
 0. **A trash confirmation is open** (the Player `[delete]` dialog or the Manager delete dialog) → cancels it. `[enter]` confirms it. While it is open it holds key context: every other key is ignored, so nothing rings the system bell.
 1. **Tag input is focused** → unfocuses the tag input. No other effect.
-2. **An overlay is open** (Files & Tags overlay, Playlists overlay, audio overlay opened by hotkey) → closes the topmost overlay. Playback continues.
+2. **An overlay is open** (Files & Tags overlay, audio overlay opened by hotkey) → closes the topmost overlay. Playback continues.
 3. **Playing (no overlays open)** → activates suppression and shows the pause overlay. The window stays open.
 4. **Suppressed (pause overlay shown, no other overlays)** → closes the window. The app keeps running. Suppression stays active while the window is closed; opening the window again lifts it, and Playing playlists continue.
 5. **Stopped / Manager mode** → if in the middle of some operation (renaming, dialog, tagging) - cancels operation, otherwise has no effect (the window stays open).
@@ -350,10 +350,9 @@ Audio inlet playback control by keyboard is a Player-mode concern (see Key conte
 
 Overlays in Player mode follow exclusivity and dismissal rules:
 
-- **Files & Tags overlay** — while open, hover triggers for the left edge (Playlists) and the bottom playback controls are suppressed. Compact audio can still appear on top (via top-edge hover); while compact audio is presented, `[arrow down]` both expands audio to its lower section and closes the Files & Tags overlay. **While the Files & Tags overlay is open, the visual playlist's playback/slideshow is paused** so it cannot advance to the next file while tags are being edited; it resumes when the overlay closes (a playlist the user had paused stays paused).
-- **Expanded audio overlay** — exclusive with all other overlays. Opening it closes the Files & Tags overlay and the Playlists overlay. All hover triggers are suppressed while it is shown.
+- **Files & Tags overlay** — while open, the bottom playback controls' hover trigger is suppressed. Compact audio can still appear on top (via top-edge hover); while compact audio is presented, `[arrow down]` both expands audio to its lower section and closes the Files & Tags overlay. **While the Files & Tags overlay is open, the visual playlist's playback/slideshow is paused** so it cannot advance to the next file while tags are being edited; it resumes when the overlay closes (a playlist the user had paused stays paused).
+- **Expanded audio overlay** — exclusive with all other overlays. Opening it closes the Files & Tags overlay. All hover triggers are suppressed while it is shown.
 - **Compact audio overlay** — closes automatically when any other hotkey-triggered overlay opens (Files & Tags via `[arrow up]`/`[tab]`, or Expanded audio via `[arrow down]`).
-- **Playlists overlay** (left hover) — opened by hovering the left edge; fades in and dismisses on mouse leave. Also closes immediately if any overlay opens via hotkey.
 - **Bottom playback controls** — compact and bottom-centered. They live in place but stay transparent until the cursor hovers their footprint, then fade in; they fade out and auto-dismiss when the cursor leaves. They never persist across a stop/start, and are hidden while the Files & Tags overlay is open or while suppressed. There is no on-screen "Back to Manager" button — leave Player mode with `[s]`, the pause overlay's **Stop**, or `[esc]`.
 
 ### Pause overlay
@@ -380,17 +379,17 @@ The video player plays files from the active video playlist one after another in
 ### Hover zones
 
 - **Top edge** — slides in the compact audio overlay (auto-closes when the cursor leaves; see Audio Player for details).
-- **Left edge** — slides in the Playlists overlay for quick playlist switching. Selecting a playlist starts playing it immediately.
 - **Bottom-center** — a compact playback controls bar lives here, transparent until the cursor hovers its footprint, then fades in: previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Files & Tags overlay. Each control shows a hover highlight; the bar fades out when the cursor leaves.
 
 ### Files & Tags overlay
 
 Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playback controls. Slides up from the bottom of the screen.
 
-The overlay is a **simplified** view meant for quick file switching and single-file operations during playback — not the full management surface that Manager mode provides. It has two sections:
+The overlay is a **simplified** view meant for quick playlist/file switching and single-file operations during playback — not the full management surface that Manager mode provides. It has three columns:
 
-1. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery). If a filter change excludes the currently playing file, the player jumps to the first file that still matches; if nothing matches, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
-2. **Tag management** — tag editor for the **currently active file** only (same UI as described in Tag editing UI).
+1. **Playlist selector** — the playlists of the active visual type (video *or* image), with a `+` to add one from a folder. Selecting a playlist switches the visual channel to it and starts playing it immediately. It does **not** expose full management (no rename, delete, or reorder — those live in Manager mode).
+2. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery). If a filter change excludes the currently playing file, the player jumps to the first file that still matches; if nothing matches, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
+3. **Tag management** — tag editor for the **currently active file** only (same UI as described in Tag editing UI).
 
 Per-file actions in the list act on a single file:
 
@@ -426,7 +425,6 @@ Slideshow interval is configurable both globally (default 10s) and per playlist;
 ### Hover zones
 
 - **Top edge** — slides in the compact audio overlay (same behavior as video player).
-- **Left edge** — slides in the Playlists overlay for quick playlist switching.
 - **Bottom-center** — a compact playback controls bar (same hover-to-reveal behavior as the video player): previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Files & Tags overlay. A play/pause button appears only while a slideshow is running (a still image has nothing to pause).
 
 The Files & Tags overlay works identically to the video player's (see above).
@@ -476,12 +474,8 @@ The audio transport — shared by the inlet and the overlay — renders only the
 
 When an audio playlist plays alongside a video, the audio is **mixed** with the video's own audio (the video is not muted). Each playlist keeps and persists its own volume level (relative to system volume level), so the user balances the mix once and the setting sticks for future sessions.
 
-## Playlists overlay (Player mode)
+## Playlist switching (Player mode)
 
-Triggered by hovering over the left edge during video or image playback.
+Quick switching during playback lives in the overlays' playlist selectors: the Files & Tags overlay's selector for the active visual type, and the expanded audio overlay's selector for audio. Both list one media type, offer a `+` to add a playlist from a folder, and start a playlist playing the moment it's selected.
 
-This is a simplified playlist selector — it shows video and image playlists in separate sections but does **not** expose full management controls (no create, rename, delete, or reorder). Its purpose is quick switching: selecting a playlist immediately starts playing it.
-
-At the top, a collapsed "Audio" section acts as a visual hint. Pressing it reveals the expanded audio overlay (its playlists selector).
-
-Full management of every playlist — video, image, and audio — (create, rename, delete, reorder) is available only in Manager mode via the left collapsible panel; the player-mode overlays are quick selectors.
+Full management of every playlist — video, image, and audio — (create, rename, delete, reorder) is available only in Manager mode via the left collapsible panel; the player-mode selectors are quick switchers.

@@ -15,13 +15,11 @@ import Testing
 
     // MARK: - Exclusivity
 
-    @Test func audioExtendedClosesFilesTagsAndPlaylists() {
+    @Test func audioExtendedClosesFilesTags() {
         let m = OverlayManager()
         m.show(.filesTags)
-        m.show(.playlistsSidebar)   // suppressed while filesTags open, but assert regardless
         m.show(.audioExtended)
         #expect(!m.active.contains(.filesTags))
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(m.active.contains(.audioExtended))
     }
 
@@ -51,21 +49,17 @@ import Testing
         #expect(m.active.contains(.audioCompact))
     }
 
-    @Test func hoverOverlaysSuppressedWhileFilesTagsOpen() {
+    @Test func bottomControlsSuppressedWhileFilesTagsOpen() {
         let m = OverlayManager()
         m.show(.filesTags)
-        m.show(.playlistsSidebar)
         m.show(.bottomControls)
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(!m.active.contains(.bottomControls))
     }
 
-    @Test func hoverOverlaysSuppressedWhileAudioExtendedOpen() {
+    @Test func bottomControlsSuppressedWhileAudioExtendedOpen() {
         let m = OverlayManager()
         m.show(.audioExtended)
-        m.show(.playlistsSidebar)
         m.show(.bottomControls)
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(!m.active.contains(.bottomControls))
     }
 
@@ -76,19 +70,19 @@ import Testing
         #expect(!m.isAnyOverlayOpen)
         m.show(.bottomControls)          // passive hover chrome — not a closable overlay
         #expect(!m.isAnyOverlayOpen)
-        m.show(.playlistsSidebar)
+        m.show(.filesTags)
         #expect(m.isAnyOverlayOpen)
     }
 
     @Test func closeTopmostFollowsPriorityOrder() {
         let m = OverlayManager()
-        m.show(.playlistsSidebar)
-        m.show(.audioCompact)
-        m.closeTopmostOverlay()          // audioCompact outranks playlistsSidebar
-        #expect(!m.active.contains(.audioCompact))
-        #expect(m.active.contains(.playlistsSidebar))
+        m.show(.filesTags)
+        m.show(.audioCompact)            // compact sits on top of files & tags
+        m.closeTopmostOverlay()          // filesTags outranks audioCompact
+        #expect(!m.active.contains(.filesTags))
+        #expect(m.active.contains(.audioCompact))
         m.closeTopmostOverlay()
-        #expect(!m.active.contains(.playlistsSidebar))
+        #expect(!m.active.contains(.audioCompact))
     }
 
     // MARK: - Audio key context

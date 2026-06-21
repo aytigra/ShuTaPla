@@ -1088,6 +1088,109 @@ struct AppStateTests {
         #expect(audio.files.count == 3)
     }
 
+    @Test func addingAudioPlaylistInPlayerModePlaysNewAndStopsOld() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dirA = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dirA) }
+        try Data().write(to: dirA.appending(path: "a.mp3"))
+        let bookmarkA = try BookmarkService.makeBookmark(for: dirA)
+        let a = Playlist(name: "A", folderBookmark: bookmarkA, folderPath: dirA.path, mediaType: .audio)
+        context.insert(a)
+        addFile("a.mp3", order: 0, to: a, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: a)
+        #expect(appState.coordinator.audioPlaylist === a)
+
+        // Creating a playlist from the player-mode audio overlay (mode == .player) starts it
+        // playing — and switching the audio channel stops the one that was live.
+        appState.mode = .player
+        appState.managerScope = .visual   // managing visual; the player-mode create must not switch it
+        let dirB = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dirB) }
+        try Data().write(to: dirB.appending(path: "b.mp3"))
+        let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
+        let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
+        let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+
+        #expect(appState.activeAudioPlaylist === b)
+        #expect(appState.coordinator.audioPlaylist === b)   // the new playlist is what's playing
+        #expect(a.playbackState == .stopped)                // the previous one stopped
+        #expect(appState.managerScope == .visual)           // scope unchanged, so Stop returns to visual
+    }
+
+    @Test func addingAudioPlaylistInManagerModeSelectsStoppedAndStopsOld() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dirA = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dirA) }
+        try Data().write(to: dirA.appending(path: "a.mp3"))
+        let bookmarkA = try BookmarkService.makeBookmark(for: dirA)
+        let a = Playlist(name: "A", folderBookmark: bookmarkA, folderPath: dirA.path, mediaType: .audio)
+        context.insert(a)
+        addFile("a.mp3", order: 0, to: a, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: a)
+        #expect(appState.coordinator.audioPlaylist === a)
+
+        // Creating an audio playlist in Manager selects it stopped, releasing the audio playlist
+        // that was playing so it doesn't keep going behind the new selection.
+        appState.mode = .manager
+        let dirB = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dirB) }
+        try Data().write(to: dirB.appending(path: "b.mp3"))
+        let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
+        let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
+        let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+
+        #expect(appState.activeAudioPlaylist === b)
+        #expect(appState.coordinator.audioPlaylist == nil)   // nothing left playing
+        #expect(a.playbackState == .stopped)
+        #expect(appState.managerScope == .audio)             // Manager-mode create switches scope
+    }
+
+    @Test func selectVisualPlaylistInPlayerPlaysNewAndReCentersEachClick() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir1 = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir1) }
+        try Data().write(to: dir1.appending(path: "1.png"))
+        let b1 = try BookmarkService.makeBookmark(for: dir1)
+        let p1 = Playlist(name: "P1", folderBookmark: b1, folderPath: dir1.path, mediaType: .image)
+        context.insert(p1)
+        addFile("1.png", order: 0, to: p1, in: context)
+        let dir2 = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        try Data().write(to: dir2.appending(path: "2.png"))
+        let b2 = try BookmarkService.makeBookmark(for: dir2)
+        let p2 = Playlist(name: "P2", folderBookmark: b2, folderPath: dir2.path, mediaType: .image)
+        context.insert(p2)
+        addFile("2.png", order: 0, to: p2, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: p1)
+        #expect(appState.coordinator.visualPlaylist === p1)
+
+        // Switching to a different playlist in the overlay starts it playing and re-centers.
+        let token0 = appState.scrollSelectionToken
+        appState.selectVisualPlaylistInPlayer(p2)
+        #expect(appState.coordinator.visualPlaylist === p2)   // a new selection plays
+        #expect(appState.scrollSelectionToken > token0)        // asks the file list to re-center
+        await appState.updateTask?.value
+
+        // Re-clicking the already-playing playlist re-centers again without restarting it.
+        let token1 = appState.scrollSelectionToken
+        appState.selectVisualPlaylistInPlayer(p2)
+        #expect(appState.coordinator.visualPlaylist === p2)
+        #expect(appState.scrollSelectionToken > token1)
+        await appState.updateTask?.value
+    }
+
     @Test func audioRescanAdvancesOffARemovedPlayingTrack() async throws {
         let container = try makeContainer()
         let context = container.mainContext

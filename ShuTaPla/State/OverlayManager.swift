@@ -21,7 +21,6 @@ final class OverlayManager: HotkeyOverlayContext {
 
     enum Overlay: Hashable {
         case filesTags
-        case playlistsSidebar
         case audioCompact
         case audioExtended
         case pauseOverlay
@@ -47,7 +46,7 @@ final class OverlayManager: HotkeyOverlayContext {
     /// `[esc]`/`closeTopmostOverlay()` and `isAnyOverlayOpen` consider exactly these.
     /// Bottom controls are passive hover chrome and aren't closed by `[esc]`.
     private static let closablePriority: [Overlay] =
-        [.audioExtended, .filesTags, .audioCompact, .playlistsSidebar]
+        [.audioExtended, .filesTags, .audioCompact]
 
     private static let closableSet = Set(closablePriority)
 
@@ -97,19 +96,17 @@ final class OverlayManager: HotkeyOverlayContext {
         switch overlay {
         case .audioExtended:                 // exclusive — closes everything else
             active.remove(.filesTags)
-            active.remove(.playlistsSidebar)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
             active.remove(.audioCompact)
-            active.remove(.playlistsSidebar)
             active.remove(.bottomControls)
         case .audioCompact:
             // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
-        case .playlistsSidebar, .bottomControls:
-            // Hover overlays are suppressed while Files & Tags or Extended audio is open.
+        case .bottomControls:
+            // Passive hover chrome is suppressed while Files & Tags or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
