@@ -6,8 +6,8 @@
 //  image), drives the window into fullscreen while it is on screen, and hosts the
 //  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
 //  zones drive the `OverlayManager`; this view composes its overlay content: the bottom
-//  controls bar, the left playlists selector, and the Files & Tags overlay.
-//  (Compact/extended audio content arrives in Task 15.)
+//  controls bar, the left playlists selector, and the Files & Tags overlay. The independent
+//  audio overlay is layered above by `RootView`.
 //
 
 import SwiftUI

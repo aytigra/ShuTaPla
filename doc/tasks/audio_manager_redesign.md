@@ -287,12 +287,24 @@ docs and the [WWDC20 "new look of macOS" notes](https://mackuba.eu/notes/wwdc20/
   populates an audio-scope playlist's file. The SwiftUI center/inspector themselves are
   build + smoke, since their logic lives in tested `AppState` actions.
 
-### Phase 5 — Unified player overlay + drop Manager mount
+### Phase 5 — Unified player overlay + drop Manager mount ✅
 
-- `RootView`: mount `audioOverlayLayer` only in `.player` (already done).
-- Merge compact / extended into one layout — compact transport always, an expandable
-  lower section reusing `PlaylistsOverlay` + `FilesTagsOverlayView` partials + the shared
-  `AudioTransport`; remove the redundant heading. Keep the extended `+`.
-- Overlay selection keeps playing-on-select (matches the visual player overlay).
-- **Tests** (`HotkeyRouterTests` / overlay state): reveal / expand transitions; overlay
-  selection plays immediately; Manager mode no longer mounts the overlay.
+- `RootView` mounts the audio overlay layer only in `.player`, and renders one `AudioOverlay`
+  whenever the audio overlay is active.
+- `AudioOverlay` is a single layout with a compact and an expanded state: the compact
+  transport bar is always present; the chevron expands a lower section (audio playlists
+  selector · filtered file list · tag editor) and collapses back to compact. The lower
+  section is built from the same components as the visual player overlays — `AudioTransport`,
+  `FileRowView`, `FileContextMenu`, `AudioFilterBar`, `TagEditorView` — rather than bespoke
+  columns. There is no redundant heading; an explicit close button dismisses the overlay.
+- The overlay's playlists panel is a pure selector + `+` add button: choosing a playlist
+  plays it immediately (`selectAudioPlaylist`), matching the visual player overlay. Playlist
+  rename / delete / reorder live in Manager's audio scope, so the Manager sidebar presents the
+  delete confirmation for every scope (`PlaylistSidebar`), visual and audio alike.
+- `OverlayManager.collapseAudioToCompact()` is the inverse of `expandAudioToExtended()`,
+  returning the expanded overlay to the pinned compact bar.
+- **Tests** (`OverlayManagerTests`): collapse returns to the compact bar, keeps audio key
+  context, and pins the bar against a stray hover-exit. Overlay selection playing immediately
+  is covered by `AppStateTests.selectAudioPlaylistStartsPlaybackAndReScansEachClick`; the
+  expand/reveal/close hotkey transitions by `HotkeyRouterTests`. The SwiftUI overlay itself is
+  build + smoke, since its logic lives in the tested `OverlayManager` / `AppState` actions.

@@ -159,6 +159,17 @@ final class OverlayManager: HotkeyOverlayContext {
 
     func expandAudioToExtended() { show(.audioExtended) }
 
+    /// Collapses the expanded audio overlay back to the compact transport bar, the inverse of
+    /// `expandAudioToExtended()`. The bar stays pinned so it persists until explicitly closed —
+    /// a deliberate collapse shouldn't leave it dismissable by a stray hover-exit.
+    func collapseAudioToCompact() {
+        withAnimation(Self.transition) {
+            active.remove(.audioExtended)
+            audioCompactPinned = true
+            applyShow(.audioCompact)
+        }
+    }
+
     func closeAudioOverlay() {
         withAnimation(Self.transition) {
             active.remove(.audioCompact)

@@ -154,4 +154,24 @@ import Testing
         #expect(m.active.contains(.audioExtended))
         #expect(m.audioHoldsKeyContext)
     }
+
+    @Test func collapseToCompactReturnsToCompactAndKeepsKeyContext() {
+        let m = OverlayManager()
+        m.revealCompactAudio()
+        m.audioDidFullyReveal()
+        m.expandAudioToExtended()
+        m.collapseAudioToCompact()                // audioExtended → audioCompact, still audio
+        #expect(m.active.contains(.audioCompact))
+        #expect(!m.active.contains(.audioExtended))
+        #expect(m.audioHoldsKeyContext)
+    }
+
+    // The collapsed bar stays pinned, so a stray hover-exit after collapsing doesn't close it.
+    @Test func collapseToCompactPinsTheBar() {
+        let m = OverlayManager()
+        m.expandAudioToExtended()
+        m.collapseAudioToCompact()
+        m.hideCompactAudioOnHoverExit()
+        #expect(m.active.contains(.audioCompact))
+    }
 }

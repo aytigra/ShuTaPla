@@ -80,6 +80,24 @@ struct AudioTransport: View {
     }
 }
 
+/// The per-playlist volume slider, shared by the sidebar transport's volume popover and the
+/// player-mode audio overlay.
+struct AudioVolumeControl: View {
+    let playlist: Playlist
+    @Environment(PlaybackCoordinator.self) private var coordinator
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "speaker.fill").font(.caption).foregroundStyle(.secondary)
+            Slider(value: Binding(
+                get: { coordinator.playbackVolume(for: playlist) },
+                set: { coordinator.setVolume(playlist, to: $0) }
+            ), in: 0...1)
+            .frame(width: 90)
+        }
+    }
+}
+
 /// The pinned inlet at the top of the Manager sidebar.
 ///
 /// - **No active audio playlist:** a music glyph and a Play that starts the first audio
@@ -129,10 +147,30 @@ struct AudioInlet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(.secondary)
-            ProgressView(value: progressFraction)
-                .progressViewStyle(.linear)
-                .controlSize(.mini)
+            seekBar(audio)
         }
+    }
+
+    /// The thin progress bar, click- and drag-to-seek: a tap or drag maps the cursor's x to a
+    /// fraction of the track and seeks the audio channel there. Disabled until a duration is known.
+    private func seekBar(_ audio: Playlist) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule().fill(.secondary)
+                    .frame(width: geo.size.width * progressFraction)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let fraction = min(max(value.location.x / geo.size.width, 0), 1)
+                        coordinator.seek(audio, to: fraction * coordinator.audioDuration)
+                    }
+            )
+        }
+        .frame(height: 4)
+        .disabled(coordinator.audioDuration <= 0)
     }
 
     /// The current track's play position as a 0…1 fraction for the thin progress bar; 0 when

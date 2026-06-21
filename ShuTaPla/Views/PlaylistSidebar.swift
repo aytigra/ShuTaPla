@@ -30,11 +30,11 @@ struct PlaylistSidebar: View {
         .safeAreaInset(edge: .top) {
             AudioInlet()
         }
-        // Video/image only: an audio playlist's delete confirmation is presented from the
-        // extended audio overlay, so the two surfaces never both present on the shared state.
+        // The Manager sidebar owns playlist deletion for every scope — visual and audio alike,
+        // since both browse here. The player-mode audio overlay is a pure selector with no delete.
         .confirmationDialog(
             "Delete playlist?",
-            isPresented: Binding(get: { appState.pendingPlaylistDelete.map { $0.mediaType != .audio } ?? false }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
+            isPresented: Binding(get: { appState.pendingPlaylistDelete != nil }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
             titleVisibility: .visible,
             presenting: appState.pendingPlaylistDelete
         ) { playlist in

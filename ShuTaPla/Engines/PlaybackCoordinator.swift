@@ -239,8 +239,12 @@ final class PlaybackCoordinator: PlaybackSource {
             if forward { imageEngine.advanceToNext() } else { imageEngine.returnToPrevious() }
         case .visualVideo:
             if forward { videoEngine?.advanceToNext() } else { videoEngine?.returnToPrevious() }
+            // Loading the landed-on file auto-starts it, so a switch from a paused channel
+            // resumes playback — the persisted state reflects Playing to match the transport.
+            playlist.playbackState = .playing
         case .audio:
             if forward { audioEngine?.advanceToNext() } else { audioEngine?.returnToPrevious() }
+            playlist.playbackState = .playing
         case nil:
             break
         }

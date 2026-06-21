@@ -179,7 +179,8 @@ The app uses two layers of state:
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
 - Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
 - Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
-- Maintaining an **audio editing surface parallel to the Manager's**. Because the audio channel is independent of the selected video/image playlist, the active audio playlist carries its own cached `audioFilteredFiles` and tag-filter API alongside the Manager's, and its own selection entry point `selectAudioPlaylist` — the audio analog of `select`: activate, restore the persisted filter, re-read the folder on every (re-)select (the automatic Update, since there is no dedicated control), bump `audioScrollToken` to re-center the overlay list, and start a genuinely new selection playing. The overlay's highlighted/scrolled/tag-edited "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against `audioFilteredFiles` (the audio analog of the Manager's `selectedFileIDs`) — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off. The extended audio overlay is the manager view for these playlists; the Manager center panel's selection stays video/image only.
+- Driving Manager mode as a **two-scope library** via `managerScope: ManagerScope { case visual, audio }`. Scope-routed accessors (`managerPlaylist`, `managerFiles`, `managerSelection`, `managerScrollToken`, `managerFilterMode`, and the `manager*` filter/search wrappers) dispatch to the visual slots (`selectedPlaylist` / `filteredFiles` / `selectedFileIDs` / `scrollSelectionToken` / `filterMode`) or the parallel audio slots (`activeAudioPlaylist` / `audioFilteredFiles` / `audioSelectedFileIDs` / `audioScrollToken` / `audioFilterMode`), so one set of center / filter / tag views serves both scopes. Flipping scope is a view switch only — it never touches a channel, and the service filter (`activeServiceFilter`) is scope-local, applied only to the active scope and cleared on a scope switch.
+- Maintaining an **audio editing surface independent of the visual channel**. The active audio playlist carries its own cached `audioFilteredFiles`, audio tag-filter API, and selection set. Two selection entry points feed it: `selectAudioInManager` — chosen from the Manager's audio scope, it activates the playlist and re-reads the folder **without** starting playback (and stops whichever audio playlist was live, since only one is ever live); and `selectAudioPlaylist` — chosen from the player-mode overlay, the audio analog of visual `select` that additionally **starts a genuinely new selection playing**. Both restore the persisted filter, re-read the folder on every (re-)select (the automatic Update, since there is no dedicated control), and bump `audioScrollToken` to re-center the list. The audio scope's highlighted/scrolled/tag-edited "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against `audioFilteredFiles` — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off. A re-scan or trash that removes a file prunes it from both scopes' selections.
 - Centralizing scoped folder access for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt.
 - Exposing optimistic-progress state that the sidebar renders as spinners: folders being scanned into new playlists, playlists with a background re-scan in flight, and playlists being deleted (whose files are removed in batches, yielding between each so the UI stays responsive).
 
@@ -197,10 +198,12 @@ Keeps each channel's loaded file consistent with its playback sequence. When a f
 #### OverlayManager
 
 Tracks visibility of all overlays in Player mode and enforces exclusivity rules from the feature spec:
-- Extended audio is exclusive — opening it closes Files & Tags and Playlists.
-- Compact audio closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
-- Files & Tags suppresses hover triggers for Playlists and bottom controls; it closes automatically only when Extended audio opens.
+- Expanded audio (`.audioExtended`) is exclusive — opening it closes Files & Tags and Playlists.
+- Compact audio (`.audioCompact`) closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
+- Files & Tags suppresses hover triggers for Playlists and bottom controls; it closes automatically only when Expanded audio opens.
 - Owns **key context** — which target (player vs. audio overlay) currently receives arrow/space/loop/seek. The audio overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
+
+`.audioCompact` and `.audioExtended` are two states of one view, `AudioOverlay`: it always draws the compact transport bar and, while `.audioExtended` is active, reveals the expanded lower section. `expandAudioToExtended()` / `collapseAudioToCompact()` toggle between them (collapse pins the compact bar so a stray hover-exit can't dismiss it); `closeAudioOverlay()` returns to Hidden. The overlay mounts only in Player mode.
 
 State is an enum set, not a stack — overlays don't nest arbitrarily.
 
@@ -387,15 +390,18 @@ The orchestration lives on `AppState` (`stripAudio(from:)`), mirroring the delet
 
 ```
 Responsibilities:
-  - Extract the running time of a video file (AVURLAsset.load(.duration), falling back
-    to a libmpv duration probe for containers AVFoundation can't open — see MPVThumbnailer).
+  - Extract the running time of a video or audio file (AVURLAsset.load(.duration),
+    falling back to a libmpv duration probe for containers AVFoundation can't open
+    — see MPVThumbnailer).
   - Cache the result on the model (PlaylistFile.duration) for instant later reads.
 
 Key method:
   duration(for file: PlaylistFile, in playlist: Playlist) async -> TimeInterval?
 ```
 
-This is the **standalone** path, used where no thumbnail is generated to carry the length along: the file-list rows (which have no thumbnails) and the gallery's cache-hit case (a thumbnail served from cache reports no duration). The `@MainActor` entry point returns `PlaylistFile.duration` when already known, otherwise a `nonisolated` worker resolves the bookmark, reads the duration, and writes it back onto the model; rows and cells load via `.task(id:)` for video playlists only (images have no timeline), and the persisted value means the indicator appears instantly on later displays and across launches. For AVFoundation-readable containers the length comes from `AVURLAsset.load(.duration)` — a moov-atom read, no frame decode. The webm/mkv fallback is **`MPVThumbnailer.duration(at:)`**, which loads the file into a windowless, paused mpv instance (`vo=null`) just far enough to read the demuxer's `duration` property — decoding nothing — on the same pool as frame extraction.
+The service is media-type-agnostic — it reads a container's running time without consulting the playlist's media type — so audio-scope file rows get lengths the same way video does.
+
+This is the **standalone** path, used where no thumbnail is generated to carry the length along: the file-list rows (which have no thumbnails) and the gallery's cache-hit case (a thumbnail served from cache reports no duration). The `@MainActor` entry point returns `PlaylistFile.duration` when already known, otherwise a `nonisolated` worker resolves the bookmark, reads the duration, and writes it back onto the model; rows and cells load via `.task(id:)` for video and audio playlists (images have no timeline), and the persisted value means the indicator appears instantly on later displays and across launches. For AVFoundation-readable containers the length comes from `AVURLAsset.load(.duration)` — a moov-atom read, no frame decode. The webm/mkv fallback is **`MPVThumbnailer.duration(at:)`**, which loads the file into a windowless, paused mpv instance (`vo=null`) just far enough to read the demuxer's `duration` property — decoding nothing — on the same pool as frame extraction.
 
 In the **gallery**, a freshly generated thumbnail already delivers the length (see ThumbnailService), so the cell sets `PlaylistFile.duration` straight from the thumbnail result and only consults `DurationService` when the model still lacks a value (a cache-served thumbnail). A webm/mkv gallery cell therefore pays a single libmpv decode for both its thumbnail and its length, with no separate probe queued behind the frame extractions.
 
@@ -488,24 +494,27 @@ struct ShuTaPlaApp: App {
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  ┌──────────┐  ┌─────────────────────────┐  ┌─────────┐ │
-│  │          │  │                         │  │  Filter | |
-|  |          |  |                         |  | controls│ │
-│  │ Playlists│  │  Playlist header        │  │  Tag    │ │
-│  │ panel    │  │                         │  │  panel  │ │
-│  │          │  │  File list / gallery    │  │         │ │
-│  │ (collaps-│  │                         │  │ (collaps│ │
-│  │  ible)   │  │                         │  │  -ible) │ │
-│  │          │  │                         │  │         │ │
-│  └──────────┘  └─────────────────────────┘  └─────────┘ │
-└──────────────────────────────────────────────────────────┘
+│ [Visual][Audio]  + │  Playlist name  │ Play Reshuffle … 🏷 │  ← toolbar
+├──────────────────┬─────────────────────┬──────────────────┤
+│  ┌────────────┐  │                     │  ┌────────────┐  │
+│  │ audio inlet│  │                     │  │  Filter    │  │
+│  ├────────────┤  │  Filter controls    │  │  controls  │  │
+│  │            │  │                     │  ├────────────┤  │
+│  │ Playlists  │  │  File list /        │  │  Tag       │  │
+│  │ (scope)    │  │  gallery            │  │  panel     │  │
+│  │            │  │                     │  │            │  │
+│  │ (collaps-) │  │                     │  │ (collaps-) │  │
+│  └────────────┘  │                     │  └────────────┘  │
+└──────────────────┴─────────────────────┴──────────────────┘
 ```
 
-Implemented with `NavigationSplitView` — the Playlists sidebar and the center detail — plus a trailing `.inspector` for the Tag panel. Each region fills the full window height and is independently resizable, and the split view remembers the widths the user sets. The sidebar collapses via the system sidebar toggle; the Tag inspector toggles from a toolbar button. The inspector (rather than a third split-view column) is what makes the right panel independently collapsible and resizable — a two-column split view only offers progressive left-to-right column hiding, which can't toggle a trailing panel on its own. The Add-Playlist control lives in a `.safeAreaInset` bar at the bottom of the sidebar so it stays grouped with the playlists.
+The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `ManagerSplitViewController`) that hosts the three SwiftUI panes (`PlaylistSidebar`, `PlaylistCenterView`, `TagSidebar`) in `NSHostingController`s, bridged into the SwiftUI `WindowGroup` via `NSViewControllerRepresentable` (`ManagerView` → `ManagerSplitScene`). Its custom `NSToolbar` has three regions — sidebar / center / inspector — bounded by `NSTrackingSeparatorToolbarItem`s pinned to the split dividers, so each region's items align over its pane. `ManagerChrome` (an `@Observable`: `sidebarCollapsed`, `inspectorVisible`, `managingTags`) is the shared source of truth the controller and the SwiftUI panes both read. The representable's `sizeThatFits` returns the full proposed size so a divider drag hands freed width to the center pane and a collapsing pane stays pinned to the window edge.
 
-**Playlists panel structure**: The left panel groups playlists into sections by media type — **Video**, **Image** — each with full management controls (create, rename, delete, reorder via drag). At the top, a collapsed **Audio** section acts as a visual hint; clicking it opens the extended audio overlay (where audio playlists are managed). Playlists are rendered from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro — `@ObservationIgnored` would be required), filtered by `mediaType`, sorted by `sortOrder`.
+**Toolbar regions**: leading — the **scope tabs** (`ScopeTabButton`, a custom toggle so a click on the already-active scope can collapse the sidebar; a native segmented `Picker` can't report that re-click) and the **New Playlist `+`**; center — the playlist name via `.navigationTitle` and the active scope's actions (visual: Play · Reshuffle · List/Gallery · Settings; audio: Reshuffle · Settings); trailing — the tag controls (Manage Tags toggle, inspector show/hide). Full-height-sidebar toolbar coordination (reserving a sidebar toolbar region and relocating its items on collapse) engages only when the split controller is the window's `contentViewController`; here SwiftUI owns the window content, so the `+` overflows rather than relocating when the sidebar collapses — an accepted limitation.
 
-**Playlists overlay (Player mode)**: The left-hover overlay in Player mode mirrors this section structure but is read-only — no create/rename/delete/reorder. Selecting a playlist immediately starts playing it. The bottom Audio hint opens the extended audio overlay.
+**Sidebar structure**: `PlaylistSidebar` pins the **audio inlet** (`AudioInlet`) at the top via `.safeAreaInset(edge: .top)` in both scopes, then lists the active scope's sections — Video + Image (visual) or Audio — each with full management (inline rename, delete with confirmation, drag reorder). Create is the toolbar's New Playlist. The playlist delete confirmation is presented here for every scope. Rows come from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro), filtered by `mediaType`, sorted by `sortOrder`.
+
+**Playlists overlay (Player mode)**: The left-hover overlay in Player mode mirrors the visual section structure but is read-only — no create/rename/delete/reorder. Selecting a playlist immediately starts playing it. The bottom Audio hint opens the expanded audio overlay's selector.
 
 ### Player mode layout
 
@@ -848,8 +857,9 @@ Key event arrives
            [s] stops to Manager; [delete] raises the trash confirmation).
      NO  → manager hotkey table (arrows move the file selection — 1-D in the list,
            2-D in the gallery, stepping a full row on up/down and one cell on
-           left/right; [enter] plays the selected file; the audio overlay is opened
-           by hover or the Audio section, not by arrows).
+           left/right; [enter] plays the selected file). There is no audio overlay
+           in Manager mode — the audio channel is driven by the sidebar inlet — so
+           arrows always stay with file-list navigation.
 ```
 
 ### Modifier key handling
@@ -1024,11 +1034,13 @@ ShuTaPla/                            (app source)
 │   │   └── WelcomeView.swift
 │   │
 │   ├── Manager/
-│   │   ├── ManagerView.swift            // three-panel layout
-│   │   ├── PlaylistSidebar.swift        // left panel
-│   │   ├── PlaylistCenterView.swift     // header + filter + file list
+│   │   ├── ManagerView.swift            // bridges the AppKit split shell into the WindowGroup
+│   │   ├── ManagerSplitScene.swift      // NSSplitViewController + NSToolbar (scope tabs, +, actions) + ManagerChrome
+│   │   ├── PlaylistSidebar.swift        // left panel: audio inlet + scope sections
+│   │   ├── PlaylistCenterView.swift     // filter + notice bar + file list, per scope
+│   │   ├── FileCollectionView.swift     // scope-routed selection/scroll over the list/gallery
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
-│   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode
+│   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode (visual only)
 │   │   ├── FilterBar.swift              // tag filter controls (TagTokenField, search-only)
 │   │   ├── PlaylistTagsView.swift       // right panel's Manage Tags mode: playlist-wide rename/remove
 │   │   └── TagSidebar.swift             // right panel: toggles filter+edit vs. Manage Tags mode
@@ -1042,8 +1054,8 @@ ShuTaPla/                            (app source)
 │   │   └── PlaylistsOverlay.swift       // left hover playlist selector
 │   │
 │   ├── Audio/
-│   │   ├── AudioOverlayCompact.swift    // slim top bar: track info, transport, scrub, volume, loop (also AudioVolumeControl)
-│   │   ├── AudioOverlayExtended.swift   // manager view for audio playlists (list, filtered files, tag editor)
+│   │   ├── AudioInlet.swift             // Manager sidebar inlet + shared AudioTransport + AudioVolumeControl
+│   │   ├── AudioOverlay.swift           // player-mode overlay: compact transport bar + expandable lower section
 │   │   └── AudioFilterBar.swift         // audio-scoped tag filter + saved searches (mirrors FilterBar, search-only)
 │   │
 │   ├── Shared/

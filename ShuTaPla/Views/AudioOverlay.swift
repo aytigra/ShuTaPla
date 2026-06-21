@@ -1,68 +1,51 @@
 //
-//  AudioOverlayExtended.swift
+//  AudioOverlay.swift
 //  ShuTaPla
 //
-//  The extended audio overlay: the manager view for audio playlists, which never appear
-//  in the main window's Manager mode. It keeps the compact transport at the top and adds
-//  three columns — an audio-only playlists panel with full management (create, rename,
-//  delete, reorder), the active playlist's filtered file list, and a tag editor for the
-//  current track. It is exclusive with every other overlay and works during playback.
+//  The player-mode audio overlay: a single layout with a compact and an expanded state. The
+//  compact transport bar slides down from the top edge with the current track and its
+//  controls; a chevron expands a lower section — an audio playlists selector, the active
+//  playlist's filtered file list, and a tag editor for the current track. It drives the
+//  coordinator's independent audio channel, so it coexists with the visual player.
+//
+//  The lower section is built from the same components as the visual player overlays
+//  (`AudioTransport`, `FileRowView`, `FileContextMenu`, `AudioFilterBar`, `TagEditorView`).
+//  Playlist creation lives behind the `+`; rename / delete / reorder live in Manager's audio
+//  scope, so the playlists panel here is a pure selector — choosing one plays it immediately.
 //
 
 import SwiftUI
 import SwiftData
 import AppKit
 
-struct AudioOverlayExtended: View {
+struct AudioOverlay: View {
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
     @Environment(OverlayManager.self) private var overlays
     @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
 
-    @State private var renamingID: UUID?
-    @State private var draftName = ""
     @State private var fileRenamingID: UUID?
     @State private var fileDraftName = ""
 
+    private var isExpanded: Bool { overlays.active.contains(.audioExtended) }
     private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
     private var activePlaylist: Playlist? { appState.activeAudioPlaylist }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-            AudioOverlayCompact()
-            Divider()
-            HStack(spacing: 0) {
-                playlistsColumn.frame(width: 240)
+            compactBar
+            if isExpanded {
                 Divider()
-                fileColumn
-                Divider()
-                tagColumn.frame(width: 300)
+                lowerSection
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .playerOverlayPanel()
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: isExpanded ? .infinity : nil, alignment: .top)
+        .playerOverlayPanel(opacity: isExpanded ? 1 : 0.9)
+        // A click on the expanded panel's empty chrome resigns the tag field so it can be
+        // unfocused anywhere, not just by tabbing away.
         .contentShape(Rectangle())
-        .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
-        .confirmationDialog(
-            "Delete playlist?",
-            isPresented: Binding(
-                get: { appState.pendingPlaylistDelete?.mediaType == .audio },
-                set: { if !$0 { appState.pendingPlaylistDelete = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: appState.pendingPlaylistDelete
-        ) { playlist in
-            Button("Delete “\(playlist.name)”", role: .destructive) {
-                appState.pendingPlaylistDelete = nil
-                Task { await appState.delete(playlist) }
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.pendingPlaylistDelete = nil }
-        } message: { _ in
-            Text("This removes the playlist from ShuTaPla. The files on disk are not touched.")
-        }
+        .onTapGesture { if isExpanded { NSApp.keyWindow?.makeFirstResponder(nil) } }
         .alert(
             "Move to Trash?",
             isPresented: Binding(
@@ -96,23 +79,101 @@ struct AudioOverlayExtended: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Compact bar
 
-    private var header: some View {
-        HStack {
-            Label("Audio", systemImage: "music.note.list")
-                .font(.headline)
-            Spacer()
-            Button { overlays.closeAudioOverlay() } label: {
-                Image(systemName: "chevron.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
+    private var compactBar: some View {
+        // Equal flexible side columns pin the transport to the true center, so it holds its
+        // place as the left filename changes width; the filename truncates within its column.
+        HStack(spacing: 12) {
+            trackInfo
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // Anchored on the *active* audio playlist, not the loaded channel: Stop removes the
+            // playlist from the channel but leaves it active, so the transport stays on screen to
+            // restart it.
+            if let audio = activePlaylist {
+                HStack(spacing: 12) {
+                    AudioTransport(playlist: audio)
+                    scrubber(audio)
+                }
+                .fixedSize()
             }
-            .buttonStyle(.plain)
-            .help("Close audio overlay")
+            trailingControls
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var trackInfo: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "music.note")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(appState.currentAudioFile?.fileName ?? "No track playing")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let name = activePlaylist?.name {
+                    Text(name)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func scrubber(_ audio: Playlist) -> some View {
+        HStack(spacing: 8) {
+            Text(coordinator.audioCurrentTime.formattedDuration)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Slider(value: Binding(
+                get: { min(coordinator.audioCurrentTime, max(coordinator.audioDuration, 0.1)) },
+                set: { coordinator.seek(audio, to: $0) }
+            ), in: 0...max(coordinator.audioDuration, 0.1))
+            .frame(width: 160)
+            .disabled(coordinator.audioDuration <= 0)
+            Text(coordinator.audioDuration.formattedDuration)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
+            Button {
+                isExpanded ? overlays.collapseAudioToCompact() : overlays.expandAudioToExtended()
+            } label: {
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 26, height: 22)
+            }
+            .buttonStyle(ControlButtonStyle())
+            .help(isExpanded ? "Collapse audio" : "Expand audio")
+
+            Button { overlays.closeAudioOverlay() } label: {
+                Image(systemName: "xmark")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 26, height: 22)
+            }
+            .buttonStyle(ControlButtonStyle())
+            .help("Close audio")
+        }
+    }
+
+    // MARK: - Lower section
+
+    private var lowerSection: some View {
+        HStack(spacing: 0) {
+            playlistsColumn.frame(width: 240)
+            Divider()
+            fileColumn
+            Divider()
+            tagColumn.frame(width: 300)
+        }
     }
 
     // MARK: - Playlists column
@@ -122,9 +183,6 @@ struct AudioOverlayExtended: View {
             List {
                 ForEach(audioPlaylists) { playlist in
                     playlistRow(playlist)
-                }
-                .onMove { offsets, destination in
-                    appState.reorder(audioPlaylists, fromOffsets: offsets, toOffset: destination)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -153,41 +211,25 @@ struct AudioOverlayExtended: View {
         }
     }
 
-    @ViewBuilder
     private func playlistRow(_ playlist: Playlist) -> some View {
-        if renamingID == playlist.id {
-            RenameFileField(
-                text: $draftName,
-                onCommit: {
-                    appState.rename(playlist, to: draftName)
-                    renamingID = nil
-                },
-                onCancel: { renamingID = nil }
-            )
-        } else {
-            Button { appState.selectAudioPlaylist(playlist) } label: {
-                HStack {
-                    Text(playlist.name).lineLimit(1)
-                    Spacer()
-                    if appState.deletingPlaylistIDs.contains(playlist.id) {
-                        ProgressView().controlSize(.small).tint(.red)
-                    } else if appState.busyPlaylistIDs.contains(playlist.id) {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("\(playlist.files.count)")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
+        Button { appState.selectAudioPlaylist(playlist) } label: {
+            HStack {
+                Text(playlist.name).lineLimit(1)
+                Spacer()
+                if appState.deletingPlaylistIDs.contains(playlist.id) {
+                    ProgressView().controlSize(.small).tint(.red)
+                } else if appState.busyPlaylistIDs.contains(playlist.id) {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("\(playlist.files.count)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .listRowBackground(activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
-            .contextMenu {
-                Button("Rename") { draftName = playlist.name; renamingID = playlist.id }
-                Button("Delete", role: .destructive) { appState.pendingPlaylistDelete = playlist }
-            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .listRowBackground(activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
     }
 
     // MARK: - File column

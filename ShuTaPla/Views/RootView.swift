@@ -47,35 +47,31 @@ struct RootView: View {
         .onDisappear { hotkeyRouter.stopMonitoring() }
     }
 
-    /// The top-anchored audio overlay: a thin top-edge hover trigger plus the compact /
-    /// extended content. Empty areas don't intercept hits, so the mode content underneath
-    /// stays interactive; the extended overlay's own opaque panel captures input while open.
+    /// The top-anchored audio overlay: a thin top-edge hover trigger plus the unified compact /
+    /// expanded overlay. Empty areas don't intercept hits, so the mode content underneath stays
+    /// interactive; the expanded overlay's own opaque panel captures input while open.
     @ViewBuilder
     private var audioOverlayLayer: some View {
         let suppressed = coordinator.isSuppressed
-        let compactRevealed = overlayManager.active.contains(.audioCompact)
         let audioActive = !overlayManager.active.isDisjoint(with: [.audioCompact, .audioExtended])
 
         ZStack(alignment: .top) {
-            // The hover trigger grows from a thin top strip to cover the revealed bar, so
-            // moving the cursor onto the bar never leaves the tracking region and closes it
-            // (the bar draws on top and still receives clicks). Behind the full-screen
-            // extended overlay it is harmless — `hideCompactAudioOnHoverExit` only touches
-            // compact audio.
+            // The hover trigger is as tall as the compact bar, so it's an easy target along the
+            // top edge rather than a sliver fighting the system's menu-bar / traffic-light reveal,
+            // and moving the cursor onto the revealed bar never leaves the tracking region (the
+            // bar draws on top and still receives clicks). Behind the full-screen expanded overlay
+            // it is harmless — `hideCompactAudioOnHoverExit` only touches compact audio.
             if !suppressed {
                 HoverZone(
                     onEnter: { overlayManager.revealCompactAudioOnHover() },
                     onExit: { overlayManager.hideCompactAudioOnHoverExit() }
                 )
-                .frame(height: compactRevealed ? 60 : 4)
+                .frame(height: 60)
                 .frame(maxWidth: .infinity)
             }
 
-            if overlayManager.active.contains(.audioExtended) {
-                AudioOverlayExtended()
-                    .transition(.move(edge: .top))
-            } else if compactRevealed, !suppressed {
-                AudioOverlayCompact()
+            if audioActive {
+                AudioOverlay()
                     .transition(.move(edge: .top))
             }
         }

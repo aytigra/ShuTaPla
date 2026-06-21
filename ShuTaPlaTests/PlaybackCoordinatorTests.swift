@@ -544,6 +544,34 @@ import SwiftData
         #expect(coordinator.audioCurrentFile?.id == tracks[1].id)
     }
 
+    @Test func switchingTrackFromPausedAudioChannelReturnsToPlaying() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.togglePause(audio)
+        #expect(audio.playbackState == .paused)
+
+        // Switching tracks from the compact overlay loads and auto-starts the new file, so the
+        // transport must read Playing again rather than stay on the stale Pause/Play button.
+        coordinator.next(audio)
+        #expect(audio.playbackState == .playing)
+
+        coordinator.togglePause(audio)
+        #expect(audio.playbackState == .paused)
+        coordinator.previous(audio)
+        #expect(audio.playbackState == .playing)
+    }
+
     @Test func reconcileKeepsAPausedAudioChannelPaused() throws {
         let container = try makeContainer()
         let context = container.mainContext
