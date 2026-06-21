@@ -1420,6 +1420,115 @@ struct AppStateTests {
         #expect(appState.audioSelectedFileIDs == audioSelection)
     }
 
+    // MARK: - Phase 4: scoped center parity (filter / select / tag / delete)
+
+    @Test func audioServiceFilterScopesToAudioAndOverridesTagFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let image = Playlist(name: "Pics", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(image)
+        context.insert(audio)
+        addFile("p1.jpg", order: 0, to: image, in: context)
+        addFile("t1.mp3", tags: ["jazz"], status: .valid, order: 0, to: audio, in: context)
+        addFile("t2.mp3", status: .untagged, order: 1, to: audio, in: context)
+        addFile("t3.mp3", status: .invalid, order: 2, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = image
+        appState.recomputeFilteredFiles()
+        appState.activeAudioPlaylist = audio
+        appState.managerScope = .audio
+        let visualBefore = appState.filteredFiles
+
+        // A service filter in the audio scope filters the audio list and leaves visual alone.
+        appState.toggleServiceFilter(.untagged)
+        #expect(appState.activeServiceFilter == .untagged)
+        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t2.mp3"])
+        #expect(appState.filteredFiles == visualBefore)
+
+        appState.toggleServiceFilter(.invalidTagging)   // mutually exclusive
+        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t3.mp3"])
+
+        appState.toggleServiceFilter(.invalidTagging)   // off → playback sequence restored
+        #expect(appState.activeServiceFilter == nil)
+        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t1.mp3", "t2.mp3", "t3.mp3"])
+    }
+
+    @Test func switchingScopeClearsActiveServiceFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(video)
+        context.insert(audio)
+        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: video, in: context)
+        addFile("b.mp4", status: .untagged, order: 1, to: video, in: context)
+        addFile("t1.mp3", order: 0, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.selectedPlaylist = video
+        appState.recomputeFilteredFiles()
+        appState.activeAudioPlaylist = audio
+
+        appState.toggleServiceFilter(.untagged)
+        #expect(appState.filteredFiles.map(\.fileName) == ["b.mp4"])
+
+        // Leaving the scope drops the service filter; returning shows the unfiltered list.
+        appState.managerScope = .audio
+        #expect(appState.activeServiceFilter == nil)
+        appState.managerScope = .visual
+        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4", "b.mp4"])
+    }
+
+    @Test func deletingAudioFileClearsItFromAudioSelectionOnly() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "Tunes", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        let t1 = addFile("t1.mp3", order: 0, to: audio, in: context)
+        let t2 = addFile("t2.mp3", order: 1, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.activeAudioPlaylist = audio
+        appState.managerScope = .audio
+        appState.recomputeAudioFilteredFiles()
+        let visualSentinel: Set<UUID> = [UUID()]
+        appState.selectedFileIDs = visualSentinel
+        appState.audioSelectedFileIDs = [t1.id, t2.id]
+
+        let error = await appState.deleteFiles([t1])
+
+        #expect(error == nil)
+        #expect(Set(audio.files.map(\.fileName)) == ["t2.mp3"])
+        #expect(appState.audioSelectedFileIDs == [t2.id])   // the trashed track drops out
+        #expect(appState.selectedFileIDs == visualSentinel)  // visual selection untouched
+    }
+
+    @Test func taggingAudioSelectionEditsTheAudioPlaylist() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "Tunes", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        let t1 = addFile("t1.mp3", order: 0, to: audio, in: context)
+        let t2 = addFile("t2.mp3", order: 1, to: audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.activeAudioPlaylist = audio
+        appState.managerScope = .audio
+        appState.recomputeAudioFilteredFiles()
+        appState.audioSelectedFileIDs = [t1.id, t2.id]
+
+        let error = await appState.addTag("jazz", to: [t1, t2])
+
+        #expect(error == nil)
+        #expect(t1.tags == ["jazz"])
+        #expect(t2.tags == ["jazz"])
+        #expect(audio.tagFrequency["jazz"] == 2)
+    }
+
     private var emptyResult: ScanResult {
         ScanResult(files: [], counts: [:], dominantType: nil)
     }

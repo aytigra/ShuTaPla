@@ -2,8 +2,8 @@
 //  DurationService.swift
 //  ShuTaPla
 //
-//  Running-time extraction for the Manager's video length indicators. The first
-//  time a video file's length is needed, it is read off the main actor — via
+//  Running-time extraction for the Manager's length indicators (video and audio).
+//  The first time a file's length is needed, it is read off the main actor — via
 //  AVFoundation, falling back to libmpv for containers AVFoundation can't open
 //  (webm, mkv, …) — then cached on the model (`PlaylistFile.duration`) so the
 //  value is instant on every later display and across launches.

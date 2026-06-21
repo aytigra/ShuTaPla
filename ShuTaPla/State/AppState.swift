@@ -100,7 +100,17 @@ final class AppState {
     /// always opens in the visual scope; it is never persisted. Flipping it re-routes the
     /// scoped accessors (`managerPlaylist`/`managerFiles`/`managerSelection`/`managerFilterMode`)
     /// without touching either scope's underlying state.
-    var managerScope: ManagerScope = .visual
+    var managerScope: ManagerScope = .visual {
+        didSet {
+            guard oldValue != managerScope else { return }
+            // A service filter is runtime-only and scope-local; it doesn't carry across a
+            // scope switch any more than across a playlist switch. Drop it and refresh both
+            // cached lists so the newly shown scope reflects its own (unfiltered) state.
+            activeServiceFilter = nil
+            recomputeFilteredFiles()
+            recomputeAudioFilteredFiles()
+        }
+    }
 
     // Runtime references to the active playlists. The visual channel is shared:
     // at most one of video/image is non-nil. Audio is an independent channel.
@@ -364,6 +374,15 @@ final class AppState {
         }
     }
 
+    /// The active scope's scroll-to-selection token, so the shared center file list can
+    /// re-center on whichever scope's (re-)selection bumped it.
+    var managerScrollToken: Int {
+        switch managerScope {
+        case .visual: return scrollSelectionToken
+        case .audio: return audioScrollToken
+        }
+    }
+
     /// The active scope's AND/OR tag-filter operator, delegating to the scope's own
     /// `filterMode` / `audioFilterMode` binding source.
     var managerFilterMode: FilterMode {
@@ -378,6 +397,59 @@ final class AppState {
             case .visual: filterMode = newValue
             case .audio: audioFilterMode = newValue
             }
+        }
+    }
+
+    // The Manager's shared filter bar drives these through the active scope so one control
+    // edits the visual or audio playlist's tag filter and saved searches without the view
+    // knowing which scope is live.
+
+    /// Adds/removes a tag from the active scope's tag filter.
+    func managerToggleFilterTag(_ tag: String) {
+        switch managerScope {
+        case .visual: toggleFilterTag(tag)
+        case .audio: toggleAudioFilterTag(tag)
+        }
+    }
+
+    /// Clears the active scope's tag filter.
+    func managerClearFilter() {
+        switch managerScope {
+        case .visual: clearTagFilter()
+        case .audio: clearAudioFilter()
+        }
+    }
+
+    /// Saves the active scope's current tag filter as a saved search.
+    func managerSaveSearch() {
+        switch managerScope {
+        case .visual: saveCurrentSearch()
+        case .audio: saveAudioSearch()
+        }
+    }
+
+    /// Re-applies a saved search on the active scope.
+    func managerApplySearch(_ search: SavedSearch) {
+        switch managerScope {
+        case .visual: applySavedSearch(search)
+        case .audio: applyAudioSearch(search)
+        }
+    }
+
+    /// Removes a saved search from the active scope's recents.
+    func managerRemoveSearch(_ search: SavedSearch) {
+        switch managerScope {
+        case .visual: removeSavedSearch(search)
+        case .audio: removeAudioSearch(search)
+        }
+    }
+
+    /// A double-click in the Manager center: the visual scope enters the fullscreen player
+    /// at the file; the audio scope starts the audio channel there, staying in Manager.
+    func beginManagerPlayback(of playlist: Playlist, startingAt file: PlaylistFile) {
+        switch managerScope {
+        case .visual: beginPlayback(of: playlist, startingAt: file)
+        case .audio: coordinator.play(playlist, startingAt: file)
         }
     }
 
@@ -718,6 +790,7 @@ final class AppState {
             audioDeleteCandidate = nil
         }
         selectedFileIDs.subtract(removedIDs)
+        audioSelectedFileIDs.subtract(removedIDs)
         // Derive the next sort order from the files that survive this delta, not from the
         // post-detach `playlist.files` — so a still-counted to-be-removed file can't lend
         // its `sortOrder` to a new file and collide, breaking stable playback ordering.
@@ -826,6 +899,7 @@ final class AppState {
         for url in result.trashed {
             guard let file = byURL[url] else { continue }
             selectedFileIDs.remove(file.id)
+            audioSelectedFileIDs.remove(file.id)
             file.playlist = nil
             modelContext.delete(file)
         }
@@ -1106,7 +1180,7 @@ final class AppState {
     /// Removes the pending tag from every file in the selected playlist, surfacing any
     /// failure through `tagRemovalError`.
     func confirmTagRemoval() {
-        guard let tag = pendingTagRemoval, let playlist = selectedPlaylist else {
+        guard let tag = pendingTagRemoval, let playlist = managerPlaylist else {
             pendingTagRemoval = nil
             return
         }
@@ -1301,7 +1375,10 @@ final class AppState {
     /// while active, override the playlist's tag filter.
     func toggleServiceFilter(_ filter: ServiceFilter) {
         activeServiceFilter = (activeServiceFilter == filter) ? nil : filter
-        filterDidChange()
+        switch managerScope {
+        case .visual: filterDidChange()
+        case .audio: audioFilterDidChange()
+        }
     }
 
     /// Adds or removes a tag from the selected playlist's tag filter. Editing the
@@ -1438,7 +1515,7 @@ final class AppState {
     /// Recomputes `filteredFiles` for the current selection and active filter.
     func recomputeFilteredFiles() {
         guard let playlist = selectedPlaylist else { filteredFiles = []; return }
-        filteredFiles = computeFilteredFiles(for: playlist)
+        filteredFiles = computeFilteredFiles(for: playlist, applyingServiceFilter: managerScope == .visual)
     }
 
     private func recomputeIfSelected(_ playlist: Playlist) {
@@ -1447,9 +1524,12 @@ final class AppState {
     }
 
     /// Recomputes `audioFilteredFiles` for the active audio playlist and its tag filter.
+    /// In the audio scope a service filter (from the center notices) overrides the tag
+    /// filter, exactly as it does for the visual scope; the player overlay's audio list
+    /// (visual scope) only ever shows the tag-filtered playback sequence.
     func recomputeAudioFilteredFiles() {
         guard let playlist = activeAudioPlaylist else { audioFilteredFiles = []; return }
-        audioFilteredFiles = playlist.playbackSequence
+        audioFilteredFiles = computeFilteredFiles(for: playlist, applyingServiceFilter: managerScope == .audio)
     }
 
     /// Shared epilogue for tag/service filter mutations: refresh the cached file
@@ -1466,9 +1546,10 @@ final class AppState {
         if mode == .player { coordinator.reconcileVisualSelection() }
     }
 
-    private func computeFilteredFiles(for playlist: Playlist) -> [PlaylistFile] {
-        // A service filter, while active, replaces the tag filter entirely.
-        if let service = activeServiceFilter {
+    private func computeFilteredFiles(for playlist: Playlist, applyingServiceFilter: Bool) -> [PlaylistFile] {
+        // A service filter, while active, replaces the tag filter entirely — but only for
+        // the scope it belongs to, so the other scope's cached list keeps its tag filter.
+        if applyingServiceFilter, let service = activeServiceFilter {
             return playlist.files(matching: service)
         }
 

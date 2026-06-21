@@ -102,4 +102,26 @@ import SwiftData
 
         _ = container
     }
+
+    // The service reads a container's running time without consulting the playlist's
+    // media type, so an audio-scope playlist's files get lengths the same way video does.
+    @MainActor @Test func extractsAndCachesForAudioScopePlaylist() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let url = try Self.sample(prefix: "h264")
+        let dir = url.deletingLastPathComponent()
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        let file = PlaylistFile(relativePath: url.lastPathComponent, fileName: url.lastPathComponent)
+        file.playlist = playlist
+        playlist.files = [file]
+        context.insert(playlist)
+
+        let seconds = try #require(await DurationService().duration(for: file, in: playlist))
+        #expect(seconds > 0)
+        #expect(file.duration == seconds)
+
+        _ = container
+    }
 }

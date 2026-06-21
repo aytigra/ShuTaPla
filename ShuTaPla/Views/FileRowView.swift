@@ -47,11 +47,12 @@ struct FileRowView: View {
         }
         .contentShape(Rectangle())
         // Length is read once and cached on the model, so it appears instantly on
-        // later displays and across launches. Images have no timeline. A value already
-        // on the model is shown synchronously (see `durationColumn`); only a genuine
-        // miss awaits an extraction, so the column doesn't flash empty on scroll-in.
+        // later displays and across launches. Video and audio have a timeline; images
+        // don't. A value already on the model is shown synchronously (see `durationColumn`);
+        // only a genuine miss awaits an extraction, so the column doesn't flash empty on
+        // scroll-in.
         .task(id: file.id) {
-            guard playlist.mediaType == .video, file.duration == nil else { return }
+            guard playlist.mediaType != .image, file.duration == nil else { return }
             duration = await durations.duration(for: file, in: playlist)
         }
     }
@@ -64,7 +65,7 @@ struct FileRowView: View {
             if !file.tags.isEmpty {
                 TagChips(tags: file.tags)
             }
-            if playlist.mediaType == .video {
+            if playlist.mediaType != .image {
                 durationColumn
             }
         }
@@ -77,7 +78,7 @@ struct FileRowView: View {
             HStack(spacing: 8) {
                 fileName
                 Spacer(minLength: 8)
-                if playlist.mediaType == .video {
+                if playlist.mediaType != .image {
                     durationColumn
                 }
             }

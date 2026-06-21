@@ -208,11 +208,6 @@ state, so there's no migration.
 - **Tests**: create-playlist-switches-scope routing in `AppState`; the SwiftUI toolbar
   itself is covered by build + smoke, since its logic lives in tested `AppState` actions.
 
-*Transitional notes (cleared by later phases):*
-- *The audio-scope center is a placeholder (`ContentUnavailableView`, "files managed from
-  the player overlay") — accurate while the overlay still mounts in Manager. Phase 4
-  replaces it with the real scoped center; Phase 5 removes the overlay from Manager.*
-
 #### Toolbar shell — Option B2 (AppKit), status and findings
 
 The Manager shell is an `NSSplitViewController` (`ManagerSplitScene.swift`) hosting the three
@@ -267,19 +262,34 @@ Reference: full-height-sidebar + toolbar coordination needs the split controller
 [`sidebarTrackingSeparator`](https://developer.apple.com/documentation/appkit/nstoolbaritem/identifier/sidebartrackingseparator)
 docs and the [WWDC20 "new look of macOS" notes](https://mackuba.eu/notes/wwdc20/adopt-new-look-of-macos/).
 
-### Phase 4 — Center-panel parity (filter, tags, multi-select, durations)
+### Phase 4 — Center-panel parity (filter, tags, multi-select, durations) ✅
 
-- Point `PlaylistCenterView` / `FileListView` / `FilterBar` / notice bar / `TagSidebar`
-  at the scoped accessors so they serve both scopes (list only — no gallery for audio).
-- Audio gains multi-select batch tagging / delete via `audioSelectedFileIDs`.
-- Extend `DurationService` to fetch audio durations.
-- **Tests**: filter / select / tag / delete on the audio scope mutate only audio slots;
-  duration fetch populates audio files (real audio samples via the stateless extraction
-  helpers).
+- `PlaylistCenterView` / `FileCollectionView` / `FileListView` / `FilterBar` / notice bar /
+  `TagSidebar` read and write through the scoped accessors (`managerFiles`,
+  `managerSelection`, `managerScrollToken`, `managerFilterMode`, `managerPlaylist`) so one
+  set of views serves both scopes. The audio scope is list-only (no gallery). The filter
+  bar's tag/saved-search actions route through `manager*` wrappers
+  (`managerToggleFilterTag` / `managerClearFilter` / `managerSaveSearch` /
+  `managerApplySearch` / `managerRemoveSearch`); the player overlay reuses the same
+  `FilterBar`, always in the visual scope.
+- The center notice bar and its service filters (untagged / invalid / skipped) are shared.
+  `activeServiceFilter` is scope-local: it overrides only the active scope's list
+  (`computeFilteredFiles(for:applyingServiceFilter:)`) and is dropped on a scope switch,
+  the same way it's dropped on a playlist switch.
+- Audio multi-select batch tagging / delete runs through `audioSelectedFileIDs`. A re-scan
+  or trash that removes a file prunes it from both scopes' selections.
+- `DurationService` is media-type-agnostic; the file row requests a length for any
+  timeline-bearing file (video and audio, not images).
+- **Tests** (`AppStateTests`, `DurationServiceTests`): the audio service filter overrides
+  only the audio list and leaves the visual list alone; a scope switch clears the active
+  service filter; deleting an audio file drops it from `audioSelectedFileIDs` only; tagging
+  the audio selection edits the audio playlist; `DurationService.duration(for:in:)`
+  populates an audio-scope playlist's file. The SwiftUI center/inspector themselves are
+  build + smoke, since their logic lives in tested `AppState` actions.
 
 ### Phase 5 — Unified player overlay + drop Manager mount
 
-- `RootView`: mount `audioOverlayLayer` only in `.player`.
+- `RootView`: mount `audioOverlayLayer` only in `.player` (already done).
 - Merge compact / extended into one layout — compact transport always, an expandable
   lower section reusing `PlaylistsOverlay` + `FilesTagsOverlayView` partials + the shared
   `AudioTransport`; remove the redundant heading. Keep the extended `+`.

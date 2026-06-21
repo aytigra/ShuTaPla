@@ -117,15 +117,18 @@ struct PlaylistCenterView: View {
         }
     }
 
-    /// The audio scope's center. The active playlist's files and tags are managed from the
-    /// player-mode overlay; the inlet keeps the channel controllable while browsing here.
+    /// The audio scope's center: the same notices and file list as the visual scope, for
+    /// the active audio playlist. Audio has no gallery view, so it is always the list.
     @ViewBuilder
     private var audioCenter: some View {
         if let audio = appState.activeAudioPlaylist {
-            ContentUnavailableView {
-                Label(audio.name, systemImage: "music.note.list")
-            } description: {
-                Text("Audio files are managed from the player overlay.")
+            VStack(spacing: 0) {
+                noticeBar(audio)
+                FileListView(
+                    playlist: audio,
+                    confirmDelete: { appState.requestManagerDelete($0) },
+                    reportError: { errorMessage = $0 }
+                )
             }
         } else {
             ContentUnavailableView("Select an Audio Playlist", systemImage: "music.note.list")
