@@ -22,7 +22,7 @@ struct FilesTagsOverlayView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            LibrarySurface(context: visualContext) { FilterBar(playlist: playlist) }
+            LibrarySurface(context: visualContext)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .playerOverlayPanel()

@@ -3,11 +3,11 @@
 //  ShuTaPla
 //
 //  The player-mode library surface: three columns — a single-type playlist selector,
-//  the active playlist's filtered file list, and a tag editor for the current file. It
-//  drives one playback channel, wired through a `LibraryContext` that supplies the
-//  channel-specific slots and actions; the audio overlay and the visual Files & Tags
-//  overlay both render their lower body from it. Shared `AppState` / coordinator come
-//  from the environment, so the context carries only what differs between channels.
+//  the active playlist's filtered file list (topped by its `FilterBar`), and a tag editor
+//  for the current file. It drives one playback channel, wired through a `LibraryContext`
+//  that supplies the channel-specific slots and actions; the audio overlay and the visual
+//  Files & Tags overlay both render their lower body from it. Shared `AppState` / coordinator
+//  come from the environment, so the context carries only what differs between channels.
 //
 
 import SwiftUI
@@ -45,9 +45,8 @@ struct LibraryContext {
     let onRenameError: (String) -> Void
 }
 
-struct LibrarySurface<FilterBarContent: View>: View {
+struct LibrarySurface: View {
     let context: LibraryContext
-    @ViewBuilder let filterBar: () -> FilterBarContent
 
     @Environment(AppState.self) private var appState
     @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
@@ -127,7 +126,13 @@ struct LibrarySurface<FilterBarContent: View>: View {
 
     private var fileColumn: some View {
         VStack(spacing: 0) {
-            filterBar().zIndex(1)
+            // The channel's own filter bar: audio routes to the audio API, every other type
+            // to the Manager's active-scope API. Raised above the file list so its floating
+            // tag dropdown overlays the rows below.
+            if let playlist = context.activePlaylist {
+                FilterBar(scope: context.mediaType == .audio ? .audio : .manager, playlist: playlist)
+                    .zIndex(1)
+            }
             Divider()
             if context.files.isEmpty {
                 emptyFiles

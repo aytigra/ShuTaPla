@@ -49,7 +49,7 @@ struct AudioOverlay: View {
             compactBar
             if isExpanded {
                 Divider()
-                LibrarySurface(context: audioContext) { AudioFilterBar() }
+                LibrarySurface(context: audioContext)
             }
         }
         .frame(maxWidth: .infinity)

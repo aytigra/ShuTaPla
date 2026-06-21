@@ -1038,7 +1038,7 @@ ShuTaPla/                            (app source)
 │   │   ├── FileCollectionView.swift     // scope-routed selection/scroll over the list/gallery
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
 │   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode (visual only)
-│   │   ├── FilterBar.swift              // tag filter controls (TagTokenField, search-only)
+│   │   ├── FilterBar.swift              // shared tag-filter controls (TagTokenField, saved searches, service-filter banner); a FilterScope (.manager / .audio) picks the routing
 │   │   ├── PlaylistTagsView.swift       // right panel's Manage Tags mode: playlist-wide rename/remove
 │   │   └── TagSidebar.swift             // right panel: toggles filter+edit vs. Manage Tags mode
 │   │
@@ -1051,15 +1051,14 @@ ShuTaPla/                            (app source)
 │   │
 │   ├── Audio/
 │   │   ├── AudioInlet.swift             // Manager sidebar inlet + shared AudioTransport + AudioVolumeControl
-│   │   ├── AudioOverlay.swift           // player-mode overlay: compact transport bar + expandable lower section
-│   │   └── AudioFilterBar.swift         // audio-scoped tag filter + saved searches (mirrors FilterBar, search-only)
+│   │   └── AudioOverlay.swift           // player-mode overlay: compact transport bar + expandable lower section (LibrarySurface)
 │   │
 │   ├── Shared/
 │   │   ├── TagEditorView.swift          // tag editor (TagTokenField, create-enabled) + invalid-name rename
 │   │   ├── TagTokenField.swift          // shared multiselect-autocomplete tag control
 │   │   ├── FlowLayout.swift             // wrapping chip layout
 │   │   ├── FilesTagsOverlayView.swift   // visual player library overlay (wraps LibrarySurface)
-│   │   ├── LibrarySurface.swift         // shared selector | files | tags surface (audio + visual)
+│   │   ├── LibrarySurface.swift         // shared selector | files (topped by FilterBar) | tags surface (audio + visual)
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
 │   │   ├── ControlButtonStyle.swift     // shared button style for the bottom bar + audio controls
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
