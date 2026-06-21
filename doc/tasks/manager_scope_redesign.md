@@ -61,32 +61,46 @@ file/selection/filter state suffices.
 - The audio transport inlet stays pinned in the sidebar regardless of scope —
   the audio playback channel is independent, so its transport is always present
   while any scope is managed.
-
-### Open questions (resolve before implementing #2)
-
-1. **Is audio a full managed scope in Manager, or transport-only?** "In
-   management only for audio transport" reads two ways: (a) selecting an audio
-   playlist in the audio scope shows its files/tags in the center panel
-   generically, like any other type; or (b) audio file/tag management lives
-   only in the player overlay, and Manager's audio presence is just the pinned
-   transport inlet. This decides whether the audio sidebar scope drives the
-   center panel at all, and whether the `audio*` Manager state is deleted or
-   merely merged into the generic managed-playlist slot.
-2. **Selection vs activation in Manager.** Selecting a playlist in a scope sets
-   it as the managed (browse) playlist and updates that scope's last-managed
-   memory. Confirm this never starts/stops a playback channel (Manager mode
-   isn't playing), and that activation for player mode stays on
-   `beginPlayback(of:)`.
+- **Audio is a full managed scope, not transport-only (was Q1, resolved (a)).**
+  Selecting an audio playlist in the audio scope manages it generically like any
+  other type — its files in the center panel, its filter and tags in the
+  inspector panel — with every Manager feature the visual types have. The
+  independent audio *transport* channel is a separate concern: it is truly
+  independent only while a non-audio playlist is the one being managed or played.
+  So the `audio*` Manager state is not deleted; it merges into the single generic
+  managed-playlist slot.
+- **Selecting manages; it does not start playback (was Q2).** Selecting a
+  playlist in a scope sets it as the managed (browse) playlist and updates that
+  scope's last-managed memory. Manager is a stopped/browse context, so selection
+  never *starts* a playback channel — actual play stays on `beginPlayback(of:)`.
+  Channel teardown on switch still applies: switching the audio playlist stops
+  the previous audio transport (the audio channel follows its selected playlist),
+  and switching the managed visual playlist nils the other visual channel via
+  `activate(_:)` (in Manager a no-op in practice, since the visual channel is
+  already stopped while browsing). The audio transport is independent of the
+  visual channels: switching image or video never stops it.
+- **Player overlays are channel-pinned; only the Manager bar follows the scope.**
+  Filter routing splits three ways. The Manager's one shared `FilterBar` follows
+  `managerScope` (`FilterScope.manager`), since a single control there serves
+  whichever scope is selected. Each player overlay is bound to one channel and
+  routes directly — the visual overlay to the visual API (`.visual`), the audio
+  overlay to the audio API (`.audio`). An overlay must never key off
+  `managerScope`: the audio overlay coexists with the visual player, and the
+  visual overlay outlives whatever scope was last managed. (Today the visual
+  overlay still rides `.manager`; that is behavior-equivalent only because
+  `managerScope` is `.visual` whenever it is open. Adding the explicit `.visual`
+  scope removes that hidden assumption.)
 
 ## Relationship to the overlay LibrarySurface
 
 - The shared `LibrarySurface` (Task 15) already removes audio's *player-overlay*
   dependence on a separate surface; it derives from `activeAudioPlaylist`.
-- If #2 answers Q1 as (b), the audio scope drops out of Manager center entirely
-  and the `audio*` Manager state is deleted; the overlay's `LibraryContext`
-  becomes the sole consumer of `audioFilteredFiles` and friends.
-- If (a), the generic managed-playlist slot subsumes both, and the overlay's
-  audio context reads the same generic derivation keyed to `activeAudioPlaylist`.
+- With Q1 resolved as (a), the generic managed-playlist slot subsumes both the
+  visual and audio Manager state, and the overlay's audio context reads the same
+  generic derivation keyed to `activeAudioPlaylist`.
+- The overlay filter routing (`FilterScope.visual` / `.audio`) is the player-side
+  half of the same split: Manager browses through the scope, the overlays drive
+  their pinned channels directly.
 
 ## Reference points (at time of writing)
 

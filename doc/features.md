@@ -242,7 +242,7 @@ If the app has lost write access to a playlist's folder (the saved permission we
 
 ## Filtering and search
 
-The filter UI appears in the center section of Manager mode (in either scope), in the Files & Tags overlay during Player mode, and in the player-mode audio overlay.
+The filter UI appears in the inspector (right) panel of Manager mode (in either scope), in the Files & Tags overlay during Player mode, and in the player-mode audio overlay.
 
 ### Current scope
 

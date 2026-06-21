@@ -1034,7 +1034,7 @@ ShuTaPla/                            (app source)
 │   │   ├── ManagerView.swift            // bridges the AppKit split shell into the WindowGroup
 │   │   ├── ManagerSplitScene.swift      // NSSplitViewController + NSToolbar (scope tabs, +, actions) + ManagerChrome
 │   │   ├── PlaylistSidebar.swift        // left panel: audio inlet + scope sections
-│   │   ├── PlaylistCenterView.swift     // filter + notice bar + file list, per scope
+│   │   ├── PlaylistCenterView.swift     // tagging counter notices + file list, per scope
 │   │   ├── FileCollectionView.swift     // scope-routed selection/scroll over the list/gallery
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
 │   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode (visual only)
