@@ -126,9 +126,7 @@ struct PlaylistCenterView: View {
     /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
-        let untagged = playlist.files(matching: .untagged).count
-        let invalid = playlist.files(matching: .invalidTagging).count
-        let skipped = playlist.files(matching: .skipped).count
+        let (untagged, invalid, skipped) = playlist.serviceFilterCounts
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {

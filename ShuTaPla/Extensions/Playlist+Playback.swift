@@ -7,6 +7,13 @@
 //  set, otherwise the persisted tag filter. It lives on the model so the Manager, the
 //  overlays, and the coordinator all reach the same sequence without duplicating the rule.
 //
+//  These derivations run on every render of a file list, so they read each file's
+//  SwiftData-backed properties (`isSkipped`, `sortOrder`, `tags`, `taggingStatus`) exactly
+//  once into plain locals and sort *those*. A SwiftData property read is far costlier than a
+//  plain field access, and a comparison sort touches `sortOrder` O(n log n) times — reading it
+//  once up front rather than on every comparison is what keeps a large playlist cheap to
+//  re-derive instead of hitching the Manager on each scope/playlist switch.
+//
 
 import Foundation
 
@@ -16,8 +23,37 @@ extension Playlist {
     /// This is what every file list shows — it can include skipped files (under the skipped
     /// filter), which playback then drops.
     var displaySequence: [PlaylistFile] {
-        if let service = filterState.serviceFilter { return files(matching: service) }
-        return tagFilteredPlayable
+        let service = filterState.serviceFilter
+        // The lowercased selected-tag set, built once, only when a tag filter is the effective one.
+        let selected: Set<String>? = (service == nil && !filterState.isEmpty)
+            ? Set(filterState.selectedTags.map { $0.lowercased() })
+            : nil
+        let mode = filterState.filterMode
+
+        // One pass: read each file's SwiftData fields once, decide membership, capture the
+        // plain `sortOrder` alongside the file so the sort never reads through SwiftData.
+        var kept: [(file: PlaylistFile, order: Int)] = []
+        kept.reserveCapacity(files.count)
+        for file in files {
+            let skipped = file.isSkipped
+            let keep: Bool
+            if let service {
+                switch service {
+                case .untagged:       keep = !skipped && file.taggingStatus == .untagged
+                case .invalidTagging: keep = !skipped && file.taggingStatus == .invalid
+                case .skipped:        keep = skipped
+                }
+            } else if skipped {
+                keep = false
+            } else if let selected {
+                keep = Self.tagsMatch(Set(file.tags.map { $0.lowercased() }), selected: selected, mode: mode)
+            } else {
+                keep = true
+            }
+            if keep { kept.append((file, file.sortOrder)) }
+        }
+        kept.sort { $0.order < $1.order }
+        return kept.map(\.file)
     }
 
     /// Files in playback order: `displaySequence` with skipped files removed, so advancing
@@ -40,37 +76,34 @@ extension Playlist {
         }
         guard !filterState.isEmpty else { return files.contains { !$0.isSkipped } }
         let selected = Set(filterState.selectedTags.map { $0.lowercased() })
-        return files.contains { !$0.isSkipped && matchesFilter($0, selected: selected) }
-    }
-
-    /// Non-skipped files matching the persisted tag filter, sorted by `sortOrder`. The
-    /// effective sequence when no triage filter is set.
-    private var tagFilteredPlayable: [PlaylistFile] {
-        let playable = files.filter { !$0.isSkipped }.sorted { $0.sortOrder < $1.sortOrder }
-        guard !filterState.isEmpty else { return playable }
-
-        let selected = Set(filterState.selectedTags.map { $0.lowercased() })
-        return playable.filter { matchesFilter($0, selected: selected) }
-    }
-
-    /// Whether a file passes the persisted tag filter, given the pre-lowercased
-    /// selected-tag set. Shared by `tagFilteredPlayable` and `hasPlaybackFiles`.
-    private func matchesFilter(_ file: PlaylistFile, selected: Set<String>) -> Bool {
-        let fileTags = Set(file.tags.map { $0.lowercased() })
-        switch filterState.filterMode {
-        case .and: return selected.isSubset(of: fileTags)
-        case .or: return !selected.isDisjoint(with: fileTags)
+        let mode = filterState.filterMode
+        return files.contains { file in
+            !file.isSkipped && Self.tagsMatch(Set(file.tags.map { $0.lowercased() }), selected: selected, mode: mode)
         }
     }
 
-    /// Files belonging to a triage filter, in display order. The one rule for "what each
-    /// triage filter selects", shared by `displaySequence` and the notice-bar counts.
-    func files(matching service: ServiceFilter) -> [PlaylistFile] {
-        let byOrder: (PlaylistFile, PlaylistFile) -> Bool = { $0.sortOrder < $1.sortOrder }
-        switch service {
-        case .untagged:       return files.filter { !$0.isSkipped && $0.taggingStatus == .untagged }.sorted(by: byOrder)
-        case .invalidTagging: return files.filter { !$0.isSkipped && $0.taggingStatus == .invalid }.sorted(by: byOrder)
-        case .skipped:        return files.filter(\.isSkipped).sorted(by: byOrder)
+    /// The three triage counts — untagged / invalid-tagging / skipped — in a single pass, for
+    /// the center's notice bar. One walk over `files` rather than three filtered passes, and no
+    /// sort (the notices only show counts).
+    var serviceFilterCounts: (untagged: Int, invalidTagging: Int, skipped: Int) {
+        var untagged = 0, invalidTagging = 0, skipped = 0
+        for file in files {
+            if file.isSkipped { skipped += 1; continue }
+            switch file.taggingStatus {
+            case .untagged: untagged += 1
+            case .invalid:  invalidTagging += 1
+            case .valid:    break
+            }
+        }
+        return (untagged, invalidTagging, skipped)
+    }
+
+    /// Whether a file's (lowercased) tag set satisfies the selected-tag filter. Shared by
+    /// `displaySequence` and `hasPlaybackFiles` so the AND/OR rule lives in one place.
+    private static func tagsMatch(_ fileTags: Set<String>, selected: Set<String>, mode: FilterMode) -> Bool {
+        switch mode {
+        case .and: return selected.isSubset(of: fileTags)
+        case .or:  return !selected.isDisjoint(with: fileTags)
         }
     }
 }
