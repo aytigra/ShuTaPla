@@ -475,7 +475,7 @@ Replace the chips + "add new" + full-tag-list editor with the multiselect-with-a
 
 **Manager manages one playlist at a time.** `AppState.managedPlaylist` is the single slot the whole Manager binds to — sidebar, center file list, filter bar, tag inspector — adapting to its type. `managerScope: ManagerScope { case image, video, audio }` is *only* the sidebar's playlist-list type filter (which playlists you can pick to become managed), not selection/filter/routing state. The three slots are independent references kept consistent by explicit loads, never by deriving one from another: the **managed-playlist slot**, the persistent **audio-channel slot** (`audioChannelSlot`), and the coordinator's visual channel. `lastActiveVideoPlaylist`/`lastActiveImagePlaylist` remember each visual type's last-managed playlist (audio's memory is the channel slot); `switchScope(to:)` pre-loads the target scope's remembered playlist into the managed slot. Scope, the visual memories, and the audio-channel id persist on `AppStateModel`, so `resolveActivePlaylists` reopens Manager where it was left (defaulting to video). Audio is list-only (no gallery). A shared `AudioTransport` (state-dependent button set: Stopped → Play·Volume; Playing/Paused add Prev·Stop·Next·Loop) is pinned at the sidebar top in every scope via `AudioInlet`, with the track name and a click/drag seek bar once a current track exists. The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene`) with a native toolbar — three scope tabs (`ScopeTabButton`, click-active-to-collapse) + New Playlist `+`, `.navigationTitle`, and the managed type's detail actions — coordinated through `@Observable ManagerChrome`; the `+` overflows on sidebar collapse rather than relocating (accepted limitation, since SwiftUI owns the window content). `DurationService` serves any timeline-bearing file (video + audio).
 
-**Derive, don't cache.** The filter (`filterState`) and current file (`currentFileID`) are persisted, per-playlist `@Model` state; the display-ordered list and current-file highlight are pure derivations (`Playlist.displaySequence` / `playbackSequence`). `managerFiles` is `managedPlaylist?.displaySequence`; `audioChannelFiles` / `visualChannelFiles` derive from the channel slots the same way, so a view re-derives on its own when the model changes — there is one managed selection set (`managerSelection`), and `scrollSelectionToken` / `audioScrollToken` remain deliberate "re-center now" events rather than derived values. The **service filter is persisted on `filterState`** (`ServiceFilter: Codable`) and applied uniformly — Manager, overlays, and playback all honor it, so triage resumes across launches. The Skipped filter selects non-playable files, so `playbackSequence` is empty under it; the Manager Play button is hidden and the audio inlet's Play is a no-op while the active filter is Skipped (`hasPlaybackFiles` answers this without building the sequence). The counter-notice toggles that set service filters live only in the Manager center.
+**Derive, don't cache.** The filter (`filterState`) and current file (`currentFileID`) are persisted, per-playlist `@Model` state; the display-ordered list and current-file highlight are pure derivations (`Playlist.displaySequence` / `playbackSequence`). `managerFiles` is `managedPlaylist?.displaySequence`; `audioChannelFiles` / `visualChannelFiles` derive from the channel slots the same way, so a view re-derives on its own when the model changes — there is one managed selection set (`managerSelection`), and `scrollSelectionToken` / `audioScrollToken` remain deliberate "re-center now" events rather than derived values. The **service filter is persisted on `filterState`** (`ServiceFilter: Codable`) and applied uniformly — Manager, overlays, and playback all honor it, so triage resumes across launches. The Skipped filter selects non-playable files, so `playbackSequence` is empty under it; the Manager Play button is hidden and the audio inlet's Play is a no-op while the active filter is Skipped (`hasPlaybackFiles` answers this without building the sequence). The counter-notice toggles that set service filters live only in the Manager center. Deriving the display-ordered list walks the whole playlist, which hitches on a very large one — Task 17 replaces it with a store-side identifier fetch.
 
 **One unified filter and select API.** Every filter edit targets a given playlist's persisted `filterState` (`toggleFilterTag`/`setFilterMode`/`clearTagFilter`/`toggleServiceFilter`/`saveCurrentSearch`/`applySavedSearch`/`removeSavedSearch`, each taking `on playlist:`), and `FilterBar(playlist:)` carries no scope/routing — `TagSidebar` points it at the managed playlist, `LibrarySurface` at the overlay's channel playlist. The one explicit side effect is the live-channel reconcile: an edit to a playlist that is currently playing advances the engine off a filtered-out current file (`PlaybackCoordinator.reconcileAudioSelection()` / the visual analog; both jump to the first remaining track, clearing the engine's file when nothing matches). `select(_:)` is the one managed-select for every type — it loads the picked playlist into the managed slot (and, for audio, into the audio channel, stopping whichever audio playlist was live), restores its filter, re-reads the folder (the automatic Update), and re-centers; the overlays keep play-on-select variants (`selectVisualPlaylistInPlayer`, `selectAudioPlaylist`). A re-scan that prunes the playing track, and `confirmAudioDelete`, both reconcile; deleting the audio-channel playlist stops the channel first so the engine never references freed models. Audio track delete from the extended overlay uses dedicated state (`audioDeleteCandidate`/`audioDeleteError`/`audioRenameError`, registered as blocking modals in `HotkeyRouter`) so it works in either mode without colliding with the player's visual-file delete.
 
@@ -504,9 +504,9 @@ The audio player UI that coexists with video/image playback.
 
 ---
 
-## Task 16 — Settings, persistence, and lifecycle
+## Task 16 — Settings, persistence, lifecycle, and fullscreen/window management
 
-Global settings UI, full state persistence, and app lifecycle handling.
+Global settings UI, full state persistence, app lifecycle, and the fullscreen/window-management handling that makes the player shell stable. After this task all main elements are built; later tasks are gradual improvements.
 
 **Deliverables:**
 - `SettingsView.swift` — global defaults: slideshow interval, file-position persistence, image fit mode
@@ -519,6 +519,8 @@ Global settings UI, full state persistence, and app lifecycle handling.
   - App termination: final persist of all positions and state
 - Window frame persistence (debounced on move/resize)
 - Stale bookmark handling: inline error on playlist, option to re-select folder
+- `NSWindow+Fullscreen.swift` — fullscreen helpers and animated entry/exit transitions, synced with player-mode transitions (no flicker or stale state); builds on the Task 11 `FullscreenView` bridge
+- Single-window enforcement (`.commands { CommandGroup(replacing: .newItem) {} }`)
 
 **Testable:**
 - Change global default → new playlists use it
@@ -527,10 +529,35 @@ Global settings UI, full state persistence, and app lifecycle handling.
 - Quit and relaunch → active playlists and window frame restored; Playing playlists resume, Paused stay paused
 - Close window → app still running, playback halted (suppressed); reopen → Playing playlists continue
 - Stale bookmark → error shown, re-select folder works
+- Enter player → fullscreen, exit → windowed, no flicker or stale state
+- Cmd+N does nothing (new window removed)
 
 ---
 
-## Task 17 — Cloud / offline file handling
+## Task 17 — Performance: tag normalization and identifier-based display sequence
+
+Replace the whole-set derivation of `displaySequence` with a store-side, identifier-only one that never materializes a large playlist at once.
+
+**Why.** Deriving `displaySequence` walks every `PlaylistFile` and reads its SwiftData-backed properties (~0.8µs each, paid on every access); a full `fetch()` / relationship materialization of a large playlist costs ~500ms cold (measured at 20k files), and the Manager/overlay lists re-derive on each scope/playlist switch, so a large playlist hitches. The only approach that beats the per-object materialization floor is to not materialize the set: fetch just the ordered identifiers (`fetchIdentifiers`, ~8ms for 20k) and resolve only the visible rows. For tag filtering to move into the store predicate, tags must be a queryable relationship rather than an inline `[String]` blob. (The Task 15 in-memory memo + `fetchCount` is the interim that removed the recurring warm-switch lag; this task removes the cold floor and the memo.)
+
+**Deliverables:**
+- Normalize tags into a `Tag` `@Model` — many-to-many with `PlaylistFile`, unique normalized (lowercased) name. **No data migration:** filenames are the source of truth for tags, so the old `tags: [String]` field is dropped and the relationship repopulates from a normal scan/Update (existing data is simply re-parsed). `addTag`/`removeTag`/`renameTagAcrossPlaylist` maintain the relationship and the per-playlist frequency cache; on-disk filename casing is still the source of truth.
+- Store `taggingStatus` as a **predicate-queryable scalar** (e.g. an `Int` rawValue column), not the current `String` `Codable` enum — a `#Predicate` comparing the `Codable` enum throws `unsupportedPredicate` ("Captured/constant values of type 'TaggingStatus' are not supported"), so service-filter predicates and `fetchCount` need the scalar form. Relationship scoping (`$0.playlist?.persistentModelID == pid`) and `Bool` (`isSkipped`) predicates already work.
+- `displaySequence` / `playbackSequence` derive an ordered `[PersistentIdentifier]` via `fetchIdentifiers(includePendingChanges: false, predicate:, sortBy: [SortDescriptor(\.sortOrder)])` — the effective service/tag filter expressed as a `#Predicate`, the sort done by the store. No whole-set materialization. Retire the in-memory memo from Task 15.
+- File list / gallery / overlay lists render lazily over identifiers, resolving each visible row via `modelContext.model(for:)`.
+- Triage counts via `fetchCount(FetchDescriptor(predicate:))` (carried over from Task 15).
+- Mutations are saved before the sequence is re-derived, so `includePendingChanges: false` reflects them (the load-bearing ordering constraint — covered by tests).
+
+**Testable:**
+- Tags rebuild from filenames on scan into `Tag` relationships; filter and count results match the pre-refactor parse for the same filenames.
+- `displaySequence`/`playbackSequence` return correct order and membership under no filter, each service filter, and tag AND/OR — matching the pre-refactor results.
+- A large playlist switches without materializing all files (identifier fetch; only visible rows resolved).
+- Counts match the per-file walk.
+- A filter / tag edit / reshuffle, saved then re-derived, reflects the change; an unsaved mutation does not leak a stale or pending row.
+
+---
+
+## Task 18 — Cloud / offline file handling
 
 iCloud/offline awareness: per-file status indicators, on-demand download, and prefetch ahead of playback.
 
@@ -550,28 +577,23 @@ iCloud/offline awareness: per-file status indicators, on-demand download, and pr
 
 ---
 
-## Task 18 — Fullscreen polish, window management, and HDR
+## Task 19 — HDR
 
-Edge cases around fullscreen, single-window enforcement, and HDR support.
+HDR/EDR output for video and images (the fullscreen/window-management handling this once shared lives in Task 16).
 
 **Deliverables:**
-- `NSWindow+Fullscreen.swift` — fullscreen helpers, animated transitions
-- Window close vs. quit behavior: closing hides window, Dock click reopens
-- Fullscreen entry/exit synced with player mode transitions
 - HDR video: mpv `--target-colorspace-hint=yes`, `MPVOpenGLLayer` EDR (float backbuffer, `wantsExtendedDynamicRangeContent = true`, extended-sRGB colorspace) — landed in Task 11.1; tune/verify on an EDR display here
 - HDR images: `CGImageSource` with `kCGImageSourceShouldAllowFloat`, EDR-capable layer
-- Single-window enforcement (`.commands { CommandGroup(replacing: .newItem) {} }`)
+- Per-file HDR-vs-SDR gating and brightness tuning on an EDR display
 
 **Testable:**
-- Enter player → fullscreen, exit → windowed, no flicker or stale state
 - HDR video renders with extended dynamic range on capable display
 - HDR image displays with EDR
-- Cmd+N does nothing (new window removed)
-- Close window → app alive, Dock click → window reappears in prior state
+- SDR content renders normally alongside
 
 ---
 
-## Task 19 — Accessibility
+## Task 20 — Accessibility
 
 VoiceOver and macOS accessibility support.
 
@@ -634,13 +656,15 @@ Task 1 ─── Data Models
   │                                   │           │
   │                                   │           └── Task 15 ── Audio Overlay
   │                                   │
-  │                                   └── Task 16 ── Settings + Lifecycle
+  │                                   └── Task 16 ── Settings + Lifecycle + Fullscreen/Window
   │
-  ├── Task 17 ── Cloud / offline files (after Tasks 6, 8, 11)
+  ├── Task 17 ── Performance: tag normalization + identifier display sequence (after Tasks 7, 15)
   │
-  ├── Task 18 ── Fullscreen + HDR (after Tasks 11, 16)
+  ├── Task 18 ── Cloud / offline files (after Tasks 6, 8, 11)
   │
-  └── Task 19 ── Accessibility (after all UI tasks)
+  ├── Task 19 ── HDR (after Tasks 11.1, 16)
+  │
+  └── Task 20 ── Accessibility (after all UI tasks)
 ```
 
-Tasks 5–8 (Manager UI) and Tasks 9–10 (mpv/engines) can be developed in parallel once Task 4 is complete. Task 17 (cloud) depends on the file-list views (6, 8) for indicators and the coordinator (11) for prefetch.
+Tasks 5–8 (Manager UI) and Tasks 9–10 (mpv/engines) can be developed in parallel once Task 4 is complete. Task 17 (performance) rebuilds the file-list derivation from Tasks 7/15 and is independent of the player work. Task 18 (cloud) depends on the file-list views (6, 8) for indicators and the coordinator (11) for prefetch.
