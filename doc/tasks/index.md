@@ -6,6 +6,30 @@ Status legend: ✅ = complete (built and tested). Unmarked tasks are not started
 
 ---
 
+## Terminology — temporary migration aid
+
+> **Temporary.** This table bridges the spec's normalized vocabulary (`doc/features.md`) to the wording used in earlier task notes and to the **current** code identifiers. The code has **not** been renamed to match the spec yet — that reconciliation is its own task. Remove this section once code naming is aligned with the spec.
+
+| Spec term (current) | Earlier spec/task wording | Current code identifier candidates (unchanged) |
+|---|---|---|
+| **Visual Overlay** (Visual Channel Overlay) | "Files & Tags overlay" | `FilesTagsOverlayView`, `Overlay.filesTags` |
+| **Audio Overlay** (Audio Channel Overlay) | "player-mode audio overlay", "audio overlay" | `AudioOverlay`, `Overlay.audioCompact` / `.audioExtended` |
+| **Managed Playlist** | "active playlist", "selected playlist" (Manager) | `AppState.managedPlaylist` |
+| **Visual Channel Playlist** | "active video/image playlist", "visual playlist" | visual channel slot owned by `PlaybackCoordinator` |
+| **Audio Channel Playlist** | "active audio playlist", "the audio playlist" | `AppState.audioChannelSlot`, `AppStateModel.audioChannelPlaylistId` |
+| **Audio Inlet** | "audio transport inlet" | `AudioInlet` |
+| **Audio Transport** | "the (state-dependent) transport" | `AudioTransport` |
+| **Scope** / **Scope Tabs** | "scope" / "scope tabs" | `ManagerScope`, `AppState.managerScope`, `ScopeTabButton` |
+| **Service Filter** | "service filter" | `ServiceFilter`, `FilterState.serviceFilter` |
+| **Suppression** | "suppression" | `PlaybackCoordinator.isSuppressed` |
+| **Key Context** | "key context" | `OverlayManager.audioFullyRevealed`, `HotkeyOverlayContext` |
+| **Pause Overlay** | "pause overlay" | `PauseOverlay`, `Overlay.pauseOverlay` |
+| **Tag Editor** / **Filter Bar** | "tag editor" / "filter bar", "filter UI" | `TagEditorView`, `FilterBar`, shared `TagTokenField` |
+
+The shared overlay body wrapped by both `FilesTagsOverlayView` and `AudioOverlay` is `LibrarySurface`.
+
+---
+
 ## Task 1 — Project scaffold and data models  ✅
 
 **Status: complete.** All models, embedded value types, enums, and singleton fetch-or-create implemented; 9 tests passing. Project is on Swift 6 language mode.
@@ -355,16 +379,16 @@ This **superseded the rendering/HDR/bundling specifics of Task 9 and Task 18 and
 
 ## Task 12 — HotkeyRouter and player hotkeys ✅
 
-**Status: complete (code landed; builds clean, 17 router tests + 43 prior tests green).** `HotkeyRouter` (`Engines/HotkeyRouter.swift`) owns one app-wide `NSEvent` local monitor (`.keyDown` + `.flagsChanged`) installed by `RootView`. Each key is decoded to a `Hotkey` (special keys by `keyCode`, letters by character; Right Option tracked from `.flagsChanged` keyCode 61) and run through one priority chain: focused text field swallows everything → mode dispatch. Player mode: `[esc]` chain (close overlay → suppress → close window), `[p]` suppression toggle, then key-context routing — `[space]`/arrows/`[l]`/`[right option]±arrows` go to the visual player or, when the audio overlay holds key context, to the audio playlist. Manager mode: `[esc]` (cancel in-flight re-scan or close window), `[delete]` (raises the existing center-panel trash confirmation via `AppState.deleteRequest`); arrows pass through to the file list unless audio holds key context. Overlay state/actions are read through `HotkeyOverlayContext`, backed by `NoOverlayContext` until the `OverlayManager` (Task 13) and audio overlay (Task 15) supply the real one. `PlaybackCoordinator` gained `toggleLoop(_:)`/`seek(_:by:)` and `isVisualLooping`/`isAudioLooping`. `PlayerView` dropped its interim `onKeyPress`. Also fixed a latent `MPVClient` shutdown use-after-free (a wakeup-scheduled drain could run `mpv_wait_event` after `mpv_terminate_destroy`) with a queue-only `isTerminated` gate.
+**Status: complete (code landed; builds clean, 17 router tests + 43 prior tests green).** `HotkeyRouter` (`Engines/HotkeyRouter.swift`) owns one app-wide `NSEvent` local monitor (`.keyDown` + `.flagsChanged`) installed by `RootView`. Each key is decoded to a `Hotkey` (special keys by `keyCode`, letters by character; Right Option tracked from `.flagsChanged` keyCode 61) and run through one priority chain: focused text field swallows everything → mode dispatch. Player mode: `[esc]` chain (close overlay → suppress → close window), `[p]` suppression toggle, then key-context routing — `[space]`/arrows/`[l]`/`[right option]±arrows` go to the visual player or, when the Audio Overlay holds key context, to the audio playlist. Manager mode: `[esc]` (cancel in-flight re-scan or close window), `[delete]` (raises the existing center-panel trash confirmation via `AppState.deleteRequest`); arrows pass through to the file list unless audio holds key context. Overlay state/actions are read through `HotkeyOverlayContext`, backed by `NoOverlayContext` until the `OverlayManager` (Task 13) and Audio Overlay (Task 15) supply the real one. `PlaybackCoordinator` gained `toggleLoop(_:)`/`seek(_:by:)` and `isVisualLooping`/`isAudioLooping`. `PlayerView` dropped its interim `onKeyPress`. Also fixed a latent `MPVClient` shutdown use-after-free (a wakeup-scheduled drain could run `mpv_wait_event` after `mpv_terminate_destroy`) with a queue-only `isTerminated` gate.
 
-**What's deferred to Tasks 13–15:** the overlay branches (`[tab]`/`[arrow up]` open Files & Tags, `[arrow down]` reveal/expand audio, arrow-up close audio) route through `HotkeyOverlayContext` but are inert until those managers land.
+**What's deferred to Tasks 13–15:** the overlay branches (`[tab]`/`[arrow up]` open the Visual Overlay, `[arrow down]` reveal/expand audio, arrow-up close audio) route through `HotkeyOverlayContext` but are inert until those managers land.
 
 Global key event handling and routing.
 
 **Deliverables:**
 - `HotkeyRouter.swift` — `NSEvent.addLocalMonitorForEvents(matching: .keyDown)`, routing priority chain (text field → esc chain → space → audio holds key context → player/manager). Audio claims key context only when the overlay is fully revealed
-- All player hotkeys: space, arrows, `[tab]`/`[arrow up]` (open Files & Tags), `[arrow down]` (close it or reveal Compact audio), `[p]`, `[esc]`, `[delete]`, `[shift]` (fit mode), `[l]` (loop), `[right option]+arrows` (seek ±3s)
-- Manager mode hotkeys: `[arrow up/down]` = file-list navigation (standard), `[esc]` (close window), `[delete]` (trash selected). The audio overlay is opened by top-edge hover or the left-panel Audio section — not by arrow keys
+- All player hotkeys: space, arrows, `[tab]`/`[arrow up]` (open the Visual Overlay), `[arrow down]` (close it or reveal Compact audio), `[p]`, `[esc]`, `[delete]`, `[shift]` (fit mode), `[l]` (loop), `[right option]+arrows` (seek ±3s)
+- Manager mode hotkeys: `[arrow up/down]` = file-list navigation (standard), `[esc]` (close window), `[delete]` (trash selected). The Audio Overlay is opened by top-edge hover or the left-panel Audio section — not by arrow keys
 - Right Option key detection via `event.keyCode == 61`
 - Text input detection: skip hotkey processing when first responder is text field
 - The monitor returns `nil` for handled events, which also keeps `[esc]` from triggering the system's default exit-from-fullscreen behavior
@@ -377,28 +401,28 @@ Global key event handling and routing.
 - `[l]` → loop toggles
 - `[right option]+[arrow right]` → seek +3s
 - Text field focused → keys pass through to text field, not hotkey router
-- Arrow keys routed to audio only when the audio overlay holds key context (fully revealed); otherwise to the player
-- Manager mode: arrow up/down move the file-list selection (not the audio overlay)
-- `[tab]` opens Files & Tags
+- Arrow keys routed to audio only when the Audio Overlay holds key context (fully revealed); otherwise to the player
+- Manager mode: arrow up/down move the file-list selection (not the Audio Overlay)
+- `[tab]` opens the Visual Overlay
 
 ---
 
 ## Task 13 — OverlayManager and hover zones ✅
 
-**Status: complete (code landed; builds clean, 12 overlay tests + 144 unit tests green).** `OverlayManager` (`State/OverlayManager.swift`) is `@MainActor @Observable`, holding a flat `Set<Overlay>` whose `show(_:)`/`hide(_:)` run inside `withAnimation` over a pure exclusivity mutation: Extended audio is exclusive, Files & Tags closes compact audio + hover overlays, compact audio sits atop Files & Tags, hover overlays (playlists / bottom controls) are suppressed while Files & Tags or Extended audio is open, and the pause overlay clears everything. It also owns **key context** via `audioFullyRevealed` (set by the audio overlay once its slide-in completes, cleared whenever no audio overlay is active) and conforms to `HotkeyRouter`'s `HotkeyOverlayContext`, so the router's overlay/audio branches are now live. `HoverZone` (`Views/Shared/HoverZone.swift`) is an `NSTrackingArea` bridge (`.activeAlways` + `.inVisibleRect`, reliable at screen edges in fullscreen) firing enter/exit callbacks. `RootView` creates the manager, injects it into the environment, and wires it as the router's overlay context; `PlayerView` mounts thin top/left/bottom edge `HoverZone`s that drive compact-audio / playlists / bottom-controls reveals.
+**Status: complete (code landed; builds clean, 12 overlay tests + 144 unit tests green).** `OverlayManager` (`State/OverlayManager.swift`) is `@MainActor @Observable`, holding a flat `Set<Overlay>` whose `show(_:)`/`hide(_:)` run inside `withAnimation` over a pure exclusivity mutation: Extended audio is exclusive, the Visual Overlay closes compact audio + hover overlays, compact audio sits atop the Visual Overlay, hover overlays (playlists / bottom controls) are suppressed while the Visual Overlay or Extended audio is open, and the pause overlay clears everything. It also owns **key context** via `audioFullyRevealed` (set by the Audio Overlay once its slide-in completes, cleared whenever no Audio Overlay is active) and conforms to `HotkeyRouter`'s `HotkeyOverlayContext`, so the router's overlay/audio branches are now live. `HoverZone` (`Views/Shared/HoverZone.swift`) is an `NSTrackingArea` bridge (`.activeAlways` + `.inVisibleRect`, reliable at screen edges in fullscreen) firing enter/exit callbacks. `RootView` creates the manager, injects it into the environment, and wires it as the router's overlay context; `PlayerView` mounts thin top/left/bottom edge `HoverZone`s that drive compact-audio / playlists / bottom-controls reveals.
 
-**What's deferred to Task 14:** the overlay *content* views (`PlaybackControlsBar`, `PlaylistsOverlay`, Files & Tags) and their `.overlay()/.transition(.move(edge:))` composition reading `OverlayManager.active`. Until then the hover zones change overlay state with no on-screen content, and the cursor-enter/exit firing and animated transitions are verified visually (not unit-tested). The audio overlay's `audioDidFullyReveal()` reveal-completion call is wired in Task 15.
+**What's deferred to Task 14:** the overlay *content* views (`PlaybackControlsBar`, `PlaylistsOverlay`, the Visual Overlay) and their `.overlay()/.transition(.move(edge:))` composition reading `OverlayManager.active`. Until then the hover zones change overlay state with no on-screen content, and the cursor-enter/exit firing and animated transitions are verified visually (not unit-tested). The Audio Overlay's `audioDidFullyReveal()` reveal-completion call is wired in Task 15.
 
 Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 
 **Deliverables:**
 - `OverlayManager.swift` — `@MainActor @Observable`, `Set<Overlay>` state, `show()`/`hide()` with exclusivity rules from feature spec
 - `HoverZone.swift` — `NSTrackingArea` wrapper via `NSViewRepresentable`, thin tracking rects at window edges
-- Top hover → compact audio overlay
+- Top hover → compact Audio Overlay
 - Left hover → playlists overlay
 - Bottom hover → playback controls bar
 - Animated transitions: `.move(edge:)` with `withAnimation` in show/hide
-- Suppression rules: Files & Tags suppresses left/bottom hover; Extended audio suppresses all hover
+- Suppression rules: the Visual Overlay suppresses left/bottom hover; Extended audio suppresses all hover
 
 **Testable:**
 - Show audioExtended → filesTags and playlistsSidebar removed from active set
@@ -410,25 +434,25 @@ Overlay visibility, exclusivity rules, and edge-of-screen hover detection.
 
 ---
 
-## Task 14 — Player overlays: bottom controls, Files & Tags, Playlists ✅
+## Task 14 — Player overlays: bottom controls, Visual Overlay, Playlists ✅
 
-**Status: complete (code landed; builds clean, 3 new coordinator tests + all unit tests green).** `PlaybackCoordinator` gained a player-controls surface: `visualCurrentFile`/`visualCurrentTime`/`visualDuration`, `jump(_:to:)` (jump without leaving the playlist), `seek(_:to:)` (absolute scrub), `playbackVolume(for:)`/`setVolume(_:to:)` (clamped 0–1, persisted to `preferences.volume`, forwarded to the live engine), and `setSlideshowEnabled(_:_:)`/`setSlideshowInterval(_:_:)` (persisted, live timer when the image channel is active). `PlaybackControlsBar` is the bottom hover bar — prev / play-pause (flips the playlist's own Paused state, never suppression) / stop / next, plus loop + scrubber + volume for video, slideshow toggle + interval menu for image, and a Files & Tags toggle. `FilesTagsOverlayView` slides up from the bottom: a reused `FilterBar` over the filtered file list (double-click → `jump`, per-row rename / reveal / trash-with-confirmation) beside a reused `TagEditorView` bound to the currently playing file only. `PlaylistsOverlay` is the left-hover read-only selector (Video/Image sections + Audio hint that opens extended audio); selecting starts playback immediately. `PlayerView` composes them as edge hover containers where a single `HoverZone` grows from a thin strip to the overlay's full extent so the revealed content stays inside the tracking area (cursor-leave dismisses, moving onto the content does not).
+**Status: complete (code landed; builds clean, 3 new coordinator tests + all unit tests green).** `PlaybackCoordinator` gained a player-controls surface: `visualCurrentFile`/`visualCurrentTime`/`visualDuration`, `jump(_:to:)` (jump without leaving the playlist), `seek(_:to:)` (absolute scrub), `playbackVolume(for:)`/`setVolume(_:to:)` (clamped 0–1, persisted to `preferences.volume`, forwarded to the live engine), and `setSlideshowEnabled(_:_:)`/`setSlideshowInterval(_:_:)` (persisted, live timer when the image channel is active). `PlaybackControlsBar` is the bottom hover bar — prev / play-pause (flips the playlist's own Paused state, never suppression) / stop / next, plus loop + scrubber + volume for video, slideshow toggle + interval menu for image, and a Visual Overlay toggle. `FilesTagsOverlayView` slides up from the bottom: a reused `FilterBar` over the filtered file list (double-click → `jump`, per-row rename / reveal / trash-with-confirmation) beside a reused `TagEditorView` bound to the currently playing file only. `PlaylistsOverlay` is the left-hover read-only selector (Video/Image sections + Audio hint that opens extended audio); selecting starts playback immediately. `PlayerView` composes them as edge hover containers where a single `HoverZone` grows from a thin strip to the overlay's full extent so the revealed content stays inside the tracking area (cursor-leave dismisses, moving onto the content does not).
 
-**What's deferred to Task 15:** the top-edge `HoverZone` already drives `.audioCompact`, but the compact/extended audio overlay *content* and the `audioDidFullyReveal()` key-context handoff land in Task 15.
+**What's deferred to Task 15:** the top-edge `HoverZone` already drives `.audioCompact`, but the compact/extended Audio Overlay *content* and the `audioDidFullyReveal()` key-context handoff land in Task 15.
 
 The three major overlays in Player mode.
 
 **Deliverables:**
-- `PlaybackControlsBar.swift` — bottom hover: previous, play/pause, stop, next, loop toggle, progress/scrub, volume slider (video); previous, play/pause, stop, next, slideshow toggle, interval selector (image); file list button to toggle Files & Tags. The play/pause button toggles the playlist's own Playing/Paused state — never suppression
+- `PlaybackControlsBar.swift` — bottom hover: previous, play/pause, stop, next, loop toggle, progress/scrub, volume slider (video); previous, play/pause, stop, next, slideshow toggle, interval selector (image); file list button to toggle the Visual Overlay. The play/pause button toggles the playlist's own Playing/Paused state — never suppression
 - `FilesTagsOverlayView.swift` — slides up from bottom, **simplified single-file** surface (bulk multi-select editing stays in Manager mode). Two sections: file list with filter controls (reuses FilterBar — tag filtering only, no service filters), tag editor (reuses TagEditorView) targeting the **currently active file only**. Per-file interactions: double-click to jump, rename, delete, show in Finder
-- `PlaylistsOverlay.swift` — left hover: video and image sections (read-only, no CRUD), collapsed Audio section at the top (opens the extended audio overlay). Selecting a playlist starts playing immediately
+- `PlaylistsOverlay.swift` — left hover: video and image sections (read-only, no CRUD), collapsed Audio section at the top (opens the extended Audio Overlay). Selecting a playlist starts playing immediately
 - Volume slider per video/audio playlist, persisted
 - Progress bar / scrub for video (seeks via MPVClient)
 - Slideshow interval selector for image playlists
 
 **Testable:**
 - Bottom controls: previous/next advance files, play/pause toggles the playlist's Paused state (suppression untouched), loop toggles, volume changes, scrub seeks
-- Files & Tags: file list shows filtered files, double-click jumps player, tag edits rename files
+- Visual Overlay: file list shows filtered files, double-click jumps player, tag edits rename files
 - Playlists overlay: selecting playlist starts it, audio hint opens extended audio
 - Controls dismiss on mouse leave (via hover zone)
 
@@ -445,15 +469,15 @@ A correctness-and-polish pass over the Task 13/14 player overlays and the hotkey
 - **Esc in image fullscreen doesn't exit fullscreen.** In image Player mode `[esc]` falls through to AppKit's default "exit full screen". The router must consume `[esc]` through its full priority chain (close overlay → suppress → close window) and never let the system see it.
 - **Bottom controls behave as revealed hidden controls, not a slide-in overlay.** Fade in (not float-up); compact, bottom-center, with margin from the bottom edge (not stretched edge-to-edge). They must dismiss on mouse-leave, and must never persist across a stop/start or after leaving Player mode — no player-mode layout may remain open once the player mode is exited (clear overlay state on stop).
 - **Left playlists overlay opens stably on hover.** It currently oscillates (begins to slide in, probably loses hover, begins to close). Stabilize the hover region so revealing the overlay doesn't move the cursor out of the tracking area — the trigger/reveal hysteresis from the growing-`HoverZone` pattern must keep the cursor inside while it opens.
-- **Pause while Files & Tags is open.** Suppress playback/slideshow advance while the Files & Tags overlay is open, so the player can't jump to the next file while the user is editing tags; resume playing on tag layout close (only if was playing before).
+- **Pause while the Visual Overlay is open.** Suppress playback/slideshow advance while the Visual Overlay is open, so the player can't jump to the next file while the user is editing tags; resume playing on tag layout close (only if was playing before).
 - **Hide the image pause button when slideshow is off.** For image playlists the play/pause control only makes sense while the slideshow is running — hide (or disable) it when slideshow is off.
 - **"Files & Tags" button has a real hit target.** Give it padding/background so the whole control is clickable, not just the text glyphs.
 - **All playback-control buttons show hover feedback.** Apply a button style that visibly reacts to hover so the controls read as buttons.
 - **`[s]` = stop.** Wire `[s]` in Player mode to stop the visual playlist and exit the player (same as the Stop control).
-- **Files & Tags closes by `[tab]`, `[esc]`, or `[arrow down]` regardless of how it was opened.** Currently it opens on `[tab]` but none of those close it. All three must close it while opened.
+- **The Visual Overlay closes by `[tab]`, `[esc]`, or `[arrow down]` regardless of how it was opened.** Currently it opens on `[tab]` but none of those close it. All three must close it while opened.
 - **Delete confirmation + delete in Player mode.** The delete confirmation dialog confirms on `[enter]` (cancel on `[esc]` already works). `[delete]` works in Player mode too: it raises the confirmation dialog for the current file. In both cases while that dialog is open it holds hotkey context (keys go to the dialog for Esc and Enter) until it closes.
-- **Filter that excludes the current file keeps the player playing.** When a filter applied in the Files & Tags overlay filters out the currently playing file, start playing the next available file in the filtered sequence instead. If the filter leaves no files player shows black background instead of file (since it doesn't have any file to display), show an in-overlay "no files" placeholder without dropping out of Player mode.
-- **Files & Tags header no longer overlaps the back button.** The overlay's "Files & Tags" header overlaps `PlayerView`'s top-leading "Back to Manager" button; resolve the z-overlap.
+- **Filter that excludes the current file keeps the player playing.** When a filter applied in the Visual Overlay filters out the currently playing file, start playing the next available file in the filtered sequence instead. If the filter leaves no files player shows black background instead of file (since it doesn't have any file to display), show an in-overlay "no files" placeholder without dropping out of Player mode.
+- **Visual Overlay header no longer overlaps the back button.** The overlay's "Files & Tags" header overlaps `PlayerView`'s top-leading "Back to Manager" button; resolve the z-overlap.
 
 ---
 
@@ -469,9 +493,9 @@ Replace the chips + "add new" + full-tag-list editor with the multiselect-with-a
 
 ---
 
-## Task 15 — Audio overlay (compact and extended)  ✅
+## Task 15 — Audio Overlay (compact and extended)  ✅
 
-**Status: complete (code landed; builds clean, unit tests green across the coordinator, app-state, router, and overlay suites).** The audio player UI and the manager-scope model it shares. The audio overlay mounts in `RootView` **only in Player mode**; in Manager, audio is the pinned sidebar transport inlet.
+**Status: complete (code landed; builds clean, unit tests green across the coordinator, app-state, router, and overlay suites).** The audio player UI and the manager-scope model it shares. The Audio Overlay mounts in `RootView` **only in Player mode**; in Manager, audio is the pinned sidebar transport inlet.
 
 **Manager manages one playlist at a time.** `AppState.managedPlaylist` is the single slot the whole Manager binds to — sidebar, center file list, filter bar, tag inspector — adapting to its type. `managerScope: ManagerScope { case image, video, audio }` is *only* the sidebar's playlist-list type filter (which playlists you can pick to become managed), not selection/filter/routing state. The three slots are independent references kept consistent by explicit loads, never by deriving one from another: the **managed-playlist slot**, the persistent **audio-channel slot** (`audioChannelSlot`), and the coordinator's visual channel. `lastActiveVideoPlaylist`/`lastActiveImagePlaylist` remember each visual type's last-managed playlist (audio's memory is the channel slot); `switchScope(to:)` pre-loads the target scope's remembered playlist into the managed slot. Scope, the visual memories, and the audio-channel id persist on `AppStateModel`, so `resolveActivePlaylists` reopens Manager where it was left (defaulting to video). Audio is list-only (no gallery). A shared `AudioTransport` (state-dependent button set: Stopped → Play·Volume; Playing/Paused add Prev·Stop·Next·Loop) is pinned at the sidebar top in every scope via `AudioInlet`, with the track name and a click/drag seek bar once a current track exists. The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene`) with a native toolbar — three scope tabs (`ScopeTabButton`, click-active-to-collapse) + New Playlist `+`, `.navigationTitle`, and the managed type's detail actions — coordinated through `@Observable ManagerChrome`; the `+` overflows on sidebar collapse rather than relocating (accepted limitation, since SwiftUI owns the window content). `DurationService` serves any timeline-bearing file (video + audio).
 
@@ -486,13 +510,13 @@ The audio player UI that coexists with video/image playback.
 **Deliverables:**
 - `AudioOverlay.swift` — single view, compact + expanded states. Compact: current track info, play/pause (sets the audio playlist's own Paused state, separate from suppression), prev/next, stop, progress/scrub, volume, loop toggle. Expanded: the shared `LibrarySurface` lower body
 - `Views/Shared/LibrarySurface.swift` — the reusable `selector | files | tags` body (single-type playlist selector with `+`, filtered file list, current-track tag editor), driven by a `LibraryContext`; shared by `AudioOverlay` and the visual `FilesTagsOverlayView`. Playlist switching is a pure selector; rename / delete / reorder live in Manager's audio scope
-- Audio overlay state machine: Hidden → Compact → Extended via `[arrow down]`, back to Hidden via `[arrow up]`
+- Audio Overlay state machine: Hidden → Compact → Extended via `[arrow down]`, back to Hidden via `[arrow up]`
 - Top-edge hover → compact (auto-dismiss on mouse leave)
 - `[arrow down]` compact → stays open until explicitly closed
-- Audio hotkey context switching: the audio overlay holds key context only once **fully revealed**; then arrows/space/loop/seek target the audio playlist
+- Audio hotkey context switching: the Audio Overlay holds key context only once **fully revealed**; then arrows/space/loop/seek target the audio playlist
 - Extended file list is a simple vertical list — `[arrow left]`/`[arrow right]` switch tracks, `[arrow up]` progressively closes; arrows do not move a list selection (except when a text field inside is in edit mode)
 - Audio playlist selection in extended view → starts playing selected audio playlist
-- In Manager mode there is no audio overlay: the audio scope is managed inline in the sidebar and driven by the pinned `AudioInlet` transport. The overlay (compact and extended) mounts only in Player mode
+- In Manager mode there is no Audio Overlay: the audio scope is managed inline in the sidebar and driven by the pinned `AudioInlet` transport. The overlay (compact and extended) mounts only in Player mode
 
 **Testable:**
 - Arrow down from hidden → compact appears, arrow down again → extended
@@ -565,7 +589,7 @@ iCloud/offline awareness: per-file status indicators, on-demand download, and pr
 - `CloudFileService.swift` — per-file status (local / in cloud / downloading) via `NSMetadataQuery` scoped to active playlist folders and URL resource values (`.ubiquitousItemDownloadingStatusKey`, `.ubiquitousItemIsDownloadingKey`)
 - On-demand download via `FileManager.startDownloadingUbiquitousItem(at:)`
 - Prefetch: while the current file plays, request downloads for the next N files in playback order (driven from `PlaybackCoordinator` on each file change)
-- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Files & Tags overlay
+- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Visual Overlay
 - Playback integration: if the file playback reaches is still in the cloud, request its download immediately; if it cannot be made local in time, advance to the next available file (same rule as missing files)
 
 **Testable:**

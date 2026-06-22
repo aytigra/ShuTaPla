@@ -200,10 +200,10 @@ Keeps each channel's loaded file consistent with its playback sequence. When a f
 #### OverlayManager
 
 Tracks visibility of all overlays in Player mode and enforces exclusivity rules from the feature spec:
-- Expanded audio (`.audioExtended`) is exclusive — opening it closes Files & Tags.
-- Compact audio (`.audioCompact`) closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
-- Files & Tags suppresses the bottom controls' hover trigger; it closes automatically only when Expanded audio opens.
-- Owns **key context** — which target (player vs. audio overlay) currently receives arrow/space/loop/seek. The audio overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
+- Expanded audio (`.audioExtended`) is exclusive — opening it closes the Visual Overlay.
+- Compact audio (`.audioCompact`) closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Visual Overlay when summoned by top-edge hover.
+- The Visual Overlay suppresses the bottom controls' hover trigger; it closes automatically only when Expanded audio opens.
+- Owns **key context** — which target (player vs. Audio Overlay) currently receives arrow/space/loop/seek. The Audio Overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
 
 `.audioCompact` and `.audioExtended` are two states of one view, `AudioOverlay`: it always draws the compact transport bar and, while `.audioExtended` is active, reveals the expanded lower section. `expandAudioToExtended()` / `collapseAudioToCompact()` toggle between them (collapse pins the compact bar so a stray hover-exit can't dismiss it); `closeAudioOverlay()` returns to Hidden. The overlay mounts only in Player mode.
 
@@ -214,7 +214,7 @@ State is an enum set, not a stack — overlays don't nest arbitrarily.
 Receives raw key events and routes them to the appropriate handler based on:
 1. Is a text input focused? → swallow the event (the field handles it).
 2. Is it `[esc]`? → apply the esc priority chain (unfocus input → close overlay → suppress → close window).
-3. Does the audio overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
+3. Does the Audio Overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
 4. Default → player or manager hotkey table. In Manager mode, arrow keys are standard file-list navigation, not audio-overlay control.
 
 Key context is read from the OverlayManager so the router and the overlay layer agree on who owns the keys.
@@ -236,10 +236,10 @@ Each playlist tracks its own playback state independently:
           │              │               │
           │         ┌────▼─────┐         │
           └─────────│ Paused   │─────────┘
-         play button └──────────┘
+        play button └──────────┘
 ```
 
-The state is persisted per playlist (`Playlist.playbackState`); the coordinator mirrors it at runtime. The play/pause button in a playlist's own controls (video/image bottom bar, audio overlay) toggles Playing ↔ Paused; making another playlist of the same kind active resets the previous one to Stopped.
+The state is persisted per playlist (`Playlist.playbackState`); the coordinator mirrors it at runtime. The play/pause button in a playlist's own controls (video/image bottom bar, Audio Overlay) toggles Playing ↔ Paused; making another playlist of the same kind active resets the previous one to Stopped.
 
 **Suppression** is a single transient layer on top of these states, owned by the coordinator and never persisted: effective playback is `playing && !suppression`. It is active while the pause overlay is shown or the window is closed; when it lifts (Unpause, window reopen, app relaunch), Playing playlists continue and Paused playlists stay paused.
 
@@ -495,19 +495,19 @@ struct ShuTaPlaApp: App {
 ### Manager mode layout
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ [Image][Video][Audio] + │ Playlist name │ Play Reshuffle … 🏷│  ← toolbar
-├──────────────────┬─────────────────────┬──────────────────┤
-│  ┌────────────┐  │                     │  ┌────────────┐  │
-│  │ audio inlet│  │                     │  │  Filter    │  │
-│  ├────────────┤  │  Filter controls    │  │  controls  │  │
-│  │            │  │                     │  ├────────────┤  │
-│  │ Playlists  │  │  File list /        │  │  Tag       │  │
-│  │ (scope)    │  │  gallery            │  │  panel     │  │
-│  │            │  │                     │  │            │  │
-│  │ (collaps-) │  │                     │  │ (collaps-) │  │
-│  └────────────┘  │                     │  └────────────┘  │
-└──────────────────┴─────────────────────┴──────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│[][Image][Video][Audio] +│ Playlist name  ▶︎ ...│             🏷 []│  ← toolbar
+├─────────────────────────┬─────────────────────┬──────────────────┤
+│  ┌────────────┐         │                     │  ┌────────────┐  │
+│  │ audio inlet│         │                     │  │  Filter    │  │
+│  ├────────────┤         │  Filter controls    │  │  controls  │  │
+│  │            │         │                     │  ├────────────┤  │
+│  │ Playlists  │         │  File list /        │  │  Tag       │  │
+│  │ (scope)    │         │  gallery            │  │  panel     │  │
+│  │            │         │                     │  │            │  │
+│  │ (collaps-) │         │                     │  │ (collaps-) │  │
+│  └────────────┘         │                     │  └────────────┘  │
+└─────────────────────────┴─────────────────────┴──────────────────┘
 ```
 
 The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `ManagerSplitViewController`) that hosts the three SwiftUI panes (`PlaylistSidebar`, `PlaylistCenterView`, `TagSidebar`) in `NSHostingController`s, bridged into the SwiftUI `WindowGroup` via `NSViewControllerRepresentable` (`ManagerView` → `ManagerSplitScene`). Its custom `NSToolbar` has three regions — sidebar / center / inspector — bounded by `NSTrackingSeparatorToolbarItem`s pinned to the split dividers, so each region's items align over its pane. `ManagerChrome` (an `@Observable`: `sidebarCollapsed`, `inspectorVisible`, `managingTags`) is the shared source of truth the controller and the SwiftUI panes both read. The representable's `sizeThatFits` returns the full proposed size so a divider drag hands freed width to the center pane and a collapsing pane stays pinned to the window edge.
@@ -522,7 +522,7 @@ The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `M
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ top hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ top hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    │
 │ ▓                                                      ▓ │
 │ ▓     ┌─────────────────────────────────────┐          ▓ │
 │ l     │                                     │          ▓ │
@@ -533,10 +533,10 @@ The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `M
 │ h     └─────────────────────────────────────┘          ▓ │
 │ o                                                      ▓ │
 │ v     ┌─────────────────────────────────────────────┐  ▓ │
-│ e     │  Files & Tags overlay (when visible)        │  ▓ │
+│ e     │  Visual Overlay (when visible)              │  ▓ │
 │ r     │  slides up from bottom                      │  ▓ │
 │       └─────────────────────────────────────────────┘  ▓ │
-│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ bottom hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ bottom hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -572,11 +572,11 @@ final class OverlayManager {
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .audioCompact:
-            // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
+            // Compact audio may sit on top of an open Visual Overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
         case .bottomControls:
-            // Passive hover chrome is suppressed while Files & Tags or Extended audio is open.
+            // Passive hover chrome is suppressed while Visual Overlay or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
@@ -842,21 +842,21 @@ Key event arrives
   3. Is it [space]?
      → If the pause overlay is shown: end suppression (same as pressing Unpause).
      → If playing: advance to next file in active playlist.
-     → If the audio overlay holds key context: applies to the audio playlist instead of video/image.
+     → If the Audio Overlay holds key context: applies to the audio playlist instead of video/image.
        │
        ▼
-  4. Does the audio overlay hold key context (revealed AND fully animated in)?
+  4. Does the Audio Overlay hold key context (revealed AND fully animated in)?
      YES → route arrow keys, [space], [l], and seek to audio controls.
      NO  → continue.
        │
        ▼
   5. Is app in Player mode?
-     YES → player hotkey table ([tab] toggles Files & Tags; [arrow up] opens it
+     YES → player hotkey table ([tab] toggles Visual Overlay; [arrow up] opens it
            but never closes it; [arrow down] closes it or reveals Compact audio;
            [s] stops to Manager; [delete] raises the trash confirmation).
      NO  → manager hotkey table (arrows move the file selection — 1-D in the list,
            2-D in the gallery, stepping a full row on up/down and one cell on
-           left/right; [enter] plays the selected file). There is no audio overlay
+           left/right; [enter] plays the selected file). There is no Audio Overlay
            in Manager mode — the audio channel is driven by the sidebar inlet — so
            arrows always stay with file-list navigation.
 ```
@@ -973,7 +973,7 @@ While ShuTaPla is primarily hotkey-driven in Player mode, all interactive UI mus
 - Pause overlay buttons ("Unpause", "Stop") are standard `Button` elements.
 - Playback controls bar uses `accessibilityLabel` for icon-only buttons (previous, next, loop, volume).
 - Volume sliders use `accessibilityValue` with percentage.
-- Files & Tags overlay file list follows the same patterns as Manager mode.
+- Visual Overlay file list follows the same patterns as Manager mode.
 
 ### General
 
@@ -1133,8 +1133,8 @@ Tests use **Swift Testing** (`import Testing`) for all unit and integration test
 | **TagParser** | Parameterized tests via `@Test(arguments:)` — a single test function covers valid tags, multiple bracket groups, nested brackets, a stray unmatched bracket, empty/ineffective brackets (→ untagged), short tags, and special characters as input rows. Pure functions — no mocking needed. `#expect` for assertions, `#require` for preconditions. |
 | **FileSystemService** | Integration tests using temporary directories. Create known file structures, scan, verify results. Test rename and trash operations. Use `async` test functions with `await`. |
 | **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, and suppression vs per-playlist pause (`playback = playing && !suppression`). |
-| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Files & Tags; key context transfers only when fully revealed. |
-| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key navigation — 1-D list and 2-D gallery, `[enter]` playing the selected file, `[tab]` toggling Files & Tags, `[s]` stop, and the `[delete]` confirmation holding key context). |
+| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Visual Overlay; key context transfers only when fully revealed. |
+| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key navigation — 1-D list and 2-D gallery, `[enter]` playing the selected file, `[tab]` toggling Visual Overlay, `[s]` stop, and the `[delete]` confirmation holding key context). |
 | **CloudFileService** | Unit tests with a mock providing canned cloud statuses and a recording download requester. Verify status mapping, prefetch requests the next N files in order, on-demand download when playback reaches an in-cloud file, and advance-on-timeout. |
 | **UI** | Manual testing and SwiftUI Previews. Snapshot tests for overlay layouts if needed. |
 
