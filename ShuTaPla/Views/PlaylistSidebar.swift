@@ -55,15 +55,13 @@ struct PlaylistSidebar: View {
     private var imagePlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .image } }
     private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
 
-    /// The playlist sections for the active scope: Video + Image (visual) or Audio.
+    /// The single section for the active scope's media type.
     @ViewBuilder
     private var sections: some View {
         switch appState.managerScope {
-        case .visual:
-            section(title: "Video", mediaType: .video)
-            section(title: "Image", mediaType: .image)
-        case .audio:
-            section(title: "Audio", mediaType: .audio)
+        case .image: section(title: "Image", mediaType: .image)
+        case .video: section(title: "Video", mediaType: .video)
+        case .audio: section(title: "Audio", mediaType: .audio)
         }
     }
 
@@ -71,11 +69,17 @@ struct PlaylistSidebar: View {
     @ViewBuilder
     private var emptyOverlay: some View {
         switch appState.managerScope {
-        case .visual where videoPlaylists.isEmpty && imagePlaylists.isEmpty:
+        case .image where imagePlaylists.isEmpty:
             ContentUnavailableView {
-                Label("No Playlists", systemImage: "rectangle.stack")
+                Label("No Image Playlists", systemImage: "photo.stack")
             } description: {
-                Text("Add a folder of videos or images.")
+                Text("Add a folder of images.")
+            }
+        case .video where videoPlaylists.isEmpty:
+            ContentUnavailableView {
+                Label("No Video Playlists", systemImage: "film.stack")
+            } description: {
+                Text("Add a folder of videos.")
             }
         case .audio where audioPlaylists.isEmpty:
             ContentUnavailableView {
@@ -132,10 +136,7 @@ struct PlaylistSidebar: View {
             )
         } else {
             Button {
-                switch appState.managerScope {
-                case .visual: appState.select(playlist)
-                case .audio: appState.selectAudioInManager(playlist)
-                }
+                appState.select(playlist)
             } label: {
                 HStack {
                     Text(playlist.name)
@@ -166,13 +167,9 @@ struct PlaylistSidebar: View {
         }
     }
 
-    /// Whether `playlist` is the active scope's current selection — the visual selection or
-    /// the active audio playlist — so its row reads as highlighted.
+    /// Whether `playlist` is the managed playlist, so its row reads as highlighted.
     private func isSelectedRow(_ playlist: Playlist) -> Bool {
-        switch appState.managerScope {
-        case .visual: return appState.selectedPlaylist === playlist
-        case .audio: return appState.activeAudioPlaylist === playlist
-        }
+        appState.managedPlaylist === playlist
     }
 
     // MARK: - Rename

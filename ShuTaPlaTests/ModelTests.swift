@@ -87,12 +87,12 @@ struct ModelTests {
         let context = container.mainContext
 
         let first = AppStateModel.fetchOrCreate(in: context)
-        first.activeVideoPlaylistId = UUID()
+        first.lastActiveVideoPlaylistId = UUID()
         try context.save()
 
         let second = AppStateModel.fetchOrCreate(in: context)
         #expect(first.persistentModelID == second.persistentModelID)
-        #expect(second.activeVideoPlaylistId == first.activeVideoPlaylistId)
+        #expect(second.lastActiveVideoPlaylistId == first.lastActiveVideoPlaylistId)
         #expect(try context.fetch(FetchDescriptor<AppStateModel>()).count == 1)
     }
 
@@ -140,7 +140,7 @@ struct ModelTests {
         prefs.filePositionPersistence = true
         prefs.viewMode = .gallery
         playlist.preferences = prefs
-        playlist.filterState = FilterState(selectedTags: ["a", "b"], filterMode: .or)
+        playlist.filterState = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .untagged)
         playlist.savedSearches = [SavedSearch(tags: ["x", "y"], mode: .and)]
         playlist.tagFrequency = ["beach": 3, "sunny": 1]
         context.insert(playlist)
@@ -157,9 +157,30 @@ struct ModelTests {
         #expect(stored.preferences.viewMode == .gallery)
         #expect(stored.filterState.selectedTags == ["a", "b"])
         #expect(stored.filterState.filterMode == .or)
+        #expect(stored.filterState.serviceFilter == .untagged)
         #expect(stored.savedSearches.count == 1)
         #expect(stored.savedSearches.first?.tags == ["x", "y"])
         #expect(stored.tagFrequency["beach"] == 3)
+    }
+
+    // MARK: - FilterState coding
+
+    @Test func filterStateRoundTripsServiceFilter() throws {
+        let original = FilterState(selectedTags: ["beach"], filterMode: .or, serviceFilter: .skipped)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(FilterState.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.serviceFilter == .skipped)
+    }
+
+    /// A filter persisted before triage filters were stored has no `serviceFilter` key;
+    /// it must decode to `nil` rather than failing, so existing playlists keep loading.
+    @Test func filterStateDecodesWithoutServiceFilterKey() throws {
+        let legacy = #"{"selectedTags":["beach"],"filterMode":"and"}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(FilterState.self, from: legacy)
+        #expect(decoded.selectedTags == ["beach"])
+        #expect(decoded.filterMode == .and)
+        #expect(decoded.serviceFilter == nil)
     }
 
     // MARK: - Enum raw values

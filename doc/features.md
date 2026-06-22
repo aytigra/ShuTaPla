@@ -45,7 +45,7 @@ A playlist can be created in three equivalent ways:
 2. The New Playlist (`+`) button in the Manager toolbar.
 3. The application menu.
 
-Each path opens a folder picker. Once the new playlist's media type is known, the Manager switches to the matching scope (visual or audio) and selects the new playlist, **Stopped** — these paths create it for management without starting playback (an audio creation, like an audio selection, first stops whichever audio playlist was live). The player-mode overlays add a fourth and fifth entry point through the `+` in their playlist selectors; there, consistent with selecting in those overlays, the new playlist **starts playing** immediately on its channel, and the Manager scope is left unchanged — so stopping back into Manager returns to whatever was being managed rather than dropping into the new playlist's scope.
+Each path opens a folder picker. Once the new playlist's media type is known, the Manager switches to the matching scope (image, video, or audio) and loads the new playlist as the managed one, **Stopped** — these paths create it for management without starting playback (an audio creation, like an audio selection, first stops whichever audio playlist was live). The player-mode overlays add a fourth and fifth entry point through the `+` in their playlist selectors; there, consistent with selecting in those overlays, the new playlist **starts playing** immediately on its channel, and the Manager scope is left unchanged — so stopping back into Manager returns to whatever was being managed rather than dropping into the new playlist's scope.
 
 When a folder is read, the app classifies its contents by media type. A folder is **dominant** in one type when the other types are only an incidental minority (for example, a handful of album-cover images among many audio tracks) — concretely, when at least 80% of the recognized media files are of that type:
 
@@ -113,7 +113,7 @@ At any time:
 
 - At most one video playlist OR one image playlist may be in **Playing** or **Paused** state.
 - At most one audio playlist may be in **Playing** or **Paused** state in parallel with the above.
-- Any number of playlists may exist in **Stopped** state. The Manager view shows one **scope** at a time — visual (video + image) or audio — and within it one playlist's contents. Switching the Manager between scopes, or to a different playlist, is a view change only: it never interrupts an audio playlist that is currently Playing in parallel (and vice versa).
+- Any number of playlists may exist in **Stopped** state. The Manager view shows one **scope** at a time — image, video, or audio — and manages one playlist's contents. Switching the Manager between scopes, or to a different playlist, is a view change only: it never interrupts an audio playlist that is currently Playing in parallel (and vice versa).
 
 Switching to a different visual playlist (within or between video and image) cleanly stops the previous one (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears in its Manager view. In Player mode (via the Files & Tags overlay's playlist selector) the selected playlist starts playing immediately. Selecting a different **audio** playlist in Manager mode stops whichever audio playlist was live and leaves the new one active and Stopped (selecting from the player-mode audio overlay starts it playing instead). Each playlist's last-played file and optional position-within-file are preserved, so returning to it later resumes where it was.
 
@@ -125,21 +125,22 @@ In Manager mode the window content is laid out as panels — no overlays are use
 
 ### Scopes
 
-Manager mode is a two-scope library. A pair of **scope tabs** in the toolbar — **Visual** and **Audio** — chooses which the panels serve:
+The Manager manages **one playlist at a time** — the managed playlist — and the whole view (sidebar, center file list, filter bar, tag inspector) binds to it, adapting to its type. **Scope** is only the sidebar's playlist-list type filter: three **scope tabs** in the toolbar — **Image**, **Video**, **Audio** — choose which type of playlist you can pick from to become the managed one. It is not selection, filter, or routing state.
 
-| Scope | Sidebar shows | Center / inspector act on |
-|---|---|---|
-| **Visual** | Video + Image sections | the selected video/image playlist |
-| **Audio** | Audio section | the active audio playlist |
+| Scope | Sidebar shows |
+|---|---|
+| **Image** | Image playlists |
+| **Video** | Video playlists |
+| **Audio** | Audio playlists |
 
-Switching scope is a view change only — it never starts, stops, or loads any channel, and the two scopes keep independent selection, filter, and service-filter state. Audio is first-class Manager content: it reuses the same sidebar / center / filter / tag machinery as visual, minus the gallery view. The scope is not persisted; Manager always opens in visual scope.
+Switching scope is the browse gesture: it never starts or stops any channel, and pre-loads that scope's last-managed playlist into the managed slot (so switching to a type you haven't browsed shows the placeholder). Each playlist carries its own persisted filter, service filter, and current file, so those follow the playlist rather than the scope; the selection belongs to the managed playlist. Audio is first-class Manager content — it reuses the same sidebar / center / filter / tag machinery as the visual types, minus the gallery view. The scope is persisted, as is each visual type's last-managed playlist, so Manager reopens to where you left it (defaulting to video).
 
 ### Layout
 
-- **Toolbar** — replaces a window-title strip. Left: the scope tabs and the New Playlist (`+`) button (which opens the add-folder flow, then switches to the created playlist's scope and selects it). Center: the current playlist's name as the window title (placeholder "\(app_name)" when nothing is selected), and the scope's actions — visual: Play · Reshuffle · List/Gallery toggle · Settings; audio: Reshuffle · Settings. Right: the tag controls (Manage Tags, the tag-inspector toggle). Clicking the *active* scope tab collapses the left panel; clicking either tab while collapsed expands it and sets that scope. Visual **Play** enters fullscreen Player mode; audio has no toolbar Play (audio playback starts from the inlet and stays in Manager).
-- **Left collapsible panel** — pinned at the top, the **audio transport inlet** (present in both scopes, since the audio channel is parallel to whatever is being browsed; see Audio Player). Below it, the active scope's **playlist list** with full management (create via the toolbar's New Playlist, inline rename, delete, drag reorder). A playlist with a background re-scan in progress shows a spinner in place of its file count; deleting a large playlist clears the selection at once and the row shows a red progress spinner while its files are cleaned out in the background, staying visible until removal completes.
-- **Center** — filtering controls (tag multi-select, AND/OR switch, saved multi-tag searches), counter notices for untagged / invalid tagging / skipped files (each activates its service filter — see Service filters), and the file list respecting the active filter. Serves the active scope's playlist.
-- **Right collapsible panel** — Tag management, shown in one of two modes selected from a toolbar button next to the panel's show/hide control. The default mode edits the tags of the file(s) currently selected in the center list (the same multi-select tag input described under Tag editing UI); its heading reflects the selection — **File Tags** for a single file, **Common Tags** for a multi-selection. The toolbar button switches the panel into **Manage Tags** mode (see Playlist-wide tag operations) and back; entering it reveals the panel if it was hidden. It edits the active scope's playlist.
+- **Toolbar** — replaces a window-title strip. Left: the scope tabs and the New Playlist (`+`) button (which opens the add-folder flow, then switches to the created playlist's scope and loads it as the managed one). Center: the managed playlist's name as the window title (placeholder "\(app_name)" when nothing is loaded), and its type's actions — image/video: Play · Reshuffle · List/Gallery toggle · Settings; audio: Reshuffle · Settings. Right: the tag controls (Manage Tags, the tag-inspector toggle). Clicking the *active* scope tab collapses the left panel; clicking any tab while collapsed expands it and sets that scope. Image/video **Play** enters fullscreen Player mode; audio has no toolbar Play (audio playback starts from the inlet and stays in Manager).
+- **Left collapsible panel** — pinned at the top, the **audio transport inlet** (present in every scope, since the audio channel is parallel to whatever is being browsed; see Audio Player). Below it, the active scope's **playlist list** with full management (create via the toolbar's New Playlist, inline rename, delete, drag reorder). A playlist with a background re-scan in progress shows a spinner in place of its file count; deleting a large playlist clears the selection at once and the row shows a red progress spinner while its files are cleaned out in the background, staying visible until removal completes.
+- **Center** — filtering controls (tag multi-select, AND/OR switch, saved multi-tag searches), counter notices for untagged / invalid tagging / skipped files (each activates its service filter — see Service filters), and the file list respecting the active filter. Serves the managed playlist.
+- **Right collapsible panel** — Tag management, shown in one of two modes selected from a toolbar button next to the panel's show/hide control. The default mode edits the tags of the file(s) currently selected in the center list (the same multi-select tag input described under Tag editing UI); its heading reflects the selection — **File Tags** for a single file, **Common Tags** for a multi-selection. The toolbar button switches the panel into **Manage Tags** mode (see Playlist-wide tag operations) and back; entering it reveals the panel if it was hidden. It edits the managed playlist.
 
 ### File list view modes
 
@@ -242,7 +243,7 @@ If the app has lost write access to a playlist's folder (the saved permission we
 
 ## Filtering and search
 
-The filter UI appears in the inspector (right) panel of Manager mode (in either scope), in the Files & Tags overlay during Player mode, and in the player-mode audio overlay.
+The filter UI appears in the inspector (right) panel of Manager mode (targeting the managed playlist), in the Files & Tags overlay during Player mode, and in the player-mode audio overlay. Each surface points its filter bar at one playlist's persisted filter; editing it from any surface edits the one stored filter, and every view that shows that playlist re-derives.
 
 ### Current scope
 
@@ -252,13 +253,15 @@ Tags are picked with the same multiselect-autocomplete control as the tag editor
 
 ### Service filters
 
-Separate from the tag filter, Manager mode provides three **service filters**: **Untagged**, **Invalid tagging**, and **Skipped**. Each surfaces as a small counter notice in the playlist info area (shown only when its count is non-zero); clicking the notice activates the corresponding service filter, and clicking it again deactivates it. While a service filter is active, the file list shows only its files and the tag filter is temporarily inactive; service filters are mutually exclusive with each other.
+Separate from the tag filter, the playlist carries one of three **service filters**: **Untagged**, **Invalid tagging**, and **Skipped**. Each surfaces as a small counter notice in the Manager center's playlist info area (shown only when its count is non-zero); clicking the notice activates the corresponding service filter, and clicking it again deactivates it. While a service filter is active, the file list shows only its files and the tag filter is temporarily inactive; service filters are mutually exclusive with each other.
 
 - **Untagged** — files without any bracket group.
 - **Invalid tagging** — files with invalid tagging (see Invalid tagging), for stepping through and fixing them.
 - **Skipped** — files found in the folder but excluded from the playlist as unsupported or of another media type; listed for inspection only (Show in Finder, move to Trash) and never play.
 
-Like the tag filter, an active Untagged or Invalid tagging service filter affects playback — only matching files play; Skipped files never play. Service filters are available in Manager mode only, in both the visual and audio scopes; an active service filter applies only to the scope that was active when it was toggled and is cleared on a scope switch. The Files & Tags overlay and the player-mode audio overlay offer plain tag filtering, without service filters.
+Like the tag filter, an active Untagged or Invalid tagging service filter affects playback — only matching files play; Skipped files never play, so the playable sequence under the Skipped filter is empty (looping it would have nothing to show). Because of that, while a playlist's active filter is Skipped the Manager Play button is hidden and the audio inlet's Play is a no-op.
+
+The service filter is persisted on the playlist, alongside the tag filter, and applied uniformly — Manager, the overlays, and playback all honor it — so triaging the untagged or invalid-tagged set resumes across launches. The counter-notice **toggles** that set it live only in the Manager center; the Files & Tags overlay and the player-mode audio overlay carry no service-filter toggles, but they still honor a service filter set in Manager (and show its "Showing untagged — clear" banner, which clears it).
 
 Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the active file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file.
 
@@ -388,7 +391,7 @@ Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playba
 The overlay is a **simplified** view meant for quick playlist/file switching and single-file operations during playback — not the full management surface that Manager mode provides. It has three columns:
 
 1. **Playlist selector** — the playlists of the active visual type (video *or* image), with a `+` to add one from a folder. Selecting a playlist switches the visual channel to it and starts playing it immediately. It does **not** expose full management (no rename, delete, or reorder — those live in Manager mode).
-2. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service filters, those are Manager-only), the list of files in the active playlist (always list view, not gallery). If a filter change excludes the currently playing file, the player jumps to the first file that still matches; if nothing matches, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
+2. **File list & filtering** — the filter UI (tag multi-select, AND/OR switch, saved multi-tag searches — no service-filter toggles, those live in Manager, though a service filter set there is honored here and its banner can clear it), the list of files in the active playlist (always list view, not gallery). If a filter change excludes the currently playing file, the player jumps to the first file that still matches; if nothing matches, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
 3. **Tag management** — tag editor for the **currently active file** only (same UI as described in Tag editing UI).
 
 Per-file actions in the list act on a single file:
@@ -433,7 +436,7 @@ The Files & Tags overlay works identically to the video player's (see above).
 
 Audio playlists use the same folder / shuffle / tag model as the other types. They are first-class **Manager** content (the audio scope, see Manager mode) and play through a parallel channel that never enters fullscreen independently. The audio channel is controlled from two surfaces sharing one state-dependent transport:
 
-- The **audio inlet** pinned at the top of the Manager left panel, present in both scopes.
+- The **audio inlet** pinned at the top of the Manager left panel, present in every scope.
 - The **player-mode audio overlay**, which slides down from the top edge while a video or image plays in fullscreen.
 
 ### Audio inlet (Manager mode)

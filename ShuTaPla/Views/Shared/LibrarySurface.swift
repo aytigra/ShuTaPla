@@ -126,11 +126,10 @@ struct LibrarySurface: View {
 
     private var fileColumn: some View {
         VStack(spacing: 0) {
-            // The channel's own filter bar: audio routes to the audio API, every other type
-            // to the Manager's active-scope API. Raised above the file list so its floating
-            // tag dropdown overlays the rows below.
+            // The channel playlist's own filter bar, editing its persisted filter directly.
+            // Raised above the file list so its floating tag dropdown overlays the rows below.
             if let playlist = context.activePlaylist {
-                FilterBar(scope: context.mediaType == .audio ? .audio : .manager, playlist: playlist)
+                FilterBar(playlist: playlist)
                     .zIndex(1)
             }
             Divider()

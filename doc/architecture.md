@@ -78,9 +78,10 @@ Playlist
  │    ├── filePositionPersistence: Bool?      // nil = use global default
  │    └── viewMode: ViewMode                 // .list | .gallery
  │
- ├── filterState: FilterState          // embedded value — persisted tag filter
+ ├── filterState: FilterState          // embedded value — persisted per-playlist filter
  │    ├── selectedTags: [String]
- │    └── filterMode: FilterMode       // .and | .or
+ │    ├── filterMode: FilterMode       // .and | .or
+ │    └── serviceFilter: ServiceFilter? // .untagged | .invalidTagging | .skipped; nil = tag filter active
  │
  ├── savedSearches: [SavedSearch]      // 10 most recent unique multi-tag searches;
  │    └── each: { tags: [String], mode: FilterMode }   // re-applying an existing one moves it to the top
@@ -100,9 +101,10 @@ Playlist
       └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
 AppStateModel (singleton, persisted)
- ├── activeVideoPlaylistId: UUID?       // video and image share the visual channel:
- ├── activeImagePlaylistId: UUID?       // at most one of these two is non-nil
- ├── activeAudioPlaylistId: UUID?
+ ├── lastActiveVideoPlaylistId: UUID?   // video scope's remembered playlist — pre-loaded into the managed slot on a switch to video
+ ├── lastActiveImagePlaylistId: UUID?   // image scope's remembered playlist — same, for image
+ ├── audioChannelPlaylistId: UUID?      // the audio-channel playlist (persistent); doubles as audio's remembered managed playlist
+ ├── managerScopeRaw: String?           // persisted Manager scope: "image" | "video" | "audio"
  └── windowFrame: Data?                 // encoded NSRect
 ```
 
@@ -127,7 +129,7 @@ enum FilterMode: String, Codable, Sendable { case and, or }
 enum TaggingStatus: String, Codable, Sendable { case valid, untagged, invalid }
 enum PlaybackState: String, Codable, Sendable { case stopped, playing, paused }
 enum CloudStatus: String, Sendable { case local, inCloud, downloading }     // runtime only, not persisted
-enum ServiceFilter: String, Sendable { case untagged, invalidTagging, skipped }  // runtime only, not persisted
+enum ServiceFilter: String, Codable, Sendable { case untagged, invalidTagging, skipped }  // persisted on FilterState
 ```
 
 ### Sendable conformance
@@ -173,14 +175,14 @@ The app uses two layers of state:
 
 #### AppState
 
-`@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds references to the SwiftData model context and the active playlist models. Responsible for:
-- Tracking which playlists are active (by media category).
-- Persisting active-playlist IDs to the SwiftData `AppStateModel` singleton on change.
+`@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds the SwiftData model context and the three playlist slots that drive the UI. Responsible for:
+- Holding the three slots as independent references, kept consistent by explicit load steps (never by deriving one slot from another): the **managed-playlist slot** (`managedPlaylist`, what the whole Manager binds to, any type), the **audio-channel slot** (`audioChannelSlot`, persistent), and the visual channel (owned by the coordinator). `lastActiveVideoPlaylist` / `lastActiveImagePlaylist` remember each visual type's last-managed playlist so a scope switch can pre-load it; audio's memory *is* the audio-channel slot.
+- Persisting the slot IDs and the Manager scope to the SwiftData `AppStateModel` singleton on change; restoring them on launch (`resolveActivePlaylists` loads the persisted scope's remembered playlist into the managed slot).
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
-- Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
-- Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
-- Driving Manager mode as a **two-scope library** via `managerScope: ManagerScope { case visual, audio }`. Scope-routed accessors (`managerPlaylist`, `managerFiles`, `managerSelection`, `managerScrollToken`, `managerFilterMode`, and the `manager*` filter/search wrappers) dispatch to the visual slots (`selectedPlaylist` / `filteredFiles` / `selectedFileIDs` / `scrollSelectionToken` / `filterMode`) or the parallel audio slots (`activeAudioPlaylist` / `audioFilteredFiles` / `audioSelectedFileIDs` / `audioScrollToken` / `audioFilterMode`), so one set of center / filter / tag views serves both scopes. Flipping scope is a view switch only — it never touches a channel, and the service filter (`activeServiceFilter`) is scope-local, applied only to the active scope and cleared on a scope switch.
-- Maintaining an **audio editing surface independent of the visual channel**. The active audio playlist carries its own cached `audioFilteredFiles`, audio tag-filter API, and selection set. Two selection entry points feed it: `selectAudioInManager` — chosen from the Manager's audio scope, it activates the playlist and re-reads the folder **without** starting playback (and stops whichever audio playlist was live, since only one is ever live); and `selectAudioPlaylist` — chosen from the player-mode overlay, the audio analog of visual `select` that additionally **starts a genuinely new selection playing**. Both restore the persisted filter, re-read the folder on every (re-)select (the automatic Update, since there is no dedicated control), and bump `audioScrollToken` to re-center the list. The audio scope's highlighted/scrolled/tag-edited "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against `audioFilteredFiles` — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off. A re-scan or trash that removes a file prunes it from both scopes' selections.
+- **Deriving, not caching, the filtered file lists.** The filter (`filterState`, tag filter *and* service filter) and the current file (`currentFileID`) are persisted, per-playlist `@Model` state; the display-ordered list and the current-file highlight are pure derivations of it (`Playlist.displaySequence` / `playbackSequence`). A view reading `managedPlaylist?.displaySequence` (exposed as `managerFiles`; `audioChannelFiles` / `visualChannelFiles` for the channel slots) re-derives on its own when the model changes — no recompute-and-reconcile machinery, and two slots pointing at the same `Playlist` are consistent for free.
+- Driving Manager mode as a **three-scope library** via `managerScope: ManagerScope { case image, video, audio }`. The scope is *only* the sidebar's playlist-type filter — which playlists you can pick to become the managed one — not selection, filter, or routing state. `switchScope(to:)` is the browse gesture: it sets the scope and pre-loads that scope's remembered playlist into the managed slot. One managed selection set (`managerSelection`) belongs to the managed playlist; `scrollSelectionToken` stays as a deliberate "re-center now" event (not a derived value), with `audioScrollToken` its overlay counterpart.
+- Converging the select paths onto one `select(_:)` that loads the picked playlist into the managed slot (and, for audio, into the audio channel, stopping whichever audio playlist was live). The overlays keep play-on-select variants: `selectVisualPlaylistInPlayer` and `selectAudioPlaylist`. The audio channel's "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against its display list — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off.
+- Applying every filter edit to the target playlist's persisted `filterState` (the `*(on: playlist)` methods: `toggleFilterTag`, `setFilterMode`, `clearTagFilter`, `toggleServiceFilter`, the saved-search API); surfaces re-derive. The one explicit side effect is the live-channel reconcile: when an edit to a playlist that is currently playing removes the file the engine is on, the engine is advanced to a matching file (`reconcileAudioSelection` / the visual analog). A re-scan or trash that removes a file prunes it from `managerSelection`.
 - Centralizing scoped folder access for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt.
 - Exposing optimistic-progress state that the sidebar renders as spinners: folders being scanned into new playlists, playlists with a background re-scan in flight, and playlists being deleted (whose files are removed in batches, yielding between each so the UI stays responsive).
 
@@ -494,7 +496,7 @@ struct ShuTaPlaApp: App {
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ [Visual][Audio]  + │  Playlist name  │ Play Reshuffle … 🏷 │  ← toolbar
+│ [Image][Video][Audio] + │ Playlist name │ Play Reshuffle … 🏷│  ← toolbar
 ├──────────────────┬─────────────────────┬──────────────────┤
 │  ┌────────────┐  │                     │  ┌────────────┐  │
 │  │ audio inlet│  │                     │  │  Filter    │  │
@@ -510,9 +512,9 @@ struct ShuTaPlaApp: App {
 
 The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `ManagerSplitViewController`) that hosts the three SwiftUI panes (`PlaylistSidebar`, `PlaylistCenterView`, `TagSidebar`) in `NSHostingController`s, bridged into the SwiftUI `WindowGroup` via `NSViewControllerRepresentable` (`ManagerView` → `ManagerSplitScene`). Its custom `NSToolbar` has three regions — sidebar / center / inspector — bounded by `NSTrackingSeparatorToolbarItem`s pinned to the split dividers, so each region's items align over its pane. `ManagerChrome` (an `@Observable`: `sidebarCollapsed`, `inspectorVisible`, `managingTags`) is the shared source of truth the controller and the SwiftUI panes both read. The representable's `sizeThatFits` returns the full proposed size so a divider drag hands freed width to the center pane and a collapsing pane stays pinned to the window edge.
 
-**Toolbar regions**: leading — the **scope tabs** (`ScopeTabButton`, a custom toggle so a click on the already-active scope can collapse the sidebar; a native segmented `Picker` can't report that re-click) and the **New Playlist `+`**; center — the playlist name via `.navigationTitle` and the active scope's actions (visual: Play · Reshuffle · List/Gallery · Settings; audio: Reshuffle · Settings); trailing — the tag controls (Manage Tags toggle, inspector show/hide). Full-height-sidebar toolbar coordination (reserving a sidebar toolbar region and relocating its items on collapse) engages only when the split controller is the window's `contentViewController`; here SwiftUI owns the window content, so the `+` overflows rather than relocating when the sidebar collapses — an accepted limitation.
+**Toolbar regions**: leading — the **scope tabs** (`ScopeTabButton`, one per scope — Image · Video · Audio — a custom toggle so a click on the already-active scope can collapse the sidebar; a native segmented `Picker` can't report that re-click) and the **New Playlist `+`**; center — the managed playlist's name via `.navigationTitle` and its type's actions (image/video: Play · Reshuffle · List/Gallery · Settings; audio: Reshuffle · Settings); trailing — the tag controls (Manage Tags toggle, inspector show/hide). Full-height-sidebar toolbar coordination (reserving a sidebar toolbar region and relocating its items on collapse) engages only when the split controller is the window's `contentViewController`; here SwiftUI owns the window content, so the `+` overflows rather than relocating when the sidebar collapses — an accepted limitation.
 
-**Sidebar structure**: `PlaylistSidebar` pins the **audio inlet** (`AudioInlet`) at the top via `.safeAreaInset(edge: .top)` in both scopes, then lists the active scope's sections — Video + Image (visual) or Audio — each with full management (inline rename, delete with confirmation, drag reorder). Create is the toolbar's New Playlist. The playlist delete confirmation is presented here for every scope. Rows come from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro), filtered by `mediaType`, sorted by `sortOrder`.
+**Sidebar structure**: `PlaylistSidebar` pins the **audio inlet** (`AudioInlet`) at the top via `.safeAreaInset(edge: .top)` in every scope, then lists the active scope's single section — Image, Video, or Audio — with full management (inline rename, delete with confirmation, drag reorder); a row's selection makes that playlist the managed one (`appState.select`), and the selected row is the managed playlist. Create is the toolbar's New Playlist. The playlist delete confirmation is presented here for every scope. Rows come from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro), filtered by `mediaType`, sorted by `sortOrder`.
 
 **Player-mode playlist switching**: Quick switching lives in the overlays' selectors, not a separate panel — the `LibrarySurface` selector column lists the active channel's single media type and is a pure switcher (no create/rename/delete/reorder). Selecting a playlist immediately starts playing it. Full management stays in Manager's sidebar.
 
@@ -1034,11 +1036,11 @@ ShuTaPla/                            (app source)
 │   │   ├── ManagerView.swift            // bridges the AppKit split shell into the WindowGroup
 │   │   ├── ManagerSplitScene.swift      // NSSplitViewController + NSToolbar (scope tabs, +, actions) + ManagerChrome
 │   │   ├── PlaylistSidebar.swift        // left panel: audio inlet + scope sections
-│   │   ├── PlaylistCenterView.swift     // tagging counter notices + file list, per scope
-│   │   ├── FileCollectionView.swift     // scope-routed selection/scroll over the list/gallery
+│   │   ├── PlaylistCenterView.swift     // tagging counter notices + file list for the managed playlist
+│   │   ├── FileCollectionView.swift     // selection/scroll over the managed playlist's list/gallery
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
 │   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode (visual only)
-│   │   ├── FilterBar.swift              // shared tag-filter controls (TagTokenField, saved searches, service-filter banner); a FilterScope (.manager / .audio) picks the routing
+│   │   ├── FilterBar.swift              // shared filter controls (TagTokenField, saved searches, service-filter banner) targeting a given playlist's persisted filterState
 │   │   ├── PlaylistTagsView.swift       // right panel's Manage Tags mode: playlist-wide rename/remove
 │   │   └── TagSidebar.swift             // right panel: toggles filter+edit vs. Manage Tags mode
 │   │

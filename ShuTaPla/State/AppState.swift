@@ -25,13 +25,30 @@ enum MoveDirection {
     case up, down, left, right
 }
 
-/// Which library the Manager is browsing. The visual scope spans video + image
-/// playlists (one shared channel); the audio scope is the independent audio channel.
-/// Switching scope is a view switch only — it never starts, stops, or loads a channel,
-/// and the two scopes' state never overwrite each other.
-enum ManagerScope {
-    case visual
+/// Which media type the Manager's sidebar lists. It decides which playlists you can pick
+/// from to become the managed one — nothing more: not selection state, not a filter, not a
+/// routing key. One-to-one with `MediaType`; switching it pre-loads that type's remembered
+/// playlist into the managed slot.
+enum ManagerScope: String {
+    case image
+    case video
     case audio
+
+    init(_ mediaType: MediaType) {
+        switch mediaType {
+        case .image: self = .image
+        case .video: self = .video
+        case .audio: self = .audio
+        }
+    }
+
+    var mediaType: MediaType {
+        switch self {
+        case .image: return .image
+        case .video: return .video
+        case .audio: return .audio
+        }
+    }
 }
 
 /// A scanned folder awaiting a media-type decision because no type dominated it
@@ -96,31 +113,27 @@ final class AppState {
 
     var mode: AppMode
 
-    /// Which library the Manager center/sidebar/toolbar act on. Transient — the Manager
-    /// always opens in the visual scope; it is never persisted. Flipping it re-routes the
-    /// scoped accessors (`managerPlaylist`/`managerFiles`/`managerSelection`/`managerFilterMode`)
-    /// without touching either scope's underlying state.
-    var managerScope: ManagerScope = .visual {
-        didSet {
-            guard oldValue != managerScope else { return }
-            // A service filter is runtime-only and scope-local; it doesn't carry across a
-            // scope switch any more than across a playlist switch. Drop it and refresh both
-            // cached lists so the newly shown scope reflects its own (unfiltered) state.
-            activeServiceFilter = nil
-            recomputeFilteredFiles()
-            recomputeAudioFilteredFiles()
-        }
-    }
+    /// Which media type the sidebar lists. Persisted, so a relaunch reopens the scope that was
+    /// being managed. Set through `switchScope(to:)` (the browse gesture) or `loadManaged(_:)`
+    /// (a managed playlist sets the scope to its type); the managed playlist always matches it.
+    private(set) var managerScope: ManagerScope = .video
 
-    // Runtime references to the active playlists. The visual channel is shared:
-    // at most one of video/image is non-nil. Audio is an independent channel.
-    var activeVideoPlaylist: Playlist?
-    var activeImagePlaylist: Playlist?
-    var activeAudioPlaylist: Playlist?
+    /// The managed slot — the playlist the whole Manager view binds to (sidebar selection,
+    /// center file list, filter bar, tag inspector). An independent reference, never reached
+    /// *through* another slot: load steps set it. Its type always matches `managerScope`, or
+    /// it is `nil` (the "select a playlist" placeholder).
+    var managedPlaylist: Playlist?
 
-    /// The playlist the Manager center panel is currently showing. Selecting a
-    /// row in the sidebar sets this and activates the playlist for its channel.
-    var selectedPlaylist: Playlist?
+    /// The audio channel slot — persistent: it survives Stop, so the transport can restart it,
+    /// and it is what switching to audio scope loads into the managed slot. `nil` only before
+    /// any audio playlist has been loaded (or after the loaded one is deleted).
+    var audioChannelSlot: Playlist?
+
+    // Per-type memory of the last-managed visual playlist, used only to pre-load the managed
+    // slot when switching to that scope. Independent of each other (and of the mutually
+    // exclusive *playing* visual channel, which lives on the coordinator).
+    var lastActiveVideoPlaylist: Playlist?
+    var lastActiveImagePlaylist: Playlist?
 
     /// In-flight background re-scan started by `select`. Tracked so a newer
     /// selection (or a delete) can cancel a stale update, and so tests can await
@@ -133,14 +146,10 @@ final class AppState {
     /// an un-owned fire-and-forget Task; `cancelConfirmationTasks()` tears them down.
     private(set) var confirmationTasks: [UUID: Task<Void, Never>] = [:]
 
-    /// File-list selection in the Manager center panel, by file ID. Cleared when
-    /// the selected playlist changes. The tag panel reads this.
-    var selectedFileIDs: Set<UUID> = []
-
-    /// The audio scope's file-list selection, parallel to `selectedFileIDs`. Kept
-    /// separate so switching Manager scope never disturbs the other scope's selection;
-    /// `managerSelection` routes to whichever the active scope owns.
-    var audioSelectedFileIDs: Set<UUID> = []
+    /// File-list selection in the Manager center panel, by file ID. Cleared when the managed
+    /// playlist changes. One set: it belongs to the single managed playlist, whatever its type.
+    /// The tag inspector reads this.
+    var managerSelection: Set<UUID> = []
 
     /// Bumped by `select` to ask the file list to scroll its selection into view,
     /// even when the selection itself didn't change — so re-clicking the current
@@ -232,40 +241,31 @@ final class AppState {
     var audioDeleteError: String?
     var audioRenameError: String?
 
-    /// Active runtime-only service filter (Untagged / Invalid tagging / Skipped).
-    /// While set it overrides the selected playlist's persisted tag filter; it is
-    /// mutually exclusive and never persisted.
-    private(set) var activeServiceFilter: ServiceFilter?
+    /// The audio channel playlist's display-ordered files under its effective filter — the
+    /// audio overlay's list. Derived from the model; the service filter, if set, applies here
+    /// too (the overlay carries no notice toggles but honors a filter set in Manager).
+    var audioChannelFiles: [PlaylistFile] { audioChannelSlot?.displaySequence ?? [] }
 
-    /// The selected playlist's files after the active filter, sorted for display.
-    /// Cached so the file list doesn't refilter on every redraw; recomputed when
-    /// the selection, filter, service filter, or file set changes.
-    private(set) var filteredFiles: [PlaylistFile] = []
+    /// The visual channel playlist's display-ordered files — the Files & Tags overlay's list.
+    var visualChannelFiles: [PlaylistFile] { coordinator.visualPlaylist?.displaySequence ?? [] }
 
-    /// The active audio playlist's files after its tag filter, for the extended audio
-    /// overlay's file list. Kept separate from `filteredFiles` because the audio channel
-    /// is independent of the Manager's selected video/image playlist; audio has no
-    /// service filters, so this is just the playback sequence.
-    private(set) var audioFilteredFiles: [PlaylistFile] = []
-
-    /// The active audio playlist's current track — the audio overlay's analog of the Manager's
-    /// `selectedFileIDs`. Resolved from the playlist's persisted `currentFileID` against the
-    /// filtered list, not the live engine, so it survives Stop: a stopped audio playlist still
-    /// shows (and resumes from) where it left off. `nil` when the remembered file is filtered
-    /// out of view, mirroring how the Manager drops the highlight in that case.
+    /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
+    /// Resolved from the playlist's persisted `currentFileID` against its display list, not the
+    /// live engine, so it survives Stop: a stopped audio playlist still shows (and resumes from)
+    /// where it left off. `nil` when the remembered file is filtered out of view.
     var currentAudioFile: PlaylistFile? {
-        guard let id = activeAudioPlaylist?.currentFileID else { return nil }
-        return audioFilteredFiles.first { $0.id == id }
+        guard let id = audioChannelSlot?.currentFileID else { return nil }
+        return audioChannelFiles.first { $0.id == id }
     }
 
     /// The visual channel's current file — the Files & Tags overlay's analog of
     /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`
-    /// against `filteredFiles`, not the live engine, so it's available synchronously when
+    /// against its display list, not the live engine, so it's available synchronously when
     /// the overlay's file list re-centers after a playlist switch (the video engine reports
     /// its current file asynchronously). `nil` when the remembered file is filtered out of view.
     var currentVisualFile: PlaylistFile? {
         guard let id = coordinator.visualPlaylist?.currentFileID else { return nil }
-        return filteredFiles.first { $0.id == id }
+        return visualChannelFiles.first { $0.id == id }
     }
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as
@@ -302,20 +302,18 @@ final class AppState {
         self.mode = existing.isEmpty ? .welcome : .manager
 
         resolveActivePlaylists()
-        recomputeFilteredFiles()
-        recomputeAudioFilteredFiles()
     }
 
-    // MARK: - Active playlist references
+    // MARK: - Slot references
 
-    /// Restores runtime references from the persisted active-playlist IDs.
+    /// Restores the slot references and scope from the persisted IDs, then loads the
+    /// persisted scope's remembered playlist into the managed slot.
     private func resolveActivePlaylists() {
-        activeVideoPlaylist = appStateModel.activeVideoPlaylistId.flatMap(playlist(withID:))
-        activeImagePlaylist = appStateModel.activeImagePlaylistId.flatMap(playlist(withID:))
-        activeAudioPlaylist = appStateModel.activeAudioPlaylistId.flatMap(playlist(withID:))
-        // The Manager selection is only ever a video/image playlist; audio lives in the
-        // extended overlay and never occupies the Manager center panel.
-        selectedPlaylist = activeVideoPlaylist ?? activeImagePlaylist
+        lastActiveVideoPlaylist = appStateModel.lastActiveVideoPlaylistId.flatMap(playlist(withID:))
+        lastActiveImagePlaylist = appStateModel.lastActiveImagePlaylistId.flatMap(playlist(withID:))
+        audioChannelSlot = appStateModel.audioChannelPlaylistId.flatMap(playlist(withID:))
+        managerScope = appStateModel.managerScopeRaw.flatMap(ManagerScope.init(rawValue:)) ?? .video
+        managedPlaylist = rememberedPlaylist(for: managerScope)
     }
 
     private func playlist(withID id: UUID) -> Playlist? {
@@ -324,142 +322,76 @@ final class AppState {
         return try? modelContext.fetch(descriptor).first
     }
 
-    /// Makes `playlist` the active one for its channel, persisting the choice.
-    /// Activating a visual playlist clears the other visual channel.
-    func activate(_ playlist: Playlist) {
+    /// Records `playlist` as its type's remembered playlist, persisting the choice. The visual
+    /// memories (video / image) are independent of each other; audio's memory is the channel
+    /// slot itself. Touches neither the managed slot, the scope, nor playback.
+    func remember(_ playlist: Playlist) {
         switch playlist.mediaType {
         case .video:
-            activeVideoPlaylist = playlist
-            activeImagePlaylist = nil
-            appStateModel.activeVideoPlaylistId = playlist.id
-            appStateModel.activeImagePlaylistId = nil
+            lastActiveVideoPlaylist = playlist
+            appStateModel.lastActiveVideoPlaylistId = playlist.id
         case .image:
-            activeImagePlaylist = playlist
-            activeVideoPlaylist = nil
-            appStateModel.activeImagePlaylistId = playlist.id
-            appStateModel.activeVideoPlaylistId = nil
+            lastActiveImagePlaylist = playlist
+            appStateModel.lastActiveImagePlaylistId = playlist.id
         case .audio:
-            activeAudioPlaylist = playlist
-            appStateModel.activeAudioPlaylistId = playlist.id
+            audioChannelSlot = playlist
+            appStateModel.audioChannelPlaylistId = playlist.id
         }
     }
 
-    // MARK: - Manager scope routing
+    /// The remembered playlist for a scope — what switching to it loads into the managed slot.
+    private func rememberedPlaylist(for scope: ManagerScope) -> Playlist? {
+        switch scope {
+        case .video: return lastActiveVideoPlaylist
+        case .image: return lastActiveImagePlaylist
+        case .audio: return audioChannelSlot
+        }
+    }
+
+    /// Loads `playlist` into the managed slot: records it and sets the scope to its type, so the
+    /// whole Manager binds to it. The one load step that makes a playlist managed; playback is a
+    /// separate concern handled by the callers that start it.
+    private func loadManaged(_ playlist: Playlist) {
+        remember(playlist)
+        managedPlaylist = playlist
+        managerScope = ManagerScope(playlist.mediaType)
+        appStateModel.managerScopeRaw = managerScope.rawValue
+    }
+
+    /// The browse gesture: switches the sidebar to `scope` and pre-loads that scope's remembered
+    /// playlist into the managed slot (possibly `nil` → the placeholder). Selection belongs to the
+    /// managed playlist, so it clears and re-seeds on the new playlist's resume file.
+    func switchScope(to scope: ManagerScope) {
+        guard scope != managerScope else { return }
+        managerScope = scope
+        appStateModel.managerScopeRaw = scope.rawValue
+        managedPlaylist = rememberedPlaylist(for: scope)
+        managerSelection = []
+        if let playlist = managedPlaylist, let id = playlist.currentFileID,
+           playlist.displaySequence.contains(where: { $0.id == id }) {
+            managerSelection = [id]
+        }
+        scrollSelectionToken += 1
+    }
+
+    // MARK: - Manager accessors
     //
-    // The Manager's sidebar, center panel, filter bar, and tag inspector read and write
-    // through these accessors so one set of views serves both scopes. Each routes to the
-    // active scope's own slot, so the scopes stay fully parallel — reading or writing one
-    // never touches the other.
+    // The Manager's center panel, filter bar, and tag inspector read these; all derive from
+    // the single managed playlist, whatever its type.
 
-    /// The playlist the Manager center panel shows for the active scope: the selected
-    /// video/image playlist (visual) or the active audio playlist (audio).
-    var managerPlaylist: Playlist? {
-        switch managerScope {
-        case .visual: return selectedPlaylist
-        case .audio: return activeAudioPlaylist
-        }
-    }
+    /// The managed playlist's display-ordered files under its effective filter.
+    var managerFiles: [PlaylistFile] { managedPlaylist?.displaySequence ?? [] }
 
-    /// The active scope's filtered, display-ordered files.
-    var managerFiles: [PlaylistFile] {
-        switch managerScope {
-        case .visual: return filteredFiles
-        case .audio: return audioFilteredFiles
-        }
-    }
+    /// The token the Manager center file list re-centers on (a re-select or scope switch).
+    var managerScrollToken: Int { scrollSelectionToken }
 
-    /// The active scope's file-list selection.
-    var managerSelection: Set<UUID> {
-        get {
-            switch managerScope {
-            case .visual: return selectedFileIDs
-            case .audio: return audioSelectedFileIDs
-            }
-        }
-        set {
-            switch managerScope {
-            case .visual: selectedFileIDs = newValue
-            case .audio: audioSelectedFileIDs = newValue
-            }
-        }
-    }
-
-    /// The active scope's scroll-to-selection token, so the shared center file list can
-    /// re-center on whichever scope's (re-)selection bumped it.
-    var managerScrollToken: Int {
-        switch managerScope {
-        case .visual: return scrollSelectionToken
-        case .audio: return audioScrollToken
-        }
-    }
-
-    /// The active scope's AND/OR tag-filter operator, delegating to the scope's own
-    /// `filterMode` / `audioFilterMode` binding source.
-    var managerFilterMode: FilterMode {
-        get {
-            switch managerScope {
-            case .visual: return filterMode
-            case .audio: return audioFilterMode
-            }
-        }
-        set {
-            switch managerScope {
-            case .visual: filterMode = newValue
-            case .audio: audioFilterMode = newValue
-            }
-        }
-    }
-
-    // The Manager's shared filter bar drives these through the active scope so one control
-    // edits the visual or audio playlist's tag filter and saved searches without the view
-    // knowing which scope is live.
-
-    /// Adds/removes a tag from the active scope's tag filter.
-    func managerToggleFilterTag(_ tag: String) {
-        switch managerScope {
-        case .visual: toggleFilterTag(tag)
-        case .audio: toggleAudioFilterTag(tag)
-        }
-    }
-
-    /// Clears the active scope's tag filter.
-    func managerClearFilter() {
-        switch managerScope {
-        case .visual: clearTagFilter()
-        case .audio: clearAudioFilter()
-        }
-    }
-
-    /// Saves the active scope's current tag filter as a saved search.
-    func managerSaveSearch() {
-        switch managerScope {
-        case .visual: saveCurrentSearch()
-        case .audio: saveAudioSearch()
-        }
-    }
-
-    /// Re-applies a saved search on the active scope.
-    func managerApplySearch(_ search: SavedSearch) {
-        switch managerScope {
-        case .visual: applySavedSearch(search)
-        case .audio: applyAudioSearch(search)
-        }
-    }
-
-    /// Removes a saved search from the active scope's recents.
-    func managerRemoveSearch(_ search: SavedSearch) {
-        switch managerScope {
-        case .visual: removeSavedSearch(search)
-        case .audio: removeAudioSearch(search)
-        }
-    }
-
-    /// A double-click in the Manager center: the visual scope enters the fullscreen player
-    /// at the file; the audio scope starts the audio channel there, staying in Manager.
+    /// A double-click in the Manager center: a visual playlist enters the fullscreen player at
+    /// the file; an audio playlist starts the audio channel there, staying in Manager.
     func beginManagerPlayback(of playlist: Playlist, startingAt file: PlaylistFile) {
-        switch managerScope {
-        case .visual: beginPlayback(of: playlist, startingAt: file)
-        case .audio: coordinator.play(playlist, startingAt: file)
+        if playlist.mediaType == .audio {
+            coordinator.play(playlist, startingAt: file)
+        } else {
+            beginPlayback(of: playlist, startingAt: file)
         }
     }
 
@@ -584,30 +516,21 @@ final class AppState {
         }
         rebuildTagFrequency(playlist)
 
-        activate(playlist)
         // Player-mode creation comes from a playback overlay (the visual Files & Tags or the
-        // audio overlay) and starts the new playlist playing; Manager-mode creation selects it
-        // stopped. Only one playlist is ever live per channel, so a stopped audio creation still
-        // releases whatever audio playlist was playing behind the new selection.
+        // audio overlay) and starts the new playlist playing; Manager-mode creation loads it
+        // stopped. A player-mode creation only *remembers* the playlist (so stopping back into
+        // Manager returns to whatever was being managed), while a management creation loads it
+        // into the managed slot and switches the scope to its type.
         let startsPlaying = mode == .player
-        // The Manager scope only follows the new playlist's type when creating *for management*
-        // (Manager or Welcome). A player-mode creation leaves the scope alone, so stopping back
-        // into Manager returns to whatever was being managed rather than dropping into the new
-        // playlist's scope.
-        if mediaType == .audio {
-            if !startsPlaying { managerScope = .audio }
-            if startsPlaying {
-                coordinator.play(playlist)
-            } else if let live = coordinator.audioPlaylist {
-                coordinator.stop(live)
-            }
-            recomputeAudioFilteredFiles()
+        if startsPlaying {
+            remember(playlist)
+            coordinator.play(playlist)
         } else {
-            if !startsPlaying { managerScope = .visual }
-            selectedPlaylist = playlist
-            activeServiceFilter = nil
-            if startsPlaying { coordinator.play(playlist) }
-            recomputeFilteredFiles()
+            // Only one audio playlist is ever live; releasing the channel keeps a background
+            // playlist from playing on behind a stopped audio creation.
+            if mediaType == .audio, let live = coordinator.audioPlaylist { coordinator.stop(live) }
+            loadManaged(playlist)
+            managerSelection = []
         }
         if mode == .welcome { mode = .manager }
         return playlist
@@ -623,24 +546,28 @@ final class AppState {
     /// Makes `playlist` the Manager selection, activates it for its channel, and
     /// kicks off a background re-scan to pick up files added or removed on disk.
     func select(_ playlist: Playlist) {
-        let isNewSelection = selectedPlaylist !== playlist
-        if isNewSelection { selectedFileIDs = [] }
-        selectedPlaylist = playlist
-        activeServiceFilter = nil   // service filters don't carry across playlists
-        activate(playlist)
-        recomputeFilteredFiles()    // show the restored per-playlist filter at once
-        // Highlight where playback will resume and scroll the list to it. Selecting
-        // the already-current playlist snaps the highlight back to the playing file —
-        // the one way to do so without leaving the playlist. Skipped only when the
-        // resume file is filtered out (or none has played yet).
+        let isNewSelection = managedPlaylist !== playlist
+        if isNewSelection {
+            managerSelection = []
+            // Selecting a different audio playlist swaps the audio channel slot; only one audio
+            // playlist is ever live, so release the channel to keep a background one from playing
+            // on behind the new selection. (Visual playback is stopped while browsing in Manager.)
+            if playlist.mediaType == .audio, let live = coordinator.audioPlaylist, live !== playlist {
+                coordinator.stop(live)
+            }
+        }
+        loadManaged(playlist)   // managed slot + scope, restoring the persisted filter at once
+        // Highlight where playback will resume and scroll the list to it. Re-selecting the managed
+        // playlist snaps the highlight back to the playing file — the one way to do so without
+        // leaving it. Skipped when the resume file is filtered out (or none has played yet).
         if let currentID = playlist.currentFileID,
-           filteredFiles.contains(where: { $0.id == currentID }) {
-            selectedFileIDs = [currentID]
+           playlist.displaySequence.contains(where: { $0.id == currentID }) {
+            managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
-        // Re-read the folder on every (re-)select — this is the automatic Update, the reason
-        // there's no dedicated control: re-clicking the open playlist re-scans and re-centers.
-        // An in-flight scan is cancelled first so rapid clicks don't pile up.
+        // Re-read the folder on every (re-)select — the automatic Update, the reason there's no
+        // dedicated control: re-clicking the open playlist re-scans and re-centers. An in-flight
+        // scan is cancelled first so rapid clicks don't pile up.
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
     }
@@ -656,43 +583,16 @@ final class AppState {
         if isNewSelection { coordinator.play(playlist) }
     }
 
-    /// The extended audio overlay's analog of `select(_:)`: makes `playlist` the active audio
-    /// playlist, restores its filter, and re-reads its folder (every click — the same automatic
-    /// Update the Manager does). A genuinely new selection also starts it playing; re-selecting
-    /// the active one re-scans and re-centers without restarting playback.
+    /// The audio overlay's play-on-select: loads `playlist` into the audio channel slot and
+    /// re-reads its folder (every click — the same automatic Update the Manager does). A
+    /// genuinely new selection also starts it playing; re-selecting the loaded one re-scans and
+    /// re-centers without restarting playback. Independent of the managed slot — the overlay
+    /// drives the audio channel, not the Manager.
     func selectAudioPlaylist(_ playlist: Playlist) {
-        let isNewSelection = activeAudioPlaylist !== playlist
-        activate(playlist)
-        recomputeAudioFilteredFiles()
+        let isNewSelection = audioChannelSlot !== playlist
+        remember(playlist)   // audioChannelSlot = playlist
         if isNewSelection { coordinator.play(playlist) }
         audioScrollToken += 1   // re-center the overlay file list on the current track
-        updateTask?.cancel()
-        updateTask = Task { await update(playlist) }
-    }
-
-    /// The Manager's analog of `selectAudioPlaylist(_:)` for the audio scope sidebar:
-    /// makes `playlist` the active audio playlist and re-scans its folder, but — unlike the
-    /// overlay's play-on-select — does **not** start playback. Choosing a *different* playlist
-    /// stops whichever audio playlist is live, so only one is ever playing and the newly
-    /// selected one becomes active and stopped. Re-selecting the active playlist re-scans and
-    /// re-centers without disturbing its playback.
-    func selectAudioInManager(_ playlist: Playlist) {
-        let isNewSelection = activeAudioPlaylist !== playlist
-        if isNewSelection {
-            audioSelectedFileIDs = []
-            // Only one audio playlist is ever live; releasing the channel here keeps a
-            // background playlist from playing on behind the new selection.
-            if let live = coordinator.audioPlaylist { coordinator.stop(live) }
-        }
-        activate(playlist)
-        recomputeAudioFilteredFiles()
-        // Highlight where playback would resume, mirroring the visual `select`. Skipped when
-        // the resume file is filtered out of view (or none has played yet).
-        if let currentID = playlist.currentFileID,
-           audioFilteredFiles.contains(where: { $0.id == currentID }) {
-            audioSelectedFileIDs = [currentID]
-        }
-        audioScrollToken += 1
         updateTask?.cancel()
         updateTask = Task { await update(playlist) }
     }
@@ -726,18 +626,18 @@ final class AppState {
         // Manager mode) would otherwise leave the engine on files about to be deleted, and
         // its next advance would dereference a destroyed model.
         coordinator.stop(playlist)
-        if selectedPlaylist === playlist { selectedPlaylist = nil }
-        if activeVideoPlaylist === playlist {
-            activeVideoPlaylist = nil
-            appStateModel.activeVideoPlaylistId = nil
+        if managedPlaylist === playlist { managedPlaylist = nil }
+        if lastActiveVideoPlaylist === playlist {
+            lastActiveVideoPlaylist = nil
+            appStateModel.lastActiveVideoPlaylistId = nil
         }
-        if activeImagePlaylist === playlist {
-            activeImagePlaylist = nil
-            appStateModel.activeImagePlaylistId = nil
+        if lastActiveImagePlaylist === playlist {
+            lastActiveImagePlaylist = nil
+            appStateModel.lastActiveImagePlaylistId = nil
         }
-        if activeAudioPlaylist === playlist {
-            activeAudioPlaylist = nil
-            appStateModel.activeAudioPlaylistId = nil
+        if audioChannelSlot === playlist {
+            audioChannelSlot = nil
+            appStateModel.audioChannelPlaylistId = nil
         }
         let mediaType = playlist.mediaType
         let id = playlist.id
@@ -758,8 +658,6 @@ final class AppState {
         modelContext.delete(playlist)
         deletingPlaylistIDs.remove(id)
         compactSortOrder(for: mediaType)
-        recomputeFilteredFiles()
-        recomputeAudioFilteredFiles()
     }
 
     /// Reorders the playlists of one section. `ordered` is the section's current
@@ -822,8 +720,7 @@ final class AppState {
         if let candidate = audioDeleteCandidate, removedIDs.contains(candidate.id) {
             audioDeleteCandidate = nil
         }
-        selectedFileIDs.subtract(removedIDs)
-        audioSelectedFileIDs.subtract(removedIDs)
+        managerSelection.subtract(removedIDs)
         // Derive the next sort order from the files that survive this delta, not from the
         // post-detach `playlist.files` — so a still-counted to-be-removed file can't lend
         // its `sortOrder` to a new file and collide, breaking stable playback ordering.
@@ -849,7 +746,6 @@ final class AppState {
         }
 
         rebuildTagFrequency(playlist)
-        recomputeIfSelected(playlist)
         // A re-scan can drop the audio channel's playing track; advance off it just like a
         // delete does, so the engine never holds a file that's no longer in the playlist.
         if coordinator.audioPlaylist === playlist { coordinator.reconcileAudioSelection() }
@@ -882,7 +778,6 @@ final class AppState {
 
         if let error = await applyRename(file, to: newName, in: folderURL) { return error }
         rebuildTagFrequency(playlist)
-        recomputeIfSelected(playlist)
         return nil
     }
 
@@ -931,13 +826,11 @@ final class AppState {
 
         for url in result.trashed {
             guard let file = byURL[url] else { continue }
-            selectedFileIDs.remove(file.id)
-            audioSelectedFileIDs.remove(file.id)
+            managerSelection.remove(file.id)
             file.playlist = nil
             modelContext.delete(file)
         }
         rebuildTagFrequency(playlist)
-        recomputeIfSelected(playlist)
 
         guard result.failed.isEmpty else {
             return "\(result.failed.count) file(s) couldn't be moved to the Trash."
@@ -1018,7 +911,6 @@ final class AppState {
         let skipped = playlist.files.filter(\.isSkipped)
         for (index, file) in playable.enumerated() { file.sortOrder = index }
         for (offset, file) in skipped.enumerated() { file.sortOrder = playable.count + offset }
-        recomputeIfSelected(playlist)
     }
 
     /// Reveals a file in the Finder.
@@ -1067,34 +959,30 @@ final class AppState {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    /// Starts a playlist playing through the coordinator. Visual playlists take the
-    /// window into Player mode; an audio playlist plays in place (its overlay UI
-    /// arrives in Task 15) and does not change mode.
+    /// Starts a playlist playing through the coordinator. A visual playlist takes the window
+    /// into Player mode and becomes the managed playlist; an audio playlist plays on its
+    /// independent channel without changing mode or the managed (visual) slot.
     func beginPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
-        // Audio is an independent channel managed in the extended overlay, so starting
-        // it must not disturb the Manager's selected video/image playlist.
+        // Audio is an independent channel driven from its overlay/inlet, so starting it must
+        // not disturb the managed visual playlist or the scope.
         if playlist.mediaType == .audio {
-            activate(playlist)
+            remember(playlist)   // audioChannelSlot = playlist
             coordinator.play(playlist, startingAt: file)
-            recomputeAudioFilteredFiles()
             return
         }
-        if selectedPlaylist !== playlist { selectedFileIDs = [] }
-        activate(playlist)
-        selectedPlaylist = playlist
-        activeServiceFilter = nil           // service filters don't carry across playlists
-        recomputeFilteredFiles()            // so Manager and Files & Tags show this playlist
+        if managedPlaylist !== playlist { managerSelection = [] }
+        loadManaged(playlist)
         coordinator.play(playlist, startingAt: file)
         mode = .player
     }
 
-    /// Plays the Manager file-list selection (the `[enter]` hotkey): begins playback of
-    /// the selected playlist starting at the first selected file. Returns whether there
-    /// was a selection to play, so the key only consumes when it acts.
+    /// Plays the Manager file-list selection (the `[enter]` hotkey): begins playback of the
+    /// managed playlist starting at the first selected file. Returns whether there was a
+    /// selection to play, so the key only consumes when it acts.
     @discardableResult
     func playSelectedFile() -> Bool {
-        guard let playlist = selectedPlaylist,
-              let file = filteredFiles.first(where: { selectedFileIDs.contains($0.id) }) else { return false }
+        guard let playlist = managedPlaylist,
+              let file = managerFiles.first(where: { managerSelection.contains($0.id) }) else { return false }
         beginPlayback(of: playlist, startingAt: file)
         return true
     }
@@ -1114,7 +1002,7 @@ final class AppState {
     /// `[delete]`). Returns whether there was anything selected to delete.
     @discardableResult
     func requestDeleteSelectedFiles() -> Bool {
-        let files = filteredFiles.filter { selectedFileIDs.contains($0.id) }
+        let files = managerFiles.filter { managerSelection.contains($0.id) }
         guard !files.isEmpty else { return false }
         pendingManagerDelete = files
         return true
@@ -1213,7 +1101,7 @@ final class AppState {
     /// Removes the pending tag from every file in the selected playlist, surfacing any
     /// failure through `tagRemovalError`.
     func confirmTagRemoval() {
-        guard let tag = pendingTagRemoval, let playlist = managerPlaylist else {
+        guard let tag = pendingTagRemoval, let playlist = managedPlaylist else {
             pendingTagRemoval = nil
             return
         }
@@ -1225,16 +1113,16 @@ final class AppState {
     /// as it lays out, so keyboard navigation can step in 2D. The list is one column.
     var fileGridColumns: Int = 1
 
-    /// Moves the Manager file-list selection one step in `direction` through
-    /// `filteredFiles`, collapsing any multi-selection to a single row. In list mode
-    /// it is a vertical 1-D walk; in gallery mode left/right step by one and up/down
-    /// step by a full row. Returns whether the key was consumed (so no system beep).
+    /// Moves the Manager file-list selection one step in `direction` through `managerFiles`,
+    /// collapsing any multi-selection to a single row. In list mode it is a vertical 1-D walk;
+    /// in gallery mode left/right step by one and up/down step by a full row. Returns whether
+    /// the key was consumed (so no system beep).
     @discardableResult
     func moveFileSelection(_ direction: MoveDirection) -> Bool {
-        let files = filteredFiles
+        let files = managerFiles
         guard !files.isEmpty else { return false }
 
-        let gallery = selectedPlaylist?.preferences.viewMode == .gallery
+        let gallery = managedPlaylist?.preferences.viewMode == .gallery
         let columns = gallery ? max(1, fileGridColumns) : 1
         let step: Int
         switch direction {
@@ -1248,16 +1136,16 @@ final class AppState {
         // it (so it never beeps) without disturbing the selection.
         guard step != 0 else { return true }
 
-        let selected = files.indices.filter { selectedFileIDs.contains(files[$0].id) }
+        let selected = files.indices.filter { managerSelection.contains(files[$0].id) }
         if let edge = (step >= 0 ? selected.max() : selected.min()) {
             let target = edge + step
             // Stay within bounds; ignore a move that would fall off the grid (still
             // consumed, so the key never beeps).
             if target >= 0, target < files.count {
-                selectedFileIDs = [files[target].id]
+                managerSelection = [files[target].id]
             }
         } else {
-            selectedFileIDs = [files[step >= 0 ? 0 : files.count - 1].id]
+            managerSelection = [files[step >= 0 ? 0 : files.count - 1].id]
         }
         return true
     }
@@ -1299,8 +1187,9 @@ final class AppState {
         }
     }
 
-    /// Stops the visual playlist and returns the window to Manager mode (the pause
-    /// overlay's Stop, the `[s]`/`[delete]`-after exits, and the Back control).
+    /// Stops the visual playlist and returns the window to Manager mode (the pause overlay's
+    /// Stop, the `[s]`/`[delete]`-after exits, and the Back control). Stopping the transient
+    /// visual channel ejects its playlist into the managed slot, switching scope to its type.
     func stopAndExitPlayer() {
         let visual = coordinator.visualPlaylist
         // Remember the file that was on screen so Manager reopens with it selected and
@@ -1309,11 +1198,9 @@ final class AppState {
         if let visual { coordinator.stop(visual) }
         coordinator.unsuppress()
         playerDeleteCandidate = nil
-        if let visual {
-            selectedPlaylist = visual
-            recomputeFilteredFiles()
-        }
-        if let lastFileID { selectedFileIDs = [lastFileID] }
+        if let visual { loadManaged(visual) }
+        if let lastFileID { managerSelection = [lastFileID] }
+        scrollSelectionToken += 1
         mode = .manager
     }
 
@@ -1347,7 +1234,6 @@ final class AppState {
         if collides { return "A tag named “\(newTag)” already exists." }
         let error = await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
         rewriteTagInFilters(playlist) { TagParser.sameTag($0, oldTag) ? newTag : $0 }
-        recomputeIfSelected(playlist)
         return error
     }
 
@@ -1356,7 +1242,6 @@ final class AppState {
     func removeTagAcrossPlaylist(_ playlist: Playlist, tag: String) async -> String? {
         let error = await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
         removeTagFromFilters(playlist, tag: tag)
-        recomputeIfSelected(playlist)
         return error
     }
 
@@ -1398,27 +1283,27 @@ final class AppState {
             }
         }
         rebuildTagFrequency(playlist)
-        recomputeIfSelected(playlist)
         return firstError
     }
 
     // MARK: - Filtering
+    //
+    // Each method edits the *given* playlist's persisted filter state — the tag filter and the
+    // triage (service) filter alike — and the surfaces re-derive (they read the model). The one
+    // explicit side effect is the live-channel reconcile: if the edited playlist is currently
+    // playing and its playing file fell out of the filter, the engine is advanced to a match.
 
-    /// Toggles a service filter on/off. Service filters are mutually exclusive and,
-    /// while active, override the playlist's tag filter.
-    func toggleServiceFilter(_ filter: ServiceFilter) {
-        activeServiceFilter = (activeServiceFilter == filter) ? nil : filter
-        switch managerScope {
-        case .visual: filterDidChange()
-        case .audio: audioFilterDidChange()
-        }
+    /// Toggles a triage filter on `playlist`. Triage filters are mutually exclusive and, while
+    /// set, override the tag filter.
+    func toggleServiceFilter(_ filter: ServiceFilter, on playlist: Playlist) {
+        playlist.filterState.serviceFilter = (playlist.filterState.serviceFilter == filter) ? nil : filter
+        filterChanged(on: playlist)
     }
 
-    /// Adds or removes a tag from the selected playlist's tag filter. Editing the
-    /// tag filter clears any active service filter.
-    func toggleFilterTag(_ tag: String) {
-        guard let playlist = selectedPlaylist else { return }
-        activeServiceFilter = nil
+    /// Adds or removes a tag from `playlist`'s tag filter. Editing the tag filter clears any
+    /// active triage filter.
+    func toggleFilterTag(_ tag: String, on playlist: Playlist) {
+        playlist.filterState.serviceFilter = nil
         var tags = playlist.filterState.selectedTags
         if let index = tags.firstIndex(where: { TagParser.sameTag($0, tag) }) {
             tags.remove(at: index)
@@ -1426,52 +1311,39 @@ final class AppState {
             tags.append(tag)
         }
         playlist.filterState.selectedTags = tags
-        filterDidChange()
+        filterChanged(on: playlist)
     }
 
-    /// The selected playlist's AND/OR filter operator, as one binding source for the
-    /// mode picker: the read and the write both run through here (the write recomputes
-    /// the filtered files), so the control can't display one value while writing another.
-    var filterMode: FilterMode {
-        get { selectedPlaylist?.filterState.filterMode ?? .and }
-        set { setFilterMode(newValue) }
-    }
-
-    /// Sets the AND/OR operator on the selected playlist's tag filter.
-    func setFilterMode(_ mode: FilterMode) {
-        guard let playlist = selectedPlaylist else { return }
+    /// Sets the AND/OR operator on `playlist`'s tag filter.
+    func setFilterMode(_ mode: FilterMode, on playlist: Playlist) {
         playlist.filterState.filterMode = mode
-        filterDidChange()
+        filterChanged(on: playlist)
     }
 
-    /// Clears the selected playlist's tag filter.
-    func clearTagFilter() {
-        guard let playlist = selectedPlaylist else { return }
+    /// Clears `playlist`'s tag filter.
+    func clearTagFilter(on playlist: Playlist) {
         playlist.filterState.selectedTags = []
-        filterDidChange()
+        filterChanged(on: playlist)
     }
 
-    /// Remembers the current tag filter as a saved search (most-recent first,
-    /// unique by tag set + operator, capped at 10). No-op when the filter is empty.
-    func saveCurrentSearch() {
-        guard let playlist = selectedPlaylist, !playlist.filterState.isEmpty else { return }
-        let search = SavedSearch(tags: playlist.filterState.selectedTags, mode: playlist.filterState.filterMode)
-        promote(search, in: playlist)
+    /// Remembers `playlist`'s current tag filter as a saved search (most-recent first, unique by
+    /// tag set + operator, capped at 10). No-op when the filter is empty.
+    func saveCurrentSearch(on playlist: Playlist) {
+        guard !playlist.filterState.isEmpty else { return }
+        promote(SavedSearch(tags: playlist.filterState.selectedTags, mode: playlist.filterState.filterMode), in: playlist)
     }
 
-    /// Re-applies a saved search and moves it to the top of the recents.
-    func applySavedSearch(_ search: SavedSearch) {
-        guard let playlist = selectedPlaylist else { return }
-        activeServiceFilter = nil
+    /// Re-applies a saved search on `playlist` and moves it to the top of the recents.
+    func applySavedSearch(_ search: SavedSearch, on playlist: Playlist) {
+        playlist.filterState.serviceFilter = nil
         playlist.filterState.selectedTags = search.tags
         playlist.filterState.filterMode = search.mode
         promote(search, in: playlist)
-        filterDidChange()
+        filterChanged(on: playlist)
     }
 
-    /// Removes a saved search from the recents.
-    func removeSavedSearch(_ search: SavedSearch) {
-        guard let playlist = selectedPlaylist else { return }
+    /// Removes a saved search from `playlist`'s recents.
+    func removeSavedSearch(_ search: SavedSearch, on playlist: Playlist) {
         playlist.savedSearches.removeAll { $0.matches(search) }
     }
 
@@ -1481,114 +1353,12 @@ final class AppState {
         playlist.savedSearches = Array(searches.prefix(10))
     }
 
-    // MARK: - Audio overlay filter
-    //
-    // The extended audio overlay filters the active audio playlist independently of the
-    // Manager's selected video/image playlist. Audio has no service filters, so these
-    // edit the playlist's persisted tag filter directly, refresh `audioFilteredFiles`,
-    // and keep playback on a track that still matches.
-
-    /// The active audio playlist's AND/OR filter operator, as one binding source.
-    var audioFilterMode: FilterMode {
-        get { activeAudioPlaylist?.filterState.filterMode ?? .and }
-        set {
-            guard let playlist = activeAudioPlaylist else { return }
-            playlist.filterState.filterMode = newValue
-            audioFilterDidChange()
-        }
-    }
-
-    /// Adds or removes a tag from the active audio playlist's tag filter.
-    func toggleAudioFilterTag(_ tag: String) {
-        guard let playlist = activeAudioPlaylist else { return }
-        var tags = playlist.filterState.selectedTags
-        if let index = tags.firstIndex(where: { TagParser.sameTag($0, tag) }) {
-            tags.remove(at: index)
-        } else {
-            tags.append(tag)
-        }
-        playlist.filterState.selectedTags = tags
-        audioFilterDidChange()
-    }
-
-    /// Clears the active audio playlist's tag filter.
-    func clearAudioFilter() {
-        guard let playlist = activeAudioPlaylist else { return }
-        playlist.filterState.selectedTags = []
-        audioFilterDidChange()
-    }
-
-    /// Remembers the active audio playlist's current tag filter as a saved search.
-    func saveAudioSearch() {
-        guard let playlist = activeAudioPlaylist, !playlist.filterState.isEmpty else { return }
-        promote(SavedSearch(tags: playlist.filterState.selectedTags, mode: playlist.filterState.filterMode), in: playlist)
-    }
-
-    /// Re-applies a saved search on the active audio playlist, moving it to the top.
-    func applyAudioSearch(_ search: SavedSearch) {
-        guard let playlist = activeAudioPlaylist else { return }
-        playlist.filterState.selectedTags = search.tags
-        playlist.filterState.filterMode = search.mode
-        promote(search, in: playlist)
-        audioFilterDidChange()
-    }
-
-    /// Removes a saved search from the active audio playlist's recents.
-    func removeAudioSearch(_ search: SavedSearch) {
-        activeAudioPlaylist?.savedSearches.removeAll { $0.matches(search) }
-    }
-
-    /// Shared epilogue for audio filter mutations: refresh the cached list and keep the
-    /// playing track on a file that still matches (jumping to the first match if not).
-    private func audioFilterDidChange() {
-        recomputeAudioFilteredFiles()
-        coordinator.reconcileAudioSelection()
-    }
-
-    /// Recomputes `filteredFiles` for the current selection and active filter.
-    func recomputeFilteredFiles() {
-        guard let playlist = selectedPlaylist else { filteredFiles = []; return }
-        filteredFiles = computeFilteredFiles(for: playlist, applyingServiceFilter: managerScope == .visual)
-    }
-
-    private func recomputeIfSelected(_ playlist: Playlist) {
-        if playlist === selectedPlaylist { recomputeFilteredFiles() }
-        if playlist === activeAudioPlaylist { recomputeAudioFilteredFiles() }
-    }
-
-    /// Recomputes `audioFilteredFiles` for the active audio playlist and its tag filter.
-    /// In the audio scope a service filter (from the center notices) overrides the tag
-    /// filter, exactly as it does for the visual scope; the player overlay's audio list
-    /// (visual scope) only ever shows the tag-filtered playback sequence.
-    func recomputeAudioFilteredFiles() {
-        guard let playlist = activeAudioPlaylist else { audioFilteredFiles = []; return }
-        audioFilteredFiles = computeFilteredFiles(for: playlist, applyingServiceFilter: managerScope == .audio)
-    }
-
-    /// Shared epilogue for tag/service filter mutations: refresh the cached file
-    /// list and, in Player mode, keep the player on a file that still matches.
-    private func filterDidChange() {
-        recomputeFilteredFiles()
-        reconcilePlayerSelection()
-    }
-
-    /// After a filter change in Player mode, keeps the player on a file that still
-    /// matches: if the playing file was filtered out, the coordinator jumps to the
-    /// first remaining file (or none, leaving the player on a placeholder).
-    private func reconcilePlayerSelection() {
-        if mode == .player { coordinator.reconcileVisualSelection() }
-    }
-
-    private func computeFilteredFiles(for playlist: Playlist, applyingServiceFilter: Bool) -> [PlaylistFile] {
-        // A service filter, while active, replaces the tag filter entirely — but only for
-        // the scope it belongs to, so the other scope's cached list keeps its tag filter.
-        if applyingServiceFilter, let service = activeServiceFilter {
-            return playlist.files(matching: service)
-        }
-
-        // No service filter: playback order (playable files matching the persisted
-        // tag filter) is exactly what the file list shows.
-        return playlist.playbackSequence
+    /// The one explicit effect of a filter edit (the derivation boundary): if `playlist` is on a
+    /// live channel and its playing file fell out of the new filter, advance the engine to a file
+    /// that still matches. Every other surface re-derives from the model on its own.
+    private func filterChanged(on playlist: Playlist) {
+        if coordinator.visualPlaylist === playlist { coordinator.reconcileVisualSelection() }
+        if coordinator.audioPlaylist === playlist { coordinator.reconcileAudioSelection() }
     }
 
     private func message(for error: FileSystemError) -> String {

@@ -23,7 +23,7 @@ struct AudioOverlay: View {
     @Environment(OverlayManager.self) private var overlays
 
     private var isExpanded: Bool { overlays.active.contains(.audioExtended) }
-    private var activePlaylist: Playlist? { appState.activeAudioPlaylist }
+    private var activePlaylist: Playlist? { appState.audioChannelSlot }
 
     /// The audio channel's wiring for the shared library surface: lists audio playlists,
     /// plays on select, and routes deletes/rename errors to the audio alerts the overlay hosts.
@@ -31,7 +31,7 @@ struct AudioOverlay: View {
         LibraryContext(
             mediaType: .audio,
             activePlaylist: activePlaylist,
-            files: appState.audioFilteredFiles,
+            files: appState.audioChannelFiles,
             currentFile: appState.currentAudioFile,
             scrollTrigger: appState.audioScrollToken,
             tagAutoFocus: false,

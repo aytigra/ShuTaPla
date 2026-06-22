@@ -47,7 +47,7 @@ struct FilesTagsOverlayView: View {
         LibraryContext(
             mediaType: playlist.mediaType,
             activePlaylist: playlist,
-            files: appState.filteredFiles,
+            files: appState.visualChannelFiles,
             currentFile: appState.currentVisualFile,
             scrollTrigger: appState.scrollSelectionToken,
             tagAutoFocus: true,

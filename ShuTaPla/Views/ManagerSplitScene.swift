@@ -392,7 +392,8 @@ private struct ScopeTabs: View {
 
     var body: some View {
         HStack(spacing: chrome.sidebarCollapsed ? 6 : 2) {
-            ScopeTabButton(scope: .visual, title: "Visual", systemImage: "photo.stack")
+            ScopeTabButton(scope: .image, title: "Image", systemImage: "photo.stack")
+            ScopeTabButton(scope: .video, title: "Video", systemImage: "film.stack")
             ScopeTabButton(scope: .audio, title: "Audio", systemImage: "music.note.square.stack")
         }
     }
@@ -454,12 +455,12 @@ private struct ScopeTabButton: View {
 
     private func activate() {
         if chrome.sidebarCollapsed {
-            appState.managerScope = scope
+            appState.switchScope(to: scope)
             chrome.sidebarCollapsed = false
         } else if appState.managerScope == scope {
             chrome.sidebarCollapsed = true
         } else {
-            appState.managerScope = scope
+            appState.switchScope(to: scope)
         }
     }
 }
@@ -485,7 +486,7 @@ private struct ManagerTitleLabel: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Text(appState.managerPlaylist?.name ?? "ShuTaPla")
+        Text(appState.managedPlaylist?.name ?? "ShuTaPla")
             .font(.headline)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -500,14 +501,10 @@ private struct CenterActionsBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            switch appState.managerScope {
-            case .visual:
-                if let playlist = appState.selectedPlaylist {
-                    visualActions(playlist)
-                }
-            case .audio:
-                if let playlist = appState.activeAudioPlaylist {
-                    audioActions(playlist)
+            if let playlist = appState.managedPlaylist {
+                switch appState.managerScope {
+                case .image, .video: visualActions(playlist)
+                case .audio: audioActions(playlist)
                 }
             }
         }
@@ -519,13 +516,16 @@ private struct CenterActionsBar: View {
     private func visualActions(_ playlist: Playlist) -> some View {
         @Bindable var playlist = playlist
 
-        Button {
-            appState.beginPlayback(of: playlist)
-        } label: {
-            Label("Play", systemImage: "play.fill")
+        // The skipped triage filter leaves no playable sequence, so the Play affordance is hidden.
+        if playlist.filterState.serviceFilter != .skipped {
+            Button {
+                appState.beginPlayback(of: playlist)
+            } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            .disabled(!playlist.hasPlaybackFiles)
+            .help("Play")
         }
-        .disabled(!playlist.files.contains { !$0.isSkipped })
-        .help("Play")
 
         Button {
             appState.reshuffle(playlist)
@@ -584,7 +584,7 @@ private struct ManageTagsButton: View {
         .buttonStyle(.bordered)
         .labelStyle(.iconOnly)
         .tint(chrome.managingTags ? .accentColor : nil)
-        .disabled(appState.managerPlaylist == nil)
+        .disabled(appState.managedPlaylist == nil)
         .help(chrome.managingTags ? "Edit selected files' tags" : "Manage playlist tags")
     }
 }

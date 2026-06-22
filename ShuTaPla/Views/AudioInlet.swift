@@ -41,6 +41,8 @@ struct AudioTransport: View {
             controlButton(playlist.playbackState == .playing ? "pause.fill" : "play.fill") {
                 coordinator.togglePlayback(playlist)
             }
+            // The skipped triage filter leaves no playable track, so starting playback is a no-op.
+            .disabled(playlist.playbackState != .playing && !playlist.hasPlaybackFiles)
             if isLive {
                 controlButton("stop.fill") { coordinator.stop(playlist) }
                 controlButton("forward.fill") { coordinator.next(playlist) }
@@ -111,7 +113,7 @@ struct AudioInlet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let audio = appState.activeAudioPlaylist {
+            if let audio = appState.audioChannelSlot {
                 active(audio)
             } else {
                 idle

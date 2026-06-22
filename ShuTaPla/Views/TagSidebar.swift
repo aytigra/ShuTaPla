@@ -17,7 +17,7 @@ struct TagSidebar: View {
     @Binding var managingTags: Bool
 
     var body: some View {
-        if let playlist = appState.managerPlaylist {
+        if let playlist = appState.managedPlaylist {
             if managingTags {
                 PlaylistTagsView(playlist: playlist)
             } else {
@@ -42,7 +42,7 @@ struct TagSidebar: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Above the editor so the filter's floating tag dropdown overlays it.
-                FilterBar(scope: .manager, playlist: playlist)
+                FilterBar(playlist: playlist)
                     .zIndex(1)
                 Divider()
                 TagEditorView(playlist: playlist, files: selectedFiles(in: playlist))

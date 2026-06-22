@@ -131,11 +131,10 @@ import AppKit
                        router: router, overlay: overlay, closeSpy: closeSpy)
     }
 
-    /// One playlist of `type` selected in Manager mode with its filtered files
-    /// recomputed. Selection is set directly rather than via `select(_:)`, which
-    /// launches an un-awaited re-scan task that would outlive the in-memory container
-    /// and trap on a torn-down model. `configure` runs after selection and before the
-    /// recompute, for view-mode tweaks (e.g. gallery) that change what it produces.
+    /// One playlist of `type` managed in Manager mode. The managed slot is set directly
+    /// rather than via `select(_:)`, which launches an un-awaited re-scan task that would
+    /// outlive the in-memory container and trap on a torn-down model. `configure` runs after
+    /// the playlist is managed, for view-mode tweaks (e.g. gallery) that change the file list.
     private func managerFixture(
         _ type: MediaType, files: [String],
         configure: (AppState, Playlist) -> Void = { _, _ in }
@@ -146,9 +145,8 @@ import AppKit
         let playlist = makePlaylist(type, folder: folder, files: files, in: context)
         let appState = makeAppState(context)
         appState.mode = .manager
-        appState.selectedPlaylist = playlist
+        appState.managedPlaylist = playlist
         configure(appState, playlist)
-        appState.recomputeFilteredFiles()
         let closeSpy = CloseSpy()
         let overlay = MockOverlay()
         let router = makeRouter(appState, overlay: overlay, closeSpy: closeSpy)
@@ -465,18 +463,18 @@ import AppKit
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4", "3.mp4"])
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
+        let files = f.appState.managerFiles
         #expect(files.count == 3)
 
         // With nothing selected, the first arrow-down lands on the first row and is consumed.
         #expect(f.router.route(.arrowDown, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
 
         #expect(f.router.route(.arrowDown, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
 
         #expect(f.router.route(.arrowUp, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
     }
 
     @Test func galleryArrowsNavigateInTwoDimensions() throws {
@@ -487,27 +485,27 @@ import AppKit
         f.appState.fileGridColumns = 3
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
+        let files = f.appState.managerFiles
         #expect(files.count == 6)
 
         #expect(f.router.route(.arrowRight, rightOption: false))   // nothing selected → first
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
         #expect(f.router.route(.arrowRight, rightOption: false))   // step right by one
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
         #expect(f.router.route(.arrowDown, rightOption: false))    // down a row (+3 columns)
-        #expect(f.appState.selectedFileIDs == [files[4].id])
+        #expect(f.appState.managerSelection == [files[4].id])
         #expect(f.router.route(.arrowUp, rightOption: false))      // up a row (-3 columns)
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
         #expect(f.router.route(.arrowLeft, rightOption: false))    // step left by one
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
     }
 
     @Test func managerEnterPlaysSelectedFile() throws {
         let f = try managerFixture(.image, files: ["1.jpg", "2.jpg", "3.jpg"])
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
-        f.appState.selectedFileIDs = [files[1].id]
+        let files = f.appState.managerFiles
+        f.appState.managerSelection = [files[1].id]
 
         #expect(f.router.route(.enter, rightOption: false))
         #expect(f.appState.mode == .player)
@@ -539,7 +537,7 @@ import AppKit
 
     @Test func managerDeleteRequestsConfirmationForSelection() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.delete, rightOption: false))
@@ -556,7 +554,7 @@ import AppKit
     @Test func tagRemovalConfirmationPassesEnterEscToTheAlertAndSwallowsTheRest() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
         // A file is selected, so an unguarded `[enter]` would otherwise play it.
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         // The alert owns its keys: while it's up, `[enter]`/`[esc]` pass through to it
@@ -593,7 +591,7 @@ import AppKit
 
     @Test func playlistDeleteConfirmationHoldsKeyboardContext() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         f.appState.pendingPlaylistDelete = f.playlist

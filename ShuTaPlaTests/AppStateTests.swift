@@ -119,7 +119,7 @@ struct AppStateTests {
         #expect(playlist.files.count == 2)
         #expect(playlist.tagFrequency["beach"] == 1)
         #expect(appState.mode == .manager)
-        #expect(appState.activeVideoPlaylist === playlist)
+        #expect(appState.managedPlaylist === playlist)
 
         let persisted = try context.fetch(FetchDescriptor<Playlist>())
         #expect(persisted.count == 1)
@@ -247,26 +247,6 @@ struct AppStateTests {
         #expect(skipped.map(\.fileName) == ["c.jpg"])
     }
 
-    @Test func activateEnforcesVisualChannelExclusivity() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let video = Playlist(name: "V", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
-        let image = Playlist(name: "I", folderBookmark: Data(), folderPath: "/i", mediaType: .image)
-        context.insert(video)
-        context.insert(image)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-
-        appState.activate(video)
-        #expect(appState.activeVideoPlaylist === video)
-        #expect(appState.activeImagePlaylist == nil)
-
-        appState.activate(image)
-        #expect(appState.activeImagePlaylist === image)
-        #expect(appState.activeVideoPlaylist == nil)
-        #expect(appState.appStateModel.activeVideoPlaylistId == nil)
-        #expect(appState.appStateModel.activeImagePlaylistId == image.id)
-    }
-
     // MARK: - Manager operations (Task 5)
 
     @Test func selectActivatesAndSetsSelection() async throws {
@@ -277,8 +257,8 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
         appState.select(video)
-        #expect(appState.selectedPlaylist === video)
-        #expect(appState.activeVideoPlaylist === video)
+        #expect(appState.managedPlaylist === video)
+        #expect(appState.lastActiveVideoPlaylist === video)
 
         await appState.updateTask?.value  // let the background re-scan finish
     }
@@ -310,8 +290,8 @@ struct AppStateTests {
         await appState.delete(b)  // cancels the in-flight update before b is freed
         await appState.updateTask?.value
 
-        #expect(appState.selectedPlaylist == nil)
-        #expect(appState.activeVideoPlaylist == nil)
+        #expect(appState.managedPlaylist == nil)
+        #expect(appState.lastActiveVideoPlaylist == nil)
         let remaining = try context.fetch(FetchDescriptor<Playlist>())
         #expect(remaining.count == 2)
         #expect(a.sortOrder == 0)
@@ -519,14 +499,14 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.select(playlist)
 
-        appState.toggleFilterTag("beach")
-        #expect(Set(appState.filteredFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+        appState.toggleFilterTag("beach", on: playlist)
+        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
 
-        appState.toggleFilterTag("sun")  // AND beach + sun
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+        appState.toggleFilterTag("sun", on: playlist)  // AND beach + sun
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
 
-        appState.setFilterMode(.or)       // beach OR sun
-        #expect(Set(appState.filteredFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+        appState.setFilterMode(.or, on: playlist)       // beach OR sun
+        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
 
         await appState.updateTask?.value
     }
@@ -543,20 +523,20 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.select(playlist)
 
-        appState.toggleFilterTag("beach")
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+        appState.toggleFilterTag("beach", on: playlist)
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
 
-        appState.toggleServiceFilter(.untagged)  // overrides the tag filter
-        #expect(appState.filteredFiles.map(\.fileName) == ["b.mp4"])
+        appState.toggleServiceFilter(.untagged, on: playlist)  // overrides the tag filter
+        #expect(appState.managerFiles.map(\.fileName) == ["b.mp4"])
 
-        appState.toggleServiceFilter(.invalidTagging)  // mutually exclusive: replaces
-        #expect(appState.filteredFiles.map(\.fileName) == ["c.mp4"])
+        appState.toggleServiceFilter(.invalidTagging, on: playlist)  // mutually exclusive: replaces
+        #expect(appState.managerFiles.map(\.fileName) == ["c.mp4"])
 
-        appState.toggleServiceFilter(.skipped)
-        #expect(appState.filteredFiles.map(\.fileName) == ["x.jpg"])
+        appState.toggleServiceFilter(.skipped, on: playlist)
+        #expect(appState.managerFiles.map(\.fileName) == ["x.jpg"])
 
-        appState.toggleServiceFilter(.skipped)  // off → tag filter restored
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+        appState.toggleServiceFilter(.skipped, on: playlist)  // off → tag filter restored
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
 
         await appState.updateTask?.value
     }
@@ -578,15 +558,15 @@ struct AppStateTests {
         // no intermediate task is left running to touch a torn-down model after the body.
         appState.select(p1)
         await appState.updateTask?.value
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored filter
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored filter
 
         appState.select(p2)
         await appState.updateTask?.value
-        #expect(appState.filteredFiles.map(\.fileName) == ["c.mp4"])  // no filter
+        #expect(appState.managerFiles.map(\.fileName) == ["c.mp4"])  // no filter
 
         appState.select(p1)
         await appState.updateTask?.value
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])  // restored again
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored again
     }
 
     // MARK: - Tag editing (Task 7)
@@ -666,9 +646,9 @@ struct AppStateTests {
         appState.select(playlist)
 
         // Filter by "beach" and remember it as a saved search.
-        appState.toggleFilterTag("beach")
-        appState.saveCurrentSearch()
-        #expect(appState.filteredFiles.count == 2)
+        appState.toggleFilterTag("beach", on: playlist)
+        appState.saveCurrentSearch(on: playlist)
+        #expect(appState.managerFiles.count == 2)
 
         let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
 
@@ -677,7 +657,7 @@ struct AppStateTests {
         // at the now-nonexistent "beach", so the filtered list stays populated.
         #expect(playlist.filterState.selectedTags == ["shore"])
         #expect(playlist.savedSearches.first?.tags == ["shore"])
-        #expect(appState.filteredFiles.count == 2)
+        #expect(appState.managerFiles.count == 2)
 
         await appState.updateTask?.value
     }
@@ -699,10 +679,10 @@ struct AppStateTests {
             SavedSearch(tags: ["beach", "sun"], mode: .or),
         ]
 
-        appState.setFilterMode(.or)
-        appState.toggleFilterTag("beach")
-        appState.toggleFilterTag("sun")
-        #expect(appState.filteredFiles.count == 2)
+        appState.setFilterMode(.or, on: playlist)
+        appState.toggleFilterTag("beach", on: playlist)
+        appState.toggleFilterTag("sun", on: playlist)
+        #expect(appState.managerFiles.count == 2)
 
         await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
 
@@ -712,7 +692,7 @@ struct AppStateTests {
         #expect(playlist.savedSearches.count == 1)
         #expect(playlist.savedSearches.first?.tags == ["sun"])
         #expect(playlist.savedSearches.first?.mode == .or)
-        #expect(appState.filteredFiles.count == 1)   // only the file that still has "sun"
+        #expect(appState.managerFiles.count == 1)   // only the file that still has "sun"
 
         await appState.updateTask?.value
     }
@@ -756,19 +736,19 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.select(playlist)
 
-        appState.toggleFilterTag("beach")
-        appState.saveCurrentSearch()
-        appState.clearTagFilter()
-        appState.toggleFilterTag("sun")
-        appState.saveCurrentSearch()
+        appState.toggleFilterTag("beach", on: playlist)
+        appState.saveCurrentSearch(on: playlist)
+        appState.clearTagFilter(on: playlist)
+        appState.toggleFilterTag("sun", on: playlist)
+        appState.saveCurrentSearch(on: playlist)
 
         #expect(playlist.savedSearches.count == 2)
         #expect(playlist.savedSearches.first?.tags == ["sun"])
 
         // Re-applying the older one recalls it and moves it to the top (no dupe).
-        appState.applySavedSearch(SavedSearch(tags: ["beach"], mode: .and))
+        appState.applySavedSearch(SavedSearch(tags: ["beach"], mode: .and), on: playlist)
         #expect(playlist.filterState.selectedTags == ["beach"])
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
         #expect(playlist.savedSearches.count == 2)
         #expect(playlist.savedSearches.first?.tags == ["beach"])
 
@@ -848,15 +828,14 @@ struct AppStateTests {
         addFile("a.mp4", order: 0, to: playlist, in: context)
         addFile("b.mp4", order: 1, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = playlist
-        appState.recomputeFilteredFiles()
+        appState.managedPlaylist = playlist
 
         // List view (one column), nothing selected: a left/right key has no axis to
         // move along, so it is swallowed (no beep) without selecting a file.
         let consumed = appState.moveFileSelection(.left)
 
         #expect(consumed)
-        #expect(appState.selectedFileIDs.isEmpty)
+        #expect(appState.managerSelection.isEmpty)
     }
 
     @Test func moveFileSelectionClampsAtGridEdgesWithoutLosingSelection() throws {
@@ -868,26 +847,25 @@ struct AppStateTests {
         playlist.preferences.viewMode = .gallery
         for (i, name) in names.enumerated() { addFile(name, order: i, to: playlist, in: context) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = playlist
-        appState.recomputeFilteredFiles()
+        appState.managedPlaylist = playlist
         appState.fileGridColumns = 3
-        let files = appState.filteredFiles
+        let files = appState.managerFiles
 
         // Top-left cell selected: moving up (−3 → row −1) and left (−1 → off the row start)
         // both fall off the grid. The key is still consumed (no beep) but the selection
         // is held in place rather than cleared or wrapped.
-        appState.selectedFileIDs = [files[0].id]
+        appState.managerSelection = [files[0].id]
         #expect(appState.moveFileSelection(.up))
-        #expect(appState.selectedFileIDs == [files[0].id])
+        #expect(appState.managerSelection == [files[0].id])
         #expect(appState.moveFileSelection(.left))
-        #expect(appState.selectedFileIDs == [files[0].id])
+        #expect(appState.managerSelection == [files[0].id])
 
         // Bottom-right cell: moving down (+3) and right (+1) both run past the last index.
-        appState.selectedFileIDs = [files[5].id]
+        appState.managerSelection = [files[5].id]
         #expect(appState.moveFileSelection(.down))
-        #expect(appState.selectedFileIDs == [files[5].id])
+        #expect(appState.managerSelection == [files[5].id])
         #expect(appState.moveFileSelection(.right))
-        #expect(appState.selectedFileIDs == [files[5].id])
+        #expect(appState.managerSelection == [files[5].id])
     }
 
     @Test func saveCurrentSearchIsANoOpWithAnEmptyFilter() throws {
@@ -896,10 +874,10 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = playlist
+        appState.managedPlaylist = playlist
 
         // No tags selected → nothing to remember.
-        appState.saveCurrentSearch()
+        appState.saveCurrentSearch(on: playlist)
         #expect(playlist.savedSearches.isEmpty)
     }
 
@@ -909,14 +887,13 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = playlist
-        appState.recomputeFilteredFiles()
+        appState.managedPlaylist = playlist
 
         // Remember twelve distinct searches; only the ten most recent survive, newest first.
         for i in 0..<12 {
-            appState.clearTagFilter()
-            appState.toggleFilterTag("t\(i)")
-            appState.saveCurrentSearch()
+            appState.clearTagFilter(on: playlist)
+            appState.toggleFilterTag("t\(i)", on: playlist)
+            appState.saveCurrentSearch(on: playlist)
         }
 
         #expect(playlist.savedSearches.count == 10)
@@ -938,7 +915,7 @@ struct AppStateTests {
             delta: UpdateDelta(added: [], removedRelativePaths: ["a.mp4"])
         )
         let appState = AppState(modelContext: context, fileSystem: stub)
-        appState.selectedPlaylist = playlist
+        appState.managedPlaylist = playlist
         appState.pendingManagerDelete = [a]
 
         // The re-scan prunes "a.mp4"; the pending delete that targeted it must be
@@ -960,21 +937,20 @@ struct AppStateTests {
         addFile("3.mp3", order: 2, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        appState.activate(audio)
-        appState.recomputeAudioFilteredFiles()
-        #expect(appState.audioFilteredFiles.count == 3)
+        appState.remember(audio)   // occupy the audio channel slot; channel files derive from it
+        #expect(appState.audioChannelFiles.count == 3)
 
-        appState.toggleAudioFilterTag("jazz")
-        #expect(Set(appState.audioFilteredFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+        appState.toggleFilterTag("jazz", on: audio)
+        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
 
-        appState.toggleAudioFilterTag("mellow")             // AND jazz + mellow
-        #expect(appState.audioFilteredFiles.map(\.fileName) == ["1.mp3"])
+        appState.toggleFilterTag("mellow", on: audio)       // AND jazz + mellow
+        #expect(appState.audioChannelFiles.map(\.fileName) == ["1.mp3"])
 
-        appState.audioFilterMode = .or                      // jazz OR mellow
-        #expect(Set(appState.audioFilteredFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+        appState.setFilterMode(.or, on: audio)              // jazz OR mellow
+        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
 
-        appState.clearAudioFilter()
-        #expect(appState.audioFilteredFiles.count == 3)
+        appState.clearTagFilter(on: audio)
+        #expect(appState.audioChannelFiles.count == 3)
     }
 
     @Test func beginPlaybackOfAudioLeavesManagerSelectionUntouched() async throws {
@@ -990,13 +966,13 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         appState.select(video)
-        #expect(appState.selectedPlaylist === video)
+        #expect(appState.managedPlaylist === video)
 
         // Audio plays on its own independent channel: the Manager keeps showing the
         // video playlist and the window does not enter Player mode.
         appState.beginPlayback(of: audio)
-        #expect(appState.selectedPlaylist === video)
-        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.managedPlaylist === video)
+        #expect(appState.audioChannelSlot === audio)
         #expect(appState.mode == .manager)
 
         await appState.updateTask?.value
@@ -1073,7 +1049,7 @@ struct AppStateTests {
 
         let tokenBefore = appState.audioScrollToken
         appState.selectAudioPlaylist(audio)
-        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.audioChannelSlot === audio)
         #expect(appState.coordinator.audioPlaylist === audio)   // a new selection starts playing
         #expect(appState.audioScrollToken > tokenBefore)        // asks the file list to re-center
         await appState.updateTask?.value
@@ -1107,7 +1083,7 @@ struct AppStateTests {
         // Creating a playlist from the player-mode audio overlay (mode == .player) starts it
         // playing — and switching the audio channel stops the one that was live.
         appState.mode = .player
-        appState.managerScope = .visual   // managing visual; the player-mode create must not switch it
+        appState.switchScope(to: .image)   // browsing images; the player-mode create must not switch it
         let dirB = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dirB) }
         try Data().write(to: dirB.appending(path: "b.mp3"))
@@ -1115,10 +1091,10 @@ struct AppStateTests {
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
 
-        #expect(appState.activeAudioPlaylist === b)
+        #expect(appState.audioChannelSlot === b)
         #expect(appState.coordinator.audioPlaylist === b)   // the new playlist is what's playing
         #expect(a.playbackState == .stopped)                // the previous one stopped
-        #expect(appState.managerScope == .visual)           // scope unchanged, so Stop returns to visual
+        #expect(appState.managerScope == .image)            // scope unchanged by a player-mode create
     }
 
     @Test func addingAudioPlaylistInManagerModeSelectsStoppedAndStopsOld() async throws {
@@ -1147,7 +1123,8 @@ struct AppStateTests {
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
 
-        #expect(appState.activeAudioPlaylist === b)
+        #expect(appState.audioChannelSlot === b)
+        #expect(appState.managedPlaylist === b)              // managed in Manager-mode create
         #expect(appState.coordinator.audioPlaylist == nil)   // nothing left playing
         #expect(a.playbackState == .stopped)
         #expect(appState.managerScope == .audio)             // Manager-mode create switches scope
@@ -1245,8 +1222,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.activate(audio)
-        appState.recomputeAudioFilteredFiles()
+        appState.remember(audio)   // loads the audio channel slot without playing
 
         // Nothing is playing, so the engine holds no live track — yet the overlay still resolves
         // the current file from the playlist's persisted resume position, exactly as the Manager
@@ -1266,8 +1242,8 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.activate(audio)
-        appState.toggleAudioFilterTag("blues")   // a filter the resume track does not match
+        appState.remember(audio)
+        appState.toggleFilterTag("blues", on: audio)   // a filter the resume track does not match
 
         // Mirrors the Manager: when the remembered file is filtered out of view, there's
         // nothing to highlight or center on.
@@ -1308,10 +1284,10 @@ struct AppStateTests {
         #expect(appState.coordinator.audioPlaylist === a)
 
         // Switching to a different audio playlist in Manager stops the live one and leaves the
-        // new one active but stopped — only ever one audio playlist live.
-        appState.selectAudioInManager(b)
+        // new one managed but stopped — only ever one audio playlist live.
+        appState.select(b)
         #expect(a.playbackState == .stopped)
-        #expect(appState.activeAudioPlaylist === b)
+        #expect(appState.audioChannelSlot === b)
         #expect(b.playbackState == .stopped)
         #expect(appState.coordinator.audioPlaylist == nil)
 
@@ -1329,8 +1305,8 @@ struct AppStateTests {
         appState.beginPlayback(of: a)
         #expect(appState.coordinator.audioPlaylist === a)
 
-        // Re-selecting the already-active playlist re-scans and re-centers without stopping it.
-        appState.selectAudioInManager(a)
+        // Re-selecting the already-live playlist re-scans and re-centers without stopping it.
+        appState.select(a)
         #expect(appState.coordinator.audioPlaylist === a)
         #expect(a.playbackState == .playing)
 
@@ -1345,7 +1321,7 @@ struct AppStateTests {
 
         appState.startFirstAudioPlaylistOrAdd()
         #expect(appState.isImportingPlaylist)
-        #expect(appState.activeAudioPlaylist == nil)
+        #expect(appState.audioChannelSlot == nil)
     }
 
     @Test func inletPlayStartsTheFirstAudioPlaylistWhenSomeExist() throws {
@@ -1357,7 +1333,7 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         appState.startFirstAudioPlaylistOrAdd()
-        #expect(appState.activeAudioPlaylist === audio)
+        #expect(appState.audioChannelSlot === audio)
         #expect(appState.coordinator.audioPlaylist === audio)
         #expect(!appState.isImportingPlaylist)
     }
@@ -1369,7 +1345,7 @@ struct AppStateTests {
     // scope and makes it that scope's selection. No engine: a visual create stays off libmpv,
     // and an audio create activates the playlist without starting it.
 
-    @Test func creatingVisualPlaylistSwitchesToVisualScopeAndSelectsIt() async throws {
+    @Test func creatingVisualPlaylistSwitchesToVideoScopeAndManagesIt() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let result = ScanResult(
@@ -1377,7 +1353,7 @@ struct AppStateTests {
         )
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
         defer { appState.coordinator.shutdown() }
-        appState.managerScope = .audio   // start in the other scope to prove the switch
+        appState.switchScope(to: .audio)   // start in another scope to prove the switch
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -1386,8 +1362,8 @@ struct AppStateTests {
             Issue.record("expected .created, got \(outcome)")
             return
         }
-        #expect(appState.managerScope == .visual)
-        #expect(appState.selectedPlaylist === playlist)
+        #expect(appState.managerScope == .video)
+        #expect(appState.managedPlaylist === playlist)
     }
 
     @Test func creatingAudioPlaylistSwitchesToAudioScopeWithoutPlaying() async throws {
@@ -1407,182 +1383,108 @@ struct AppStateTests {
             return
         }
         #expect(appState.managerScope == .audio)
-        #expect(appState.activeAudioPlaylist === playlist)
+        #expect(appState.managedPlaylist === playlist)
+        #expect(appState.audioChannelSlot === playlist)
         #expect(appState.coordinator.audioPlaylist == nil)   // created, never started
-        #expect(appState.selectedPlaylist == nil)            // visual scope untouched
+        #expect(appState.lastActiveVideoPlaylist == nil)     // visual memory untouched
     }
 
-    // MARK: - Manager scope routing (audio manager redesign — Phase 1)
-    //
-    // Pure bookkeeping: the scoped accessors route to the active scope's own slot, and
-    // the two scopes stay fully parallel. Image-backed visual fixtures keep these off any
-    // engine (the image channel has no libmpv); audio fixtures never start playback.
+    // MARK: - Slot model & scope switching
 
-    /// A two-scope Manager fixture: one image playlist (visual scope) and one audio
-    /// playlist (audio scope), each with two files filled into their filtered caches.
-    /// Holds the `ModelContainer` so the test body keeps it alive — returning only the
-    /// `AppState` would let the container deallocate and the orphaned context trap.
-    private struct TwoScopeEnv {
+    /// A Manager fixture with one playlist of each type, each holding two files. Holds the
+    /// `ModelContainer` so the test body keeps it alive (an orphaned context traps on fetch).
+    private struct SlotEnv {
         let container: ModelContainer
         let appState: AppState
+        let video: Playlist
         let image: Playlist
         let audio: Playlist
     }
 
     @MainActor
-    private func makeTwoScopeState() throws -> TwoScopeEnv {
+    private func makeSlotState() throws -> SlotEnv {
         let container = try makeContainer()
         let context = container.mainContext
+        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
         let image = Playlist(name: "Pics", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
         let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
-        context.insert(image)
-        context.insert(audio)
+        [video, image, audio].forEach(context.insert)
+        addFile("v1.mp4", order: 0, to: video, in: context)
+        addFile("v2.mp4", order: 1, to: video, in: context)
         addFile("p1.jpg", order: 0, to: image, in: context)
         addFile("p2.jpg", order: 1, to: image, in: context)
         addFile("a1.mp3", order: 0, to: audio, in: context)
         addFile("a2.mp3", order: 1, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = image
-        appState.recomputeFilteredFiles()
-        appState.activeAudioPlaylist = audio
-        appState.recomputeAudioFilteredFiles()
-        return TwoScopeEnv(container: container, appState: appState, image: image, audio: audio)
+        return SlotEnv(container: container, appState: appState, video: video, image: image, audio: audio)
     }
 
-    @Test func scopeAccessorsRouteToVisualSlotsByDefault() throws {
-        let env = try makeTwoScopeState()
+    @Test func managedFilesDeriveFromTheManagedPlaylist() throws {
+        let env = try makeSlotState()
         let appState = env.appState
-        #expect(appState.managerScope == .visual)
-        #expect(appState.managerPlaylist === env.image)
+
+        appState.managedPlaylist = env.image
         #expect(appState.managerFiles.map(\.fileName) == ["p1.jpg", "p2.jpg"])
-        #expect(appState.managerFilterMode == appState.filterMode)
+
+        appState.managedPlaylist = env.video
+        #expect(appState.managerFiles.map(\.fileName) == ["v1.mp4", "v2.mp4"])
     }
 
-    @Test func scopeAccessorsRouteToAudioSlotsInAudioScope() throws {
-        let env = try makeTwoScopeState()
-        let appState = env.appState
-        appState.managerScope = .audio
-        #expect(appState.managerPlaylist === env.audio)
-        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp3", "a2.mp3"])
-        #expect(appState.managerFilterMode == appState.audioFilterMode)
-    }
-
-    @Test func managerSelectionReadsAndWritesTheActiveScopeOnly() throws {
-        let env = try makeTwoScopeState()
-        let appState = env.appState
-        let imageFileID = appState.filteredFiles[0].id
-        let audioFileID = appState.audioFilteredFiles[1].id
-
-        // Visual scope: writing routes to selectedFileIDs and leaves audio untouched.
-        appState.managerSelection = [imageFileID]
-        #expect(appState.selectedFileIDs == [imageFileID])
-        #expect(appState.audioSelectedFileIDs.isEmpty)
-        #expect(appState.managerSelection == [imageFileID])
-
-        // Audio scope: writing routes to audioSelectedFileIDs and leaves visual untouched.
-        appState.managerScope = .audio
-        #expect(appState.managerSelection.isEmpty)   // audio scope started with no selection
-        appState.managerSelection = [audioFileID]
-        #expect(appState.audioSelectedFileIDs == [audioFileID])
-        #expect(appState.selectedFileIDs == [imageFileID])
-    }
-
-    @Test func managerFilterModeWritesToTheActiveScopeOnly() throws {
-        let env = try makeTwoScopeState()
+    @Test func switchScopeLoadsThatScopesRememberedPlaylist() async throws {
+        let env = try makeSlotState()
         let appState = env.appState
 
-        // Visual scope: flipping the operator changes only the image playlist's filter.
-        appState.managerFilterMode = .or
-        #expect(appState.filterMode == .or)
-        #expect(appState.audioFilterMode == .and)
+        // Manage a video, then browse to the image scope: the managed slot becomes the
+        // remembered image playlist (here none), while the video stays remembered.
+        // Each `select` launches a background re-scan; await it before moving on so no task is
+        // left to touch a torn-down model after the body.
+        appState.select(env.video)
+        await appState.updateTask?.value
+        #expect(appState.managerScope == .video)
+        #expect(appState.managedPlaylist === env.video)
 
-        // Audio scope: flipping changes only the audio playlist's filter.
-        appState.managerScope = .audio
-        appState.managerFilterMode = .or
-        #expect(appState.audioFilterMode == .or)
-        #expect(appState.filterMode == .or)   // unchanged from the visual write above
+        appState.switchScope(to: .image)
+        #expect(appState.managerScope == .image)
+        #expect(appState.managedPlaylist == nil)   // no image remembered yet → placeholder
+
+        // Picking an image makes it managed and remembered, independently of the video.
+        appState.select(env.image)
+        await appState.updateTask?.value
+        #expect(appState.managedPlaylist === env.image)
+
+        // Returning to the video scope restores the remembered video.
+        appState.switchScope(to: .video)
+        #expect(appState.managedPlaylist === env.video)
     }
 
-    @Test func flippingScopeNeverMutatesEitherScopesSlots() throws {
-        let env = try makeTwoScopeState()
+    @Test func switchingToAudioScopeLoadsTheAudioChannelSlot() async throws {
+        let env = try makeSlotState()
         let appState = env.appState
-        appState.selectedFileIDs = [appState.filteredFiles[0].id]
-        appState.audioSelectedFileIDs = [appState.audioFilteredFiles[0].id]
-        let visualSelection = appState.selectedFileIDs
-        let audioSelection = appState.audioSelectedFileIDs
+        appState.select(env.video)
+        await appState.updateTask?.value   // drain the re-scan before the body returns
+        appState.remember(env.audio)   // an audio playlist sitting in the channel
 
-        // Reading through the accessors across a scope flip is observation only.
-        appState.managerScope = .audio
-        _ = (appState.managerPlaylist, appState.managerFiles, appState.managerSelection, appState.managerFilterMode)
-        appState.managerScope = .visual
-        _ = (appState.managerPlaylist, appState.managerFiles, appState.managerSelection, appState.managerFilterMode)
-
-        #expect(appState.selectedPlaylist === env.image)
-        #expect(appState.activeAudioPlaylist === env.audio)
-        #expect(appState.selectedFileIDs == visualSelection)
-        #expect(appState.audioSelectedFileIDs == audioSelection)
+        appState.switchScope(to: .audio)
+        #expect(appState.managedPlaylist === env.audio)   // synced from the audio channel slot
     }
 
-    // MARK: - Phase 4: scoped center parity (filter / select / tag / delete)
+    @Test func rememberKeepsVisualMemoriesIndependent() throws {
+        let env = try makeSlotState()
+        let appState = env.appState
 
-    @Test func audioServiceFilterScopesToAudioAndOverridesTagFilter() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let image = Playlist(name: "Pics", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
-        let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
-        context.insert(image)
-        context.insert(audio)
-        addFile("p1.jpg", order: 0, to: image, in: context)
-        addFile("t1.mp3", tags: ["jazz"], status: .valid, order: 0, to: audio, in: context)
-        addFile("t2.mp3", status: .untagged, order: 1, to: audio, in: context)
-        addFile("t3.mp3", status: .invalid, order: 2, to: audio, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = image
-        appState.recomputeFilteredFiles()
-        appState.activeAudioPlaylist = audio
-        appState.managerScope = .audio
-        let visualBefore = appState.filteredFiles
-
-        // A service filter in the audio scope filters the audio list and leaves visual alone.
-        appState.toggleServiceFilter(.untagged)
-        #expect(appState.activeServiceFilter == .untagged)
-        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t2.mp3"])
-        #expect(appState.filteredFiles == visualBefore)
-
-        appState.toggleServiceFilter(.invalidTagging)   // mutually exclusive
-        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t3.mp3"])
-
-        appState.toggleServiceFilter(.invalidTagging)   // off → playback sequence restored
-        #expect(appState.activeServiceFilter == nil)
-        #expect(appState.audioFilteredFiles.map(\.fileName) == ["t1.mp3", "t2.mp3", "t3.mp3"])
+        // Recording a video then an image leaves both remembered — the visual memories don't
+        // overwrite each other (only the *playing* visual channel is mutually exclusive).
+        appState.remember(env.video)
+        appState.remember(env.image)
+        #expect(appState.lastActiveVideoPlaylist === env.video)
+        #expect(appState.lastActiveImagePlaylist === env.image)
+        #expect(appState.appStateModel.lastActiveVideoPlaylistId == env.video.id)
+        #expect(appState.appStateModel.lastActiveImagePlaylistId == env.image.id)
     }
 
-    @Test func switchingScopeClearsActiveServiceFilter() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
-        let audio = Playlist(name: "Tunes", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
-        context.insert(video)
-        context.insert(audio)
-        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: video, in: context)
-        addFile("b.mp4", status: .untagged, order: 1, to: video, in: context)
-        addFile("t1.mp3", order: 0, to: audio, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.selectedPlaylist = video
-        appState.recomputeFilteredFiles()
-        appState.activeAudioPlaylist = audio
+    // MARK: - Filtering edits the managed playlist
 
-        appState.toggleServiceFilter(.untagged)
-        #expect(appState.filteredFiles.map(\.fileName) == ["b.mp4"])
-
-        // Leaving the scope drops the service filter; returning shows the unfiltered list.
-        appState.managerScope = .audio
-        #expect(appState.activeServiceFilter == nil)
-        appState.managerScope = .visual
-        #expect(appState.filteredFiles.map(\.fileName) == ["a.mp4", "b.mp4"])
-    }
-
-    @Test func deletingAudioFileClearsItFromAudioSelectionOnly() async throws {
+    @Test func deletingAManagedFileClearsItFromTheSelection() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -1593,22 +1495,17 @@ struct AppStateTests {
         let t1 = addFile("t1.mp3", order: 0, to: audio, in: context)
         let t2 = addFile("t2.mp3", order: 1, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.activeAudioPlaylist = audio
-        appState.managerScope = .audio
-        appState.recomputeAudioFilteredFiles()
-        let visualSentinel: Set<UUID> = [UUID()]
-        appState.selectedFileIDs = visualSentinel
-        appState.audioSelectedFileIDs = [t1.id, t2.id]
+        appState.managedPlaylist = audio
+        appState.managerSelection = [t1.id, t2.id]
 
         let error = await appState.deleteFiles([t1])
 
         #expect(error == nil)
         #expect(Set(audio.files.map(\.fileName)) == ["t2.mp3"])
-        #expect(appState.audioSelectedFileIDs == [t2.id])   // the trashed track drops out
-        #expect(appState.selectedFileIDs == visualSentinel)  // visual selection untouched
+        #expect(appState.managerSelection == [t2.id])   // the trashed track drops out
     }
 
-    @Test func taggingAudioSelectionEditsTheAudioPlaylist() async throws {
+    @Test func taggingFilesEditsThePlaylist() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -1619,10 +1516,6 @@ struct AppStateTests {
         let t1 = addFile("t1.mp3", order: 0, to: audio, in: context)
         let t2 = addFile("t2.mp3", order: 1, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.activeAudioPlaylist = audio
-        appState.managerScope = .audio
-        appState.recomputeAudioFilteredFiles()
-        appState.audioSelectedFileIDs = [t1.id, t2.id]
 
         let error = await appState.addTag("jazz", to: [t1, t2])
 

@@ -17,9 +17,10 @@ struct PlaylistCenterView: View {
 
     var body: some View {
         Group {
-            switch appState.managerScope {
-            case .visual: visualCenter
-            case .audio: audioCenter
+            if let playlist = appState.managedPlaylist {
+                center(playlist)
+            } else {
+                placeholder
             }
         }
         .alert(
@@ -90,49 +91,33 @@ struct PlaylistCenterView: View {
         )
     }
 
-    // MARK: - Scope centers
+    // MARK: - Center
 
-    /// The visual scope's center: notices and the list or gallery for the selected playlist.
+    /// The managed playlist's center: notices over its file list. Visual playlists offer the
+    /// gallery presentation; audio has no gallery, so it is always the list.
     @ViewBuilder
-    private var visualCenter: some View {
-        if let playlist = appState.selectedPlaylist {
-            VStack(spacing: 0) {
-                noticeBar(playlist)
-                if playlist.preferences.viewMode == .gallery {
-                    FileGalleryView(
-                        playlist: playlist,
-                        confirmDelete: { appState.requestManagerDelete($0) },
-                        reportError: { errorMessage = $0 }
-                    )
-                } else {
-                    FileListView(
-                        playlist: playlist,
-                        confirmDelete: { appState.requestManagerDelete($0) },
-                        reportError: { errorMessage = $0 }
-                    )
-                }
-            }
-        } else {
-            ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
-        }
-    }
-
-    /// The audio scope's center: the same notices and file list as the visual scope, for
-    /// the active audio playlist. Audio has no gallery view, so it is always the list.
-    @ViewBuilder
-    private var audioCenter: some View {
-        if let audio = appState.activeAudioPlaylist {
-            VStack(spacing: 0) {
-                noticeBar(audio)
+    private func center(_ playlist: Playlist) -> some View {
+        VStack(spacing: 0) {
+            noticeBar(playlist)
+            if playlist.mediaType != .audio, playlist.preferences.viewMode == .gallery {
+                FileGalleryView(
+                    playlist: playlist,
+                    confirmDelete: { appState.requestManagerDelete($0) },
+                    reportError: { errorMessage = $0 }
+                )
+            } else {
                 FileListView(
-                    playlist: audio,
+                    playlist: playlist,
                     confirmDelete: { appState.requestManagerDelete($0) },
                     reportError: { errorMessage = $0 }
                 )
             }
-        } else {
-            ContentUnavailableView("Select an Audio Playlist", systemImage: "music.note.list")
         }
+    }
+
+    /// Shown when no playlist is managed in the current scope.
+    private var placeholder: some View {
+        ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
     }
 
     // MARK: - Counter notices
@@ -147,9 +132,9 @@ struct PlaylistCenterView: View {
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {
-                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged) }
-                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging) }
-                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped) }
+                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged, on: playlist) }
+                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging, on: playlist) }
+                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped, on: playlist) }
                 Spacer()
             }
             .font(.caption)
@@ -159,10 +144,10 @@ struct PlaylistCenterView: View {
         }
     }
 
-    private func notice(_ text: String, filter: ServiceFilter) -> some View {
-        let isActive = appState.activeServiceFilter == filter
+    private func notice(_ text: String, filter: ServiceFilter, on playlist: Playlist) -> some View {
+        let isActive = playlist.filterState.serviceFilter == filter
         return Button {
-            appState.toggleServiceFilter(filter)
+            appState.toggleServiceFilter(filter, on: playlist)
         } label: {
             Label(text, systemImage: filter.systemImage)
                 .padding(.horizontal, 7)
