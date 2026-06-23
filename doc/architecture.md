@@ -154,23 +154,26 @@ The app uses two layers of state:
 ### Observable state objects
 
 ```
-                    ┌─────────────────────┐
-                    │   AppStateModel     │  (persisted singleton)
-                    │  active playlist IDs│
-                    └────────┬────────────┘
-                             │ references
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-   ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-   │PlaybackCoord.│ │ OverlayMgr   │ │  HotkeyRouter│
-   │              │ │              │ │              │
-   │ videoPlayer  │ │ filesTagsOpen│ │ resolves key │
-   │ audioPlayer  │ │ audioState   │ │ to action    │
-   │ imageTimer   │ │ playlistsOpen│ │ based on     │
-   │ playback     │ │ pauseShown   │ │ current      │
-   │ state per    │ │ exclusivity  │ │ focus +      │
-   │ playlist     │ │ rules        │ │ overlay      │
-   └──────────────┘ └──────────────┘ └──────────────┘
+                  ┌──────────────────────────┐
+                  │      AppStateModel       │  (persisted singleton)
+                  │ lastActiveVideoPlaylistId│
+                  │ lastActiveImagePlaylistId│
+                  │ audioChannelPlaylistId   │
+                  │ managerScopeRaw          │
+                  └────────────┬─────────────┘
+                               │ references
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+   ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐
+   │ PlaybackCoord.   │ │   OverlayMgr     │ │ HotkeyRouter │
+   │                  │ │                  │ │              │
+   │ videoEngine      │ │ active:          │ │ resolves key │
+   │ imageEngine      │ │   Set<Overlay>   │ │ to action    │
+   │ audioEngine      │ │ audioFullyRevealed│ │ based on    │
+   │ visual/audio     │ │ audioCompactPinned│ │ key context │
+   │ playlist +       │ │ (Esc chain +     │ │ (visual vs   │
+   │ isSuppressed     │ │  exclusivity)    │ │  audio)      │
+   └──────────────────┘ └──────────────────┘ └──────────────┘
 ```
 
 #### AppState

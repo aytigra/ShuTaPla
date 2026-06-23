@@ -384,7 +384,7 @@ private extension NSToolbarItem.Identifier {
 
 // MARK: - Toolbar controls
 
-/// The scope selector: the Visual and Audio tabs in a single toolbar item. Expanded, they sit tightly
+/// The scope selector: the Image, Video, and Audio tabs in a single toolbar item. Expanded, they sit tightly
 /// as sidebar tabs; collapsed, they spread to the spacing of the other toolbar button groups since
 /// each becomes an ordinary bordered toolbar button.
 private struct ScopeTabs: View {
@@ -429,7 +429,7 @@ private struct ScopeTabButton: View {
         } else {
             let isActive = appState.managerScope == scope
             Button(action: activate) {
-              Image(systemName: isActive ? systemImage : "\(systemImage).fill")
+              Image(systemName: isActive ? "\(systemImage).fill" : systemImage)
                     .font(.system(size: 17))
                     .frame(width: 32, height: 28)
                     .background(highlight(isActive: isActive))

@@ -64,6 +64,13 @@ struct LibrarySurface: View {
             Divider()
             tagColumn.frame(width: 300)
         }
+        // Switching playlists swaps the file list in place without remounting the surface, so an
+        // abandoned rename draft for the old playlist would otherwise survive and re-activate when
+        // that file scrolls back into view. Clear it when the active playlist changes.
+        .onChange(of: context.activePlaylist?.id) { _, _ in
+            fileRenamingID = nil
+            fileDraftName = ""
+        }
     }
 
     // MARK: - Playlists column
@@ -188,7 +195,7 @@ struct LibrarySurface: View {
                 playlist: playlist,
                 isSelected: context.currentFile?.id == file.id,
                 isRenaming: fileRenamingID == file.id,
-                isStripping: false,
+                isStripping: appState.strippingFileIDs.contains(file.id),
                 draftName: $fileDraftName,
                 onCommitRename: { commitFileRename(file) },
                 onCancelRename: { fileRenamingID = nil }

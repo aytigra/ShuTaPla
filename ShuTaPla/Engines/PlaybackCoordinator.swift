@@ -239,15 +239,24 @@ final class PlaybackCoordinator: PlaybackSource {
             if forward { imageEngine.advanceToNext() } else { imageEngine.returnToPrevious() }
         case .visualVideo:
             if forward { videoEngine?.advanceToNext() } else { videoEngine?.returnToPrevious() }
-            // Loading the landed-on file auto-starts it, so a switch from a paused channel
-            // resumes playback — the persisted state reflects Playing to match the transport.
-            playlist.playbackState = .playing
+            settleStateAfterAdvance(playlist)
         case .audio:
             if forward { audioEngine?.advanceToNext() } else { audioEngine?.returnToPrevious() }
-            playlist.playbackState = .playing
+            settleStateAfterAdvance(playlist)
         case nil:
             break
         }
+    }
+
+    /// Loading the landed-on file auto-starts it, so reconcile the persisted state and the
+    /// engine with the transport — the same `shouldBePlaying` gate `jump` uses. A channel
+    /// that isn't suppressed resumes Playing (a switch from a paused channel resumes
+    /// playback); while the pause overlay is up (or the playlist is otherwise paused/halted)
+    /// the state is left alone and the engine re-suspended, so an arrow key can't restart
+    /// playback behind the overlay or corrupt a paused playlist into Playing.
+    private func settleStateAfterAdvance(_ playlist: Playlist) {
+        if !isSuppressed { playlist.playbackState = .playing }
+        if !shouldBePlaying(playlist) { suspend(playlist) }
     }
 
     // MARK: - Loop & seek

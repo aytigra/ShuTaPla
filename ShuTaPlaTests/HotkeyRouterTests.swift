@@ -311,6 +311,33 @@ import AppKit
         #expect(!f.appState.coordinator.isSuppressed)
     }
 
+    @Test func deleteUnderAudioKeyContextTargetsTheAudioTrack() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.remember(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
+        defer { f.appState.coordinator.shutdown() }
+
+        // With the audio overlay holding key context, `[delete]` targets the focused audio track
+        // (the audio confirmation), not the visual file — like every other contextual key.
+        #expect(f.router.route(.delete, rightOption: false))
+        #expect(f.appState.audioDeleteCandidate != nil)
+        #expect(f.appState.playerDeleteCandidate == nil)
+    }
+
+    @Test func spaceRestartsAStoppedAudioChannel() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.remember(f.playlist)   // the persistent slot survives Stop
+        defer { f.appState.coordinator.shutdown() }
+
+        f.appState.coordinator.stop(f.playlist)
+        #expect(f.appState.coordinator.audioPlaylist == nil)   // Stop cleared the live channel
+        #expect(f.playlist.playbackState == .stopped)
+
+        // `[space]` restarts from the slot — a plain `togglePause` would no-op after Stop.
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(f.appState.coordinator.audioPlaylist === f.playlist)
+        #expect(f.playlist.playbackState == .playing)
+    }
+
     @Test func loopTogglesOnAudioChannel() throws {
         let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
         defer { f.appState.coordinator.shutdown() }

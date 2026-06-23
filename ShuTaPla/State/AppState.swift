@@ -746,8 +746,16 @@ final class AppState {
         }
 
         rebuildTagFrequency(playlist)
-        // A re-scan can drop the audio channel's playing track; advance off it just like a
-        // delete does, so the engine never holds a file that's no longer in the playlist.
+        // A re-scan can drop either channel's playing file; advance off it just like a delete
+        // does, so neither engine holds a file that's no longer in the playlist.
+        reconcileChannels(for: playlist)
+    }
+
+    /// Advances whichever live channel(s) play `playlist` off a file that has just left its
+    /// playback sequence (a delete or a re-scan prune). A no-op when the playlist isn't on a
+    /// channel, and idempotent when its current file still survives.
+    private func reconcileChannels(for playlist: Playlist) {
+        if coordinator.visualPlaylist === playlist { coordinator.reconcileVisualSelection() }
         if coordinator.audioPlaylist === playlist { coordinator.reconcileAudioSelection() }
     }
 
@@ -831,6 +839,10 @@ final class AppState {
             modelContext.delete(file)
         }
         rebuildTagFrequency(playlist)
+        // Advance whichever channel was playing this playlist off a trashed track, so the
+        // engine never holds a file that's no longer in the playlist. Covers every delete
+        // entry point (Manager list, Files & Tags overlay, audio overlay) in one place.
+        reconcileChannels(for: playlist)
 
         guard result.failed.isEmpty else {
             return "\(result.failed.count) file(s) couldn't be moved to the Trash."
@@ -1061,13 +1073,7 @@ final class AppState {
         guard let file = audioDeleteCandidate else { return }
         audioDeleteCandidate = nil
         runConfirmation {
-            if let error = await self.deleteFiles([file]) {
-                self.audioDeleteError = error
-            } else {
-                // Advance the audio channel off the trashed track (the visual confirmPlayerDelete
-                // does the same with reconcileVisualSelection).
-                self.coordinator.reconcileAudioSelection()
-            }
+            if let error = await self.deleteFiles([file]) { self.audioDeleteError = error }
         }
     }
 
@@ -1159,6 +1165,16 @@ final class AppState {
         return true
     }
 
+    /// Requests confirmation to trash the audio channel's current track (the extended
+    /// overlay's `[delete]`, when audio holds key context). Returns whether there was a
+    /// track to delete. The visual `[delete]` analog is `requestDeletePlayingFile`.
+    @discardableResult
+    func requestDeletePlayingAudioFile() -> Bool {
+        guard let file = currentAudioFile else { return false }
+        audioDeleteCandidate = file
+        return true
+    }
+
     /// Requests confirmation to trash a specific file from the Files & Tags overlay.
     /// Routes through AppState so `playerDeleteCandidate` stays state it owns and
     /// prunes when a re-scan removes the file.
@@ -1177,13 +1193,10 @@ final class AppState {
         guard let file = playerDeleteCandidate else { return }
         playerDeleteCandidate = nil
         runConfirmation {
-            if let error = await self.deleteFiles([file]) {
-                // The trash failed (permissions/locked): keep the player on the file and
-                // tell the user, rather than silently advancing past an undeleted file.
-                self.playerDeleteError = error
-            } else {
-                self.coordinator.reconcileVisualSelection()
-            }
+            // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is
+            // a no-op and the player stays on the file; surface the message rather than silently
+            // advancing past an undeleted file.
+            if let error = await self.deleteFiles([file]) { self.playerDeleteError = error }
         }
     }
 

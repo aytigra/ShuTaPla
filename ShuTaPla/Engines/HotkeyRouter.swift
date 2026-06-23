@@ -251,9 +251,13 @@ final class HotkeyRouter {
             return true
         }
 
-        // `[delete]` raises the trash confirmation for the playing file.
+        // `[delete]` raises the trash confirmation for the playing file — the focused track when
+        // the audio overlay holds key context, otherwise the visual channel's file. Every other
+        // contextual key already respects key context, so `[delete]` does too.
         if key == .delete {
-            return appState.requestDeletePlayingFile()
+            return overlayContext.audioHoldsKeyContext
+                ? appState.requestDeletePlayingAudioFile()
+                : appState.requestDeletePlayingFile()
         }
 
         return overlayContext.audioHoldsKeyContext
@@ -296,14 +300,23 @@ final class HotkeyRouter {
         default: break
         }
 
-        // Transport, seek, and loop need an active audio playlist.
+        // `[space]` drives the channel's transport off the persistent slot, so — like the
+        // overlay's Play button — it can restart a Stopped audio playlist (which `togglePause`
+        // can't, since Stop clears `audioPlaylist`). The slot is the live channel while it plays;
+        // it outlives Stop, falling back to the live channel only if no slot is loaded.
+        if key == .space, let coordinator,
+           let target = appState?.audioChannelSlot ?? coordinator.audioPlaylist {
+            coordinator.togglePlayback(target)
+            return true
+        }
+
+        // Seek, advance, and loop need an active audio playlist.
         guard let coordinator, let audio = coordinator.audioPlaylist else { return false }
 
         if rightOption, key == .arrowLeft { coordinator.seek(audio, by: -3); return true }
         if rightOption, key == .arrowRight { coordinator.seek(audio, by: 3); return true }
 
         switch key {
-        case .space: coordinator.togglePause(audio)
         case .arrowRight: coordinator.next(audio)
         case .arrowLeft: coordinator.previous(audio)
         case .l: coordinator.toggleLoop(audio)

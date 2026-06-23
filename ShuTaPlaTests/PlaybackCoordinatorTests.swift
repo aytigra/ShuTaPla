@@ -615,6 +615,59 @@ import SwiftData
         override func pause() { pauseCount += 1; super.pause() }
     }
 
+    @Test func advanceWhileSuppressedDoesNotFlipPausedToPlaying() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.pause(audio)            // its own pause → .paused
+        coordinator.suppress()              // pause overlay up
+        coordinator.next(audio)
+
+        // An arrow key while the pause overlay is up must not resume a paused playlist: the
+        // state stays Paused so lifting suppression doesn't silently treat it as playing.
+        #expect(audio.playbackState == .paused)
+        #expect(coordinator.isSuppressed)
+    }
+
+    @Test func advanceWhileSuppressedReSuspendsTheEngine() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        // A recording engine reveals the re-suspend: advancing loads (and auto-starts) the next
+        // track, so the fix must immediately pause it back rather than let it play behind the overlay.
+        let recorder = try RecordingAudioEngine()
+        let coordinator = PlaybackCoordinator(
+            bookmarkService: BookmarkService(),
+            makeVideoEngine: { recorder },
+            makeAudioEngine: { recorder }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.suppress()
+        let pausesBeforeAdvance = recorder.pauseCount
+
+        coordinator.next(audio)
+        #expect(audio.playbackState == .playing)            // it was playing; stays playing
+        #expect(recorder.pauseCount > pausesBeforeAdvance)  // ...but re-suspended, not left audible
+    }
+
     @Test func jumpLoadsRequestedFileOnImageChannel() throws {
         let container = try makeContainer()
         let context = container.mainContext

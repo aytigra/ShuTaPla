@@ -1033,6 +1033,72 @@ struct AppStateTests {
         #expect(audio.currentFileID == secondID)   // reconciled past the trashed track
     }
 
+    @Test func confirmManagerDeleteAdvancesTheLiveAudioChannel() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "1.mp3"))
+        try Data().write(to: dir.appending(path: "2.mp3"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        context.insert(audio)
+        let first = addFile("1.mp3", order: 0, to: audio, in: context)
+        let second = addFile("2.mp3", order: 1, to: audio, in: context)
+        let secondID = second.id
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.beginPlayback(of: audio)
+        #expect(audio.currentFileID == first.id)
+
+        // Deleting the playing track from the Manager file list must advance the live audio
+        // channel off it, exactly as the audio-overlay delete does — otherwise the engine keeps
+        // the destroyed model and its next advance dereferences it.
+        appState.requestManagerDelete([first])
+        appState.confirmManagerDelete()
+
+        var waited = 0
+        while audio.files.count > 1 && waited < 100 {
+            try? await Task.sleep(for: .milliseconds(20))
+            waited += 1
+        }
+        #expect(audio.files.count == 1)
+        #expect(audio.currentFileID == secondID)   // reconciled past the trashed track
+    }
+
+    @Test func rescanPruneAdvancesTheLiveVisualChannel() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "1.jpg"))
+        try Data().write(to: dir.appending(path: "2.jpg"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let image = Playlist(name: "I", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(image)
+        let first = addFile("1.jpg", order: 0, to: image, in: context)
+        let second = addFile("2.jpg", order: 1, to: image, in: context)
+        let secondID = second.id
+        // The re-scan reports the on-screen file gone from disk.
+        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.jpg"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        defer { appState.coordinator.shutdown() }
+
+        // Play the image playlist on the visual channel (the image engine has no libmpv, so this
+        // is trap-safe).
+        appState.coordinator.play(image)
+        #expect(image.currentFileID == first.id)
+
+        // The background Update prunes the playing file; apply() must advance the visual channel
+        // off it — the symmetric counterpart to the audio reconcile — not leave the engine on a
+        // destroyed model.
+        await appState.update(image)
+
+        #expect(image.files.map(\.fileName) == ["2.jpg"])
+        #expect(image.currentFileID == secondID)
+    }
+
     @Test func selectAudioPlaylistStartsPlaybackAndReScansEachClick() async throws {
         let container = try makeContainer()
         let context = container.mainContext
