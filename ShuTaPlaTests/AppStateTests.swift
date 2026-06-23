@@ -256,9 +256,9 @@ struct AppStateTests {
         context.insert(video)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        appState.select(video)
+        appState.manage(video)
         #expect(appState.managedPlaylist === video)
-        #expect(appState.lastActiveVideoPlaylist === video)
+        #expect(appState.lastManagedVideoPlaylist === video)
 
         await appState.updateTask?.value  // let the background re-scan finish
     }
@@ -286,12 +286,12 @@ struct AppStateTests {
         [a, b, c].forEach(context.insert)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        appState.select(b)
+        appState.manage(b)
         await appState.delete(b)  // cancels the in-flight update before b is freed
         await appState.updateTask?.value
 
         #expect(appState.managedPlaylist == nil)
-        #expect(appState.lastActiveVideoPlaylist == nil)
+        #expect(appState.lastManagedVideoPlaylist == nil)
         let remaining = try context.fetch(FetchDescriptor<Playlist>())
         #expect(remaining.count == 2)
         #expect(a.sortOrder == 0)
@@ -497,7 +497,7 @@ struct AppStateTests {
         addFile("b.mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         addFile("c.mp4", order: 2, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.select(playlist)
+        appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
         #expect(Set(appState.managerFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
@@ -521,7 +521,7 @@ struct AppStateTests {
         addFile("c.mp4", status: .invalid, order: 2, to: playlist, in: context)
         addFile("x.jpg", status: .untagged, skipped: true, order: 3, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.select(playlist)
+        appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
         #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
@@ -554,17 +554,17 @@ struct AppStateTests {
         addFile("c.mp4", order: 0, to: p2, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        // Each `select` launches its own background re-scan; await each before the next so
+        // Each `manage` launches its own background re-scan; await each before the next so
         // no intermediate task is left running to touch a torn-down model after the body.
-        appState.select(p1)
+        appState.manage(p1)
         await appState.updateTask?.value
         #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored filter
 
-        appState.select(p2)
+        appState.manage(p2)
         await appState.updateTask?.value
         #expect(appState.managerFiles.map(\.fileName) == ["c.mp4"])  // no filter
 
-        appState.select(p1)
+        appState.manage(p1)
         await appState.updateTask?.value
         #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored again
     }
@@ -643,7 +643,7 @@ struct AppStateTests {
         addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
         addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.select(playlist)
+        appState.manage(playlist)
 
         // Filter by "beach" and remember it as a saved search.
         appState.toggleFilterTag("beach", on: playlist)
@@ -673,7 +673,7 @@ struct AppStateTests {
         addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
         addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.select(playlist)
+        appState.manage(playlist)
         playlist.savedSearches = [
             SavedSearch(tags: ["beach"], mode: .or),
             SavedSearch(tags: ["beach", "sun"], mode: .or),
@@ -734,7 +734,7 @@ struct AppStateTests {
         context.insert(playlist)
         addFile("a.mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.select(playlist)
+        appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
         appState.saveCurrentSearch(on: playlist)
@@ -807,14 +807,14 @@ struct AppStateTests {
         let delta = UpdateDelta(added: [scanned("new.mp4", .video)], removedRelativePaths: [])
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
 
-        appState.select(playlist)
+        appState.manage(playlist)
         let firstScan = appState.updateTask
         await appState.updateTask?.value
         #expect(playlist.files.count == 2)        // a.mp4 + the discovered new.mp4
 
         // Re-clicking the already-selected row re-reads the folder — the automatic Update, the
         // reason there's no dedicated control — so it spawns a fresh scan rather than no-op'ing.
-        appState.select(playlist)
+        appState.manage(playlist)
         #expect(appState.updateTask != firstScan)
         await appState.updateTask?.value
         #expect(playlist.files.count == 3)
@@ -833,9 +833,9 @@ struct AppStateTests {
 
         // Selecting A starts A's background re-scan; selecting a *different* playlist B must not
         // cancel A's scan — the two playlists' re-reads are independent (keyed per playlist).
-        appState.select(a)
+        appState.manage(a)
         let scanA = appState.updateTask
-        appState.select(b)
+        appState.manage(b)
         #expect(scanA?.isCancelled == false)
 
         await scanA?.value
@@ -959,7 +959,7 @@ struct AppStateTests {
         addFile("3.mp3", order: 2, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        appState.remember(audio)   // occupy the audio channel slot; channel files derive from it
+        appState.rememberLastManaged(audio)   // occupy the audio channel slot; channel files derive from it
         #expect(appState.audioChannelFiles.count == 3)
 
         appState.toggleFilterTag("jazz", on: audio)
@@ -975,7 +975,7 @@ struct AppStateTests {
         #expect(appState.audioChannelFiles.count == 3)
     }
 
-    @Test func beginPlaybackOfAudioLeavesManagerSelectionUntouched() async throws {
+    @Test func startPlaybackOfAudioLeavesManagerSelectionUntouched() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let video = Playlist(name: "V", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
@@ -987,14 +987,14 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.select(video)
+        appState.manage(video)
         #expect(appState.managedPlaylist === video)
 
         // Audio plays on its own independent channel: the Manager keeps showing the
         // video playlist and the window does not enter Player mode.
-        appState.beginPlayback(of: audio)
+        appState.startPlayback(of: audio)
         #expect(appState.managedPlaylist === video)
-        #expect(appState.audioChannelSlot === audio)
+        #expect(appState.audioChannelPlaylist === audio)
         #expect(appState.mode == .manager)
 
         await appState.updateTask?.value
@@ -1013,13 +1013,13 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: audio)
-        #expect(appState.coordinator.audioPlaylist === audio)
+        appState.startPlayback(of: audio)
+        #expect(appState.coordinator.liveAudioPlaylist === audio)
 
         // Deleting the playlist must release the audio channel, or the engine keeps playing
         // (and the next advance dereferences) files that no longer exist.
         await appState.delete(audio)
-        #expect(appState.coordinator.audioPlaylist == nil)
+        #expect(appState.coordinator.liveAudioPlaylist == nil)
     }
 
     @Test func confirmAudioDeleteAdvancesPastTheTrashedTrack() async throws {
@@ -1038,7 +1038,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: audio)
+        appState.startPlayback(of: audio)
         #expect(audio.currentFileID == first.id)
 
         // Trashing the playing track must advance the channel to the survivor, mirroring the
@@ -1071,7 +1071,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: audio)
+        appState.startPlayback(of: audio)
         #expect(audio.currentFileID == first.id)
 
         // Deleting the playing track from the Manager file list must advance the live audio
@@ -1121,7 +1121,7 @@ struct AppStateTests {
         #expect(image.currentFileID == secondID)
     }
 
-    @Test func selectAudioPlaylistStartsPlaybackAndReScansEachClick() async throws {
+    @Test func playOnAudioChannelStartsPlaybackAndReScansEachClick() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -1136,9 +1136,9 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         let tokenBefore = appState.audioScrollToken
-        appState.selectAudioPlaylist(audio)
-        #expect(appState.audioChannelSlot === audio)
-        #expect(appState.coordinator.audioPlaylist === audio)   // a new selection starts playing
+        appState.playOnAudioChannel(audio)
+        #expect(appState.audioChannelPlaylist === audio)
+        #expect(appState.coordinator.liveAudioPlaylist === audio)   // a new selection starts playing
         #expect(appState.audioScrollToken > tokenBefore)        // asks the file list to re-center
         await appState.updateTask?.value
         #expect(audio.files.count == 2)                         // re-read the folder
@@ -1146,7 +1146,7 @@ struct AppStateTests {
         // Re-selecting the active audio playlist re-reads the folder again (no dedicated control)
         // and re-centers the list once more.
         let tokenAfterFirst = appState.audioScrollToken
-        appState.selectAudioPlaylist(audio)
+        appState.playOnAudioChannel(audio)
         #expect(appState.audioScrollToken > tokenAfterFirst)
         await appState.updateTask?.value
         #expect(audio.files.count == 3)
@@ -1165,8 +1165,8 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: a)
-        #expect(appState.coordinator.audioPlaylist === a)
+        appState.startPlayback(of: a)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
 
         // Creating a playlist from the player-mode audio overlay (mode == .player) starts it
         // playing — and switching the audio channel stops the one that was live.
@@ -1179,8 +1179,8 @@ struct AppStateTests {
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
 
-        #expect(appState.audioChannelSlot === b)
-        #expect(appState.coordinator.audioPlaylist === b)   // the new playlist is what's playing
+        #expect(appState.audioChannelPlaylist === b)
+        #expect(appState.coordinator.liveAudioPlaylist === b)   // the new playlist is what's playing
         #expect(a.playbackState == .stopped)                // the previous one stopped
         #expect(appState.managerScope == .image)            // scope unchanged by a player-mode create
     }
@@ -1198,8 +1198,8 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: a)
-        #expect(appState.coordinator.audioPlaylist === a)
+        appState.startPlayback(of: a)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
 
         // Creating an audio playlist in Manager selects it stopped, releasing the audio playlist
         // that was playing so it doesn't keep going behind the new selection.
@@ -1211,14 +1211,14 @@ struct AppStateTests {
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
 
-        #expect(appState.audioChannelSlot === b)
+        #expect(appState.audioChannelPlaylist === b)
         #expect(appState.managedPlaylist === b)              // managed in Manager-mode create
-        #expect(appState.coordinator.audioPlaylist == nil)   // nothing left playing
+        #expect(appState.coordinator.liveAudioPlaylist == nil)   // nothing left playing
         #expect(a.playbackState == .stopped)
         #expect(appState.managerScope == .audio)             // Manager-mode create switches scope
     }
 
-    @Test func selectVisualPlaylistInPlayerPlaysNewAndReCentersEachClick() async throws {
+    @Test func playOnVisualChannelPlaysNewAndReCentersEachClick() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir1 = try makeTempDir()
@@ -1238,20 +1238,20 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: p1)
-        #expect(appState.coordinator.visualPlaylist === p1)
+        appState.startPlayback(of: p1)
+        #expect(appState.coordinator.liveVisualPlaylist === p1)
 
         // Switching to a different playlist in the overlay starts it playing and re-centers.
         let token0 = appState.scrollSelectionToken
-        appState.selectVisualPlaylistInPlayer(p2)
-        #expect(appState.coordinator.visualPlaylist === p2)   // a new selection plays
+        appState.playOnVisualChannel(p2)
+        #expect(appState.coordinator.liveVisualPlaylist === p2)   // a new selection plays
         #expect(appState.scrollSelectionToken > token0)        // asks the file list to re-center
         await appState.updateTask?.value
 
         // Re-clicking the already-playing playlist re-centers again without restarting it.
         let token1 = appState.scrollSelectionToken
-        appState.selectVisualPlaylistInPlayer(p2)
-        #expect(appState.coordinator.visualPlaylist === p2)
+        appState.playOnVisualChannel(p2)
+        #expect(appState.coordinator.liveVisualPlaylist === p2)
         #expect(appState.scrollSelectionToken > token1)
         await appState.updateTask?.value
     }
@@ -1274,7 +1274,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: audio)
+        appState.startPlayback(of: audio)
         #expect(audio.currentFileID == first.id)
 
         await appState.update(audio)            // a re-scan that removes the playing track
@@ -1310,7 +1310,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.remember(audio)   // loads the audio channel slot without playing
+        appState.rememberLastManaged(audio)   // loads the audio channel slot without playing
 
         // Nothing is playing, so the engine holds no live track — yet the overlay still resolves
         // the current file from the playlist's persisted resume position, exactly as the Manager
@@ -1330,7 +1330,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.remember(audio)
+        appState.rememberLastManaged(audio)
         appState.toggleFilterTag("blues", on: audio)   // a filter the resume track does not match
 
         // Mirrors the Manager: when the remembered file is filtered out of view, there's
@@ -1352,7 +1352,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.remember(audio)
+        appState.rememberLastManaged(audio)
 
         // The audio overlay is a transport list, not a triage surface: skipped tracks are never
         // playable, so they must not appear in it, and a skipped resume track must not resolve as
@@ -1416,16 +1416,16 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: a)
-        #expect(appState.coordinator.audioPlaylist === a)
+        appState.startPlayback(of: a)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
 
         // Switching to a different audio playlist in Manager stops the live one and leaves the
         // new one managed but stopped — only ever one audio playlist live.
-        appState.select(b)
+        appState.manage(b)
         #expect(a.playbackState == .stopped)
-        #expect(appState.audioChannelSlot === b)
+        #expect(appState.audioChannelPlaylist === b)
         #expect(b.playbackState == .stopped)
-        #expect(appState.coordinator.audioPlaylist == nil)
+        #expect(appState.coordinator.liveAudioPlaylist == nil)
 
         await appState.updateTask?.value
     }
@@ -1438,12 +1438,12 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.beginPlayback(of: a)
-        #expect(appState.coordinator.audioPlaylist === a)
+        appState.startPlayback(of: a)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
 
         // Re-selecting the already-live playlist re-scans and re-centers without stopping it.
-        appState.select(a)
-        #expect(appState.coordinator.audioPlaylist === a)
+        appState.manage(a)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
         #expect(a.playbackState == .playing)
 
         await appState.updateTask?.value
@@ -1457,7 +1457,7 @@ struct AppStateTests {
 
         appState.startFirstAudioPlaylistOrAdd()
         #expect(appState.isImportingPlaylist)
-        #expect(appState.audioChannelSlot == nil)
+        #expect(appState.audioChannelPlaylist == nil)
     }
 
     @Test func inletPlayStartsTheFirstAudioPlaylistWhenSomeExist() throws {
@@ -1469,8 +1469,8 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         appState.startFirstAudioPlaylistOrAdd()
-        #expect(appState.audioChannelSlot === audio)
-        #expect(appState.coordinator.audioPlaylist === audio)
+        #expect(appState.audioChannelPlaylist === audio)
+        #expect(appState.coordinator.liveAudioPlaylist === audio)
         #expect(!appState.isImportingPlaylist)
     }
 
@@ -1520,9 +1520,9 @@ struct AppStateTests {
         }
         #expect(appState.managerScope == .audio)
         #expect(appState.managedPlaylist === playlist)
-        #expect(appState.audioChannelSlot === playlist)
-        #expect(appState.coordinator.audioPlaylist == nil)   // created, never started
-        #expect(appState.lastActiveVideoPlaylist == nil)     // visual memory untouched
+        #expect(appState.audioChannelPlaylist === playlist)
+        #expect(appState.coordinator.liveAudioPlaylist == nil)   // created, never started
+        #expect(appState.lastManagedVideoPlaylist == nil)     // visual memory untouched
     }
 
     // MARK: - Slot model & scope switching
@@ -1572,9 +1572,9 @@ struct AppStateTests {
 
         // Manage a video, then browse to the image scope: the managed slot becomes the
         // remembered image playlist (here none), while the video stays remembered.
-        // Each `select` launches a background re-scan; await it before moving on so no task is
+        // Each `manage` launches a background re-scan; await it before moving on so no task is
         // left to touch a torn-down model after the body.
-        appState.select(env.video)
+        appState.manage(env.video)
         await appState.updateTask?.value
         #expect(appState.managerScope == .video)
         #expect(appState.managedPlaylist === env.video)
@@ -1584,7 +1584,7 @@ struct AppStateTests {
         #expect(appState.managedPlaylist == nil)   // no image remembered yet → placeholder
 
         // Picking an image makes it managed and remembered, independently of the video.
-        appState.select(env.image)
+        appState.manage(env.image)
         await appState.updateTask?.value
         #expect(appState.managedPlaylist === env.image)
 
@@ -1596,9 +1596,9 @@ struct AppStateTests {
     @Test func switchingToAudioScopeLoadsTheAudioChannelSlot() async throws {
         let env = try makeSlotState()
         let appState = env.appState
-        appState.select(env.video)
+        appState.manage(env.video)
         await appState.updateTask?.value   // drain the re-scan before the body returns
-        appState.remember(env.audio)   // an audio playlist sitting in the channel
+        appState.rememberLastManaged(env.audio)   // an audio playlist sitting in the channel
 
         appState.switchScope(to: .audio)
         #expect(appState.managedPlaylist === env.audio)   // synced from the audio channel slot
@@ -1610,12 +1610,12 @@ struct AppStateTests {
 
         // Recording a video then an image leaves both remembered — the visual memories don't
         // overwrite each other (only the *playing* visual channel is mutually exclusive).
-        appState.remember(env.video)
-        appState.remember(env.image)
-        #expect(appState.lastActiveVideoPlaylist === env.video)
-        #expect(appState.lastActiveImagePlaylist === env.image)
-        #expect(appState.appStateModel.lastActiveVideoPlaylistId == env.video.id)
-        #expect(appState.appStateModel.lastActiveImagePlaylistId == env.image.id)
+        appState.rememberLastManaged(env.video)
+        appState.rememberLastManaged(env.image)
+        #expect(appState.lastManagedVideoPlaylist === env.video)
+        #expect(appState.lastManagedImagePlaylist === env.image)
+        #expect(appState.appStateModel.lastManagedVideoPlaylistId == env.video.id)
+        #expect(appState.appStateModel.lastManagedImagePlaylistId == env.image.id)
     }
 
     // MARK: - Filtering edits the managed playlist

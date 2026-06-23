@@ -52,9 +52,9 @@ struct FilesTagsOverlayView: View {
             currentFile: appState.currentVisualFile(in: files),
             scrollTrigger: appState.scrollSelectionToken,
             tagAutoFocus: true,
-            onSelectPlaylist: { appState.selectVisualPlaylistInPlayer($0) },
+            onSelectPlaylist: { appState.playOnVisualChannel($0) },
             onAddPlaylist: { appState.isImportingPlaylist = true },
-            onPlayFile: { coordinator.playNow($0, file: $1); overlays.closeFilesTags() },
+            onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeFilesTags() },
             onDeleteFile: { appState.requestPlayerDelete($0) },
             onRemoveAudio: { appState.requestAudioStrip([$0]) },
             onRenameError: { appState.playerRenameError = $0 }

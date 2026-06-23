@@ -66,7 +66,7 @@ import AppKit
     private final class MockOverlay: HotkeyOverlayContext {
         var isAnyOverlayOpen = false
         var isFilesTagsOpen = false
-        var audioHoldsKeyContext = false
+        var keyContext: KeyContext = .visual
         var closeTopmostCalls = 0
         var openFilesTagsCalls = 0
         var closeFilesTagsCalls = 0
@@ -132,7 +132,7 @@ import AppKit
     }
 
     /// One playlist of `type` managed in Manager mode. The managed slot is set directly
-    /// rather than via `select(_:)`, which launches an un-awaited re-scan task that would
+    /// rather than via `manage(_:)`, which launches an un-awaited re-scan task that would
     /// outlive the in-memory container and trap on a torn-down model. `configure` runs after
     /// the playlist is managed, for view-mode tweaks (e.g. gallery) that change the file list.
     private func managerFixture(
@@ -157,7 +157,7 @@ import AppKit
     /// A fresh overlay double already holding the audio key context.
     private func audioOverlay() -> MockOverlay {
         let overlay = MockOverlay()
-        overlay.audioHoldsKeyContext = true
+        overlay.keyContext = .audio
         return overlay
     }
 
@@ -288,7 +288,7 @@ import AppKit
 
         #expect(f.router.route(.s, rightOption: false))
         #expect(f.appState.mode == .manager)
-        #expect(f.appState.coordinator.visualPlaylist == nil)
+        #expect(f.appState.coordinator.liveVisualPlaylist == nil)
     }
 
     @Test func deleteRaisesPlayerConfirmationAndHoldsContext() throws {
@@ -313,7 +313,7 @@ import AppKit
 
     @Test func deleteUnderAudioKeyContextTargetsTheAudioTrack() throws {
         let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
-        f.appState.remember(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
+        f.appState.rememberLastManaged(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
         defer { f.appState.coordinator.shutdown() }
 
         // With the audio overlay holding key context, `[delete]` targets the focused audio track
@@ -325,16 +325,16 @@ import AppKit
 
     @Test func spaceRestartsAStoppedAudioChannel() throws {
         let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
-        f.appState.remember(f.playlist)   // the persistent slot survives Stop
+        f.appState.rememberLastManaged(f.playlist)   // the persistent slot survives Stop
         defer { f.appState.coordinator.shutdown() }
 
         f.appState.coordinator.stop(f.playlist)
-        #expect(f.appState.coordinator.audioPlaylist == nil)   // Stop cleared the live channel
+        #expect(f.appState.coordinator.liveAudioPlaylist == nil)   // Stop cleared the live channel
         #expect(f.playlist.playbackState == .stopped)
 
-        // `[space]` restarts from the slot — a plain `togglePause` would no-op after Stop.
+        // `[space]` restarts from the slot — a plain `togglePauseIfActive` would no-op after Stop.
         #expect(f.router.route(.space, rightOption: false))
-        #expect(f.appState.coordinator.audioPlaylist === f.playlist)
+        #expect(f.appState.coordinator.liveAudioPlaylist === f.playlist)
         #expect(f.playlist.playbackState == .playing)
     }
 
@@ -466,7 +466,7 @@ import AppKit
         let overlay = audioOverlay()
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"], overlay: overlay)
         defer { f.appState.coordinator.shutdown() }
-        #expect(f.appState.coordinator.audioPlaylist == nil)
+        #expect(f.appState.coordinator.liveAudioPlaylist == nil)
 
         #expect(f.router.route(.arrowDown, rightOption: false))
         #expect(overlay.expandAudioCalls == 1)
@@ -536,7 +536,7 @@ import AppKit
 
         #expect(f.router.route(.enter, rightOption: false))
         #expect(f.appState.mode == .player)
-        #expect(f.appState.coordinator.visualPlaylist === f.playlist)
+        #expect(f.appState.coordinator.liveVisualPlaylist === f.playlist)
         #expect(f.appState.coordinator.visualCurrentFile?.id == files[1].id)
     }
 

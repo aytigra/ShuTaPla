@@ -123,14 +123,14 @@ struct PlayerView: View {
 
     /// Whether the visual playlist's filtered playback sequence is empty.
     private var visualHasNoFiles: Bool {
-        guard let visual = coordinator.visualPlaylist else { return false }
+        guard let visual = coordinator.liveVisualPlaylist else { return false }
         return !visual.hasPlaybackFiles
     }
 
     /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is
     /// playing, nothing is suppressing it, and no overlay is on screen to interact with.
     private var cursorShouldAutoHide: Bool {
-        guard let visual = coordinator.visualPlaylist else { return false }
+        guard let visual = coordinator.liveVisualPlaylist else { return false }
         return visual.playbackState == .playing && !coordinator.isSuppressed && overlays.active.isEmpty
     }
 
@@ -141,7 +141,7 @@ struct PlayerView: View {
 
     @ViewBuilder
     private var bottomControlsContainer: some View {
-        if let visual = coordinator.visualPlaylist, !coordinator.isSuppressed {
+        if let visual = coordinator.liveVisualPlaylist, !coordinator.isSuppressed {
             let revealed = overlays.active.contains(.bottomControls)
             PlaybackControlsBar(playlist: visual)
                 .frame(width: bottomControlsWidth)
@@ -159,7 +159,7 @@ struct PlayerView: View {
     @ViewBuilder
     private var filesTagsContainer: some View {
         if overlays.active.contains(.filesTags), !coordinator.isSuppressed,
-           let visual = coordinator.visualPlaylist {
+           let visual = coordinator.liveVisualPlaylist {
             FilesTagsOverlayView(playlist: visual)
                 .transition(.move(edge: .bottom))
         }

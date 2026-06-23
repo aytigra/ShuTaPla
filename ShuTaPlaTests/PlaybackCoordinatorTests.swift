@@ -86,12 +86,12 @@ import SwiftData
         defer { coordinator.shutdown() }
 
         coordinator.play(video)
-        #expect(coordinator.visualPlaylist === video)
+        #expect(coordinator.liveVisualPlaylist === video)
         #expect(coordinator.visualKind == .video)
         #expect(video.playbackState == .playing)
 
         coordinator.play(image)
-        #expect(coordinator.visualPlaylist === image)
+        #expect(coordinator.liveVisualPlaylist === image)
         #expect(coordinator.visualKind == .image)
         #expect(image.playbackState == .playing)
         #expect(video.playbackState == .stopped)   // the visual channel is shared
@@ -110,8 +110,8 @@ import SwiftData
         coordinator.play(video)
         coordinator.play(audio)
 
-        #expect(coordinator.visualPlaylist === video)
-        #expect(coordinator.audioPlaylist === audio)
+        #expect(coordinator.liveVisualPlaylist === video)
+        #expect(coordinator.liveAudioPlaylist === audio)
         #expect(video.playbackState == .playing)
         #expect(audio.playbackState == .playing)
     }
@@ -309,7 +309,7 @@ import SwiftData
         coordinator.reconcile(playlistThatChanged: image)
 
         #expect(image.playbackSequence.isEmpty)
-        #expect(coordinator.visualPlaylist === image)   // still in Player mode
+        #expect(coordinator.liveVisualPlaylist === image)   // still in Player mode
         #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
     }
 
@@ -327,9 +327,9 @@ import SwiftData
 
         coordinator.shutdown()
 
-        #expect(coordinator.visualPlaylist == nil)
+        #expect(coordinator.liveVisualPlaylist == nil)
         #expect(coordinator.visualKind == nil)
-        #expect(coordinator.audioPlaylist == nil)
+        #expect(coordinator.liveAudioPlaylist == nil)
         #expect(!coordinator.isSuppressed)
         #expect(!coordinator.visualHaltedForOverlay)
     }
@@ -345,9 +345,9 @@ import SwiftData
 
         coordinator.play(image)
         #expect(image.playbackState == .playing)
-        coordinator.togglePause(image)
+        coordinator.togglePauseIfActive(image)
         #expect(image.playbackState == .paused)
-        coordinator.togglePause(image)
+        coordinator.togglePauseIfActive(image)
         #expect(image.playbackState == .playing)
     }
 
@@ -368,15 +368,15 @@ import SwiftData
         #expect(image.playbackState == .stopped)
 
         // Stopped: the play/pause button starts it again, resuming from the remembered file —
-        // a plain `togglePause` would no-op because Stop removed the playlist from the channel.
-        coordinator.togglePlayback(image)
+        // a plain `togglePauseIfActive` would no-op because Stop removed the playlist from the channel.
+        coordinator.playOrTogglePause(image)
         #expect(image.playbackState == .playing)
         #expect(image.currentFileID == frames[1].id)
 
         // Live: the same button now toggles pause/resume.
-        coordinator.togglePlayback(image)
+        coordinator.playOrTogglePause(image)
         #expect(image.playbackState == .paused)
-        coordinator.togglePlayback(image)
+        coordinator.playOrTogglePause(image)
         #expect(image.playbackState == .playing)
     }
 
@@ -398,7 +398,7 @@ import SwiftData
         coordinator.suppress()
         #expect(coordinator.isSuppressed)
 
-        coordinator.playNow(image, file: files[2])
+        coordinator.playNow(image, startingAt: files[2])
         #expect(!coordinator.isSuppressed)                         // global pause lifted
         #expect(image.playbackState == .playing)
         #expect(coordinator.visualCurrentFile?.id == files[2].id)  // jumped to the chosen file
@@ -419,7 +419,7 @@ import SwiftData
         coordinator.pause(image)
         #expect(image.playbackState == .paused)
 
-        coordinator.playNow(image, file: files[1])
+        coordinator.playNow(image, startingAt: files[1])
         #expect(image.playbackState == .playing)                   // its own pause cleared
         #expect(coordinator.visualCurrentFile?.id == files[1].id)
     }
@@ -525,7 +525,7 @@ import SwiftData
         // placeholder, so an emptied audio sequence stops the playlist outright — easy to restart
         // from the same overlay.
         #expect(audio.playbackSequence.isEmpty)
-        #expect(coordinator.audioPlaylist == nil)           // the channel stops
+        #expect(coordinator.liveAudioPlaylist == nil)           // the channel stops
         #expect(audio.playbackState == .stopped)
         #expect(coordinator.audioCurrentFile == nil)
     }
@@ -543,9 +543,9 @@ import SwiftData
 
         // Nothing is playing yet — the extended overlay opened on a restored playlist, or the
         // channel was stopped. Double-clicking a track must start it, not silently no-op.
-        #expect(coordinator.audioPlaylist == nil)
-        coordinator.playNow(audio, file: tracks[1])
-        #expect(coordinator.audioPlaylist === audio)
+        #expect(coordinator.liveAudioPlaylist == nil)
+        coordinator.playNow(audio, startingAt: tracks[1])
+        #expect(coordinator.liveAudioPlaylist === audio)
         #expect(coordinator.audioCurrentFile?.id == tracks[1].id)
     }
 
@@ -563,7 +563,7 @@ import SwiftData
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
-        coordinator.togglePause(audio)
+        coordinator.togglePauseIfActive(audio)
         #expect(audio.playbackState == .paused)
 
         // Switching tracks from the compact overlay loads and auto-starts the new file, so the
@@ -571,7 +571,7 @@ import SwiftData
         coordinator.next(audio)
         #expect(audio.playbackState == .playing)
 
-        coordinator.togglePause(audio)
+        coordinator.togglePauseIfActive(audio)
         #expect(audio.playbackState == .paused)
         coordinator.previous(audio)
         #expect(audio.playbackState == .playing)
@@ -598,7 +598,7 @@ import SwiftData
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
-        coordinator.togglePause(audio)                  // pause the channel (state .paused)
+        coordinator.togglePauseIfActive(audio)                  // pause the channel (state .paused)
         #expect(audio.playbackState == .paused)
         let pausesBeforeReconcile = recorder.pauseCount
 

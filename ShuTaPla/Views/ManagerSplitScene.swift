@@ -519,7 +519,7 @@ private struct CenterActionsBar: View {
         // The skipped triage filter leaves no playable sequence, so the Play affordance is hidden.
         if playlist.filterState.serviceFilter != .skipped {
             Button {
-                appState.beginPlayback(of: playlist)
+                appState.startPlayback(of: playlist)
             } label: {
                 Label("Play", systemImage: "play.fill")
             }

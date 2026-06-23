@@ -90,18 +90,18 @@ import Testing
     @Test func audioKeyContextRequiresRevealAndActiveOverlay() {
         let m = OverlayManager()
         m.revealCompactAudio()
-        #expect(!m.audioHoldsKeyContext)         // shown but not yet fully revealed
+        #expect(m.keyContext == .visual)         // shown but not yet fully revealed
         m.audioDidFullyReveal()
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
     }
 
     @Test func audioKeyContextClearsWhenOverlayCloses() {
         let m = OverlayManager()
         m.revealCompactAudio()
         m.audioDidFullyReveal()
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
         m.closeAudioOverlay()
-        #expect(!m.audioHoldsKeyContext)
+        #expect(m.keyContext == .visual)
         #expect(!m.active.contains(.audioCompact))
         #expect(!m.active.contains(.audioExtended))
     }
@@ -111,7 +111,7 @@ import Testing
         m.revealCompactAudio()
         m.audioDidFullyReveal()
         m.show(.filesTags)                        // exclusivity removes audioCompact
-        #expect(!m.audioHoldsKeyContext)
+        #expect(m.keyContext == .visual)
     }
 
     // MARK: - Compact audio: hover vs. hotkey
@@ -146,7 +146,7 @@ import Testing
         m.audioDidFullyReveal()
         m.expandAudioToExtended()                 // audioCompact → audioExtended, both are audio
         #expect(m.active.contains(.audioExtended))
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
     }
 
     @Test func collapseToCompactReturnsToCompactAndKeepsKeyContext() {
@@ -157,7 +157,7 @@ import Testing
         m.collapseAudioToCompact()                // audioExtended → audioCompact, still audio
         #expect(m.active.contains(.audioCompact))
         #expect(!m.active.contains(.audioExtended))
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
     }
 
     // The collapsed bar stays pinned, so a stray hover-exit after collapsing doesn't close it.

@@ -136,7 +136,7 @@ struct PlaylistSidebar: View {
             )
         } else {
             Button {
-                appState.select(playlist)
+                appState.manage(playlist)
             } label: {
                 HStack {
                     Text(playlist.name)

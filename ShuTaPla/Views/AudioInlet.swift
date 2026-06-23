@@ -31,7 +31,7 @@ struct AudioTransport: View {
 
     /// Whether the playlist currently occupies the audio channel. Stop removes it from the
     /// channel but leaves it active, collapsing the transport to Play · Volume.
-    private var isLive: Bool { coordinator.audioPlaylist === playlist }
+    private var isLive: Bool { coordinator.liveAudioPlaylist === playlist }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -39,7 +39,7 @@ struct AudioTransport: View {
                 controlButton("backward.fill") { coordinator.previous(playlist) }
             }
             controlButton(playlist.playbackState == .playing ? "pause.fill" : "play.fill") {
-                coordinator.togglePlayback(playlist)
+                coordinator.playOrTogglePause(playlist)
             }
             // The skipped triage filter leaves no playable track, so starting playback is a no-op.
             .disabled(playlist.playbackState != .playing && !playlist.hasPlaybackFiles)
@@ -113,7 +113,7 @@ struct AudioInlet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let audio = appState.audioChannelSlot {
+            if let audio = appState.audioChannelPlaylist {
                 active(audio)
             } else {
                 idle

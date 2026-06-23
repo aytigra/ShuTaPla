@@ -32,9 +32,9 @@ final class OverlayManager: HotkeyOverlayContext {
     private(set) var active: Set<Overlay> = []
 
     /// Granted by `audioDidFullyReveal()` once the audio overlay's slide-in completes,
-    /// cleared whenever no audio overlay remains active. Gates `audioHoldsKeyContext`:
-    /// the audio overlay claims key context only when *fully revealed*, not the moment
-    /// it begins to appear.
+    /// cleared whenever no audio overlay remains active. Gates `keyContext`: the audio
+    /// overlay claims key context only when *fully revealed*, not the moment it begins
+    /// to appear.
     private(set) var audioFullyRevealed = false
 
     /// Whether the compact audio overlay was opened by a hotkey (`[arrow down]`), which
@@ -135,8 +135,8 @@ final class OverlayManager: HotkeyOverlayContext {
 
     var isFilesTagsOpen: Bool { active.contains(.filesTags) }
 
-    var audioHoldsKeyContext: Bool {
-        audioFullyRevealed && !active.isDisjoint(with: Self.audioSet)
+    var keyContext: KeyContext {
+        audioFullyRevealed && !active.isDisjoint(with: Self.audioSet) ? .audio : .visual
     }
 
     func closeTopmostOverlay() {

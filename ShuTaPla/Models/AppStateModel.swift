@@ -13,8 +13,8 @@ import SwiftData
 final class AppStateModel {
     /// The last-managed video and image playlists — the Manager's per-type memory, used to
     /// restore the managed slot when switching to that scope. Independent of each other.
-    var lastActiveVideoPlaylistId: UUID?
-    var lastActiveImagePlaylistId: UUID?
+    var lastManagedVideoPlaylistId: UUID?
+    var lastManagedImagePlaylistId: UUID?
 
     /// The persistent audio channel playlist (survives Stop). Also serves as the remembered
     /// audio playlist when switching to audio scope.

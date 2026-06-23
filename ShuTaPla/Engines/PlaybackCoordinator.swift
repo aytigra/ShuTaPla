@@ -28,15 +28,15 @@ final class PlaybackCoordinator: PlaybackSource {
     private(set) var isSuppressed = false
 
     /// The playlist on the shared visual channel (video or image), or `nil`.
-    private(set) var visualPlaylist: Playlist?
+    private(set) var liveVisualPlaylist: Playlist?
 
     /// Which engine the visual channel is using, so suspend/resume/stop route to
-    /// the right one without re-reading `visualPlaylist.mediaType` (which could
+    /// the right one without re-reading `liveVisualPlaylist.mediaType` (which could
     /// drift if the model changed underneath).
     private(set) var visualKind: MediaType?
 
     /// The playlist on the independent audio channel, or `nil`.
-    private(set) var audioPlaylist: Playlist?
+    private(set) var liveAudioPlaylist: Playlist?
 
     /// The image engine — cheap (no libmpv), so it always exists. Player views read
     /// its `currentImage`/`transform` directly.
@@ -86,9 +86,9 @@ final class PlaybackCoordinator: PlaybackSource {
         bookmarkByPlaylist.removeAll()
         // Clear the channel bookkeeping so a reused coordinator doesn't report stale
         // active channels or a leftover suppression/overlay halt.
-        visualPlaylist = nil
+        liveVisualPlaylist = nil
         visualKind = nil
-        audioPlaylist = nil
+        liveAudioPlaylist = nil
         isSuppressed = false
         visualHaltedForOverlay = false
     }
@@ -106,11 +106,11 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     private func startVisual(_ playlist: Playlist, startingAt file: PlaylistFile?) {
-        if let current = visualPlaylist, current !== playlist { stopVisual() }
+        if let current = liveVisualPlaylist, current !== playlist { stopVisual() }
         guard let folder = beginFolderAccess(for: playlist) else { return }
 
         let start = startFile(for: playlist, requested: file)
-        visualPlaylist = playlist
+        liveVisualPlaylist = playlist
         visualKind = playlist.mediaType
         playlist.playbackState = .playing
         if let start { playlist.currentFileID = start.id }
@@ -130,12 +130,12 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     private func startAudio(_ playlist: Playlist, startingAt file: PlaylistFile?) {
-        if let current = audioPlaylist, current !== playlist { stopAudio() }
+        if let current = liveAudioPlaylist, current !== playlist { stopAudio() }
         guard let folder = beginFolderAccess(for: playlist),
               let engine = ensureAudioEngine() else { return }
 
         let start = startFile(for: playlist, requested: file)
-        audioPlaylist = playlist
+        liveAudioPlaylist = playlist
         playlist.playbackState = .playing
         if let start { playlist.currentFileID = start.id }
 
@@ -149,30 +149,30 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// Stops `playlist` on whichever channel it occupies and marks it Stopped.
     func stop(_ playlist: Playlist) {
-        if visualPlaylist === playlist { stopVisual() }
-        else if audioPlaylist === playlist { stopAudio() }
+        if liveVisualPlaylist === playlist { stopVisual() }
+        else if liveAudioPlaylist === playlist { stopAudio() }
         else { playlist.playbackState = .stopped }
     }
 
     private func stopVisual() {
-        guard let playlist = visualPlaylist else { return }
+        guard let playlist = liveVisualPlaylist else { return }
         switch visualKind {
         case .image: imageEngine.stop()
         default: videoEngine?.stop()
         }
         playlist.playbackState = .stopped
         endFolderAccess(for: playlist.id)
-        visualPlaylist = nil
+        liveVisualPlaylist = nil
         visualKind = nil
         visualHaltedForOverlay = false
     }
 
     private func stopAudio() {
-        guard let playlist = audioPlaylist else { return }
+        guard let playlist = liveAudioPlaylist else { return }
         audioEngine?.stop()
         playlist.playbackState = .stopped
         endFolderAccess(for: playlist.id)
-        audioPlaylist = nil
+        liveAudioPlaylist = nil
     }
 
     // MARK: - Per-playlist pause / unpause
@@ -192,16 +192,16 @@ final class PlaybackCoordinator: PlaybackSource {
         if !isSuppressed { resume(playlist) }
     }
 
-    func togglePause(_ playlist: Playlist) {
+    func togglePauseIfActive(_ playlist: Playlist) {
         playlist.playbackState == .playing ? pause(playlist) : unpause(playlist)
     }
 
     /// The play/pause button's full action: a playlist on the channel toggles between Playing
     /// and Paused; a stopped one (Stop removed it from the channel) starts, resuming from its
-    /// remembered file. `togglePause` alone can't start a stopped playlist — `unpause` guards on
+    /// remembered file. `togglePauseIfActive` alone can't start a stopped playlist — `unpause` guards on
     /// `isActive` — so the audio overlay's transport would otherwise be a dead end after Stop.
-    func togglePlayback(_ playlist: Playlist) {
-        if isActive(playlist) { togglePause(playlist) } else { play(playlist) }
+    func playOrTogglePause(_ playlist: Playlist) {
+        if isActive(playlist) { togglePauseIfActive(playlist) } else { play(playlist) }
     }
 
     // MARK: - Suppression (pause overlay)
@@ -210,16 +210,16 @@ final class PlaybackCoordinator: PlaybackSource {
     func suppress() {
         guard !isSuppressed else { return }
         isSuppressed = true
-        if let playlist = visualPlaylist { suspend(playlist) }
-        if let playlist = audioPlaylist { suspend(playlist) }
+        if let playlist = liveVisualPlaylist { suspend(playlist) }
+        if let playlist = liveAudioPlaylist { suspend(playlist) }
     }
 
     /// Lifts the halt: Playing playlists resume, Paused ones stay paused.
     func unsuppress() {
         guard isSuppressed else { return }
         isSuppressed = false
-        if let playlist = visualPlaylist, playlist.playbackState == .playing { resume(playlist) }
-        if let playlist = audioPlaylist, playlist.playbackState == .playing { resume(playlist) }
+        if let playlist = liveVisualPlaylist, playlist.playbackState == .playing { resume(playlist) }
+        if let playlist = liveAudioPlaylist, playlist.playbackState == .playing { resume(playlist) }
     }
 
     // MARK: - Advance / previous
@@ -323,15 +323,15 @@ final class PlaybackCoordinator: PlaybackSource {
     /// Seeks the audio channel to `fraction` (0…1, clamped) of its duration. The one place the
     /// fraction→seconds mapping lives, shared by the inlet and overlay seek bars.
     func seekAudio(toFraction fraction: Double) {
-        guard let audioPlaylist else { return }
+        guard let liveAudioPlaylist else { return }
         let clamped = min(max(fraction, 0), 1)
-        seek(audioPlaylist, to: clamped * audioDuration)
+        seek(liveAudioPlaylist, to: clamped * audioDuration)
     }
 
     /// Plays `file` on `playlist`'s channel right away: lifts a global pause, clears the
     /// playlist's own pause, then jumps to it. The "play this one now" intent behind a
     /// double-click in the Files & Tags overlay.
-    func playNow(_ playlist: Playlist, file: PlaylistFile) {
+    func playNow(_ playlist: Playlist, startingAt file: PlaylistFile) {
         if isSuppressed { unsuppress() }
         if playlist.playbackState == .paused { unpause(playlist) }
         // Jump within the running channel; if the playlist isn't on a channel yet (never
@@ -367,7 +367,7 @@ final class PlaybackCoordinator: PlaybackSource {
     /// gates whether to immediately re-suspend it.
     private func shouldBePlaying(_ playlist: Playlist) -> Bool {
         guard playlist.playbackState == .playing, !isSuppressed else { return false }
-        if visualPlaylist === playlist, visualHaltedForOverlay { return false }
+        if liveVisualPlaylist === playlist, visualHaltedForOverlay { return false }
         return true
     }
 
@@ -403,13 +403,13 @@ final class PlaybackCoordinator: PlaybackSource {
     private(set) var visualHaltedForOverlay = false
 
     func haltVisualForOverlay() {
-        guard !visualHaltedForOverlay, !isSuppressed, let visual = visualPlaylist else { return }
+        guard !visualHaltedForOverlay, !isSuppressed, let visual = liveVisualPlaylist else { return }
         visualHaltedForOverlay = true
         suspend(visual)
     }
 
     func resumeVisualForOverlay() {
-        guard visualHaltedForOverlay, let visual = visualPlaylist else { return }
+        guard visualHaltedForOverlay, let visual = liveVisualPlaylist else { return }
         visualHaltedForOverlay = false
         if !isSuppressed, visual.playbackState == .playing { resume(visual) }
     }
@@ -480,8 +480,8 @@ final class PlaybackCoordinator: PlaybackSource {
     private enum Channel { case visualVideo, visualImage, audio }
 
     private func channel(of playlist: Playlist) -> Channel? {
-        if visualPlaylist === playlist { return visualKind == .image ? .visualImage : .visualVideo }
-        if audioPlaylist === playlist { return .audio }
+        if liveVisualPlaylist === playlist { return visualKind == .image ? .visualImage : .visualVideo }
+        if liveAudioPlaylist === playlist { return .audio }
         return nil
     }
 

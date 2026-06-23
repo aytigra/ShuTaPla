@@ -114,7 +114,7 @@ final class AppState {
     var mode: AppMode
 
     /// Which media type the sidebar lists. Persisted, so a relaunch reopens the scope that was
-    /// being managed. Set through `switchScope(to:)` (the browse gesture) or `loadManaged(_:)`
+    /// being managed. Set through `switchScope(to:)` (the browse gesture) or `setManaged(_:)`
     /// (a managed playlist sets the scope to its type); the managed playlist always matches it.
     private(set) var managerScope: ManagerScope = .video
 
@@ -127,13 +127,13 @@ final class AppState {
     /// The audio channel slot — persistent: it survives Stop, so the transport can restart it,
     /// and it is what switching to audio scope loads into the managed slot. `nil` only before
     /// any audio playlist has been loaded (or after the loaded one is deleted).
-    var audioChannelSlot: Playlist?
+    var audioChannelPlaylist: Playlist?
 
     // Per-type memory of the last-managed visual playlist, used only to pre-load the managed
     // slot when switching to that scope. Independent of each other (and of the mutually
     // exclusive *playing* visual channel, which lives on the coordinator).
-    var lastActiveVideoPlaylist: Playlist?
-    var lastActiveImagePlaylist: Playlist?
+    var lastManagedVideoPlaylist: Playlist?
+    var lastManagedImagePlaylist: Playlist?
 
     /// In-flight background re-scans, keyed by playlist id, started by `rescan(_:)`. Keyed
     /// per playlist so re-reading one playlist supersedes only its own stale scan: selecting
@@ -156,13 +156,13 @@ final class AppState {
     /// The tag inspector reads this.
     var managerSelection: Set<UUID> = []
 
-    /// Bumped by `select` to ask the file list to scroll its selection into view,
+    /// Bumped by `manage` to ask the file list to scroll its selection into view,
     /// even when the selection itself didn't change — so re-clicking the current
     /// playlist re-centers the playing file. The list observes the change only.
     private(set) var scrollSelectionToken = 0
 
     /// The audio overlay's counterpart to `scrollSelectionToken`: bumped by
-    /// `selectAudioPlaylist` so the extended overlay's file list scrolls the current track
+    /// `playOnAudioChannel` so the extended overlay's file list scrolls the current track
     /// into view when a playlist is (re-)selected while the overlay is already open.
     private(set) var audioScrollToken = 0
 
@@ -251,12 +251,12 @@ final class AppState {
     /// transport list (no triage toggles), and a track the engine won't play has no place in it.
     /// Under the Skipped filter the list is therefore empty. The service filter set in Manager
     /// still applies (e.g. Untagged narrows the channel to its untagged playable tracks).
-    var audioChannelFiles: [PlaylistFile] { audioChannelSlot?.playbackSequence ?? [] }
+    var audioChannelFiles: [PlaylistFile] { audioChannelPlaylist?.playbackSequence ?? [] }
 
     /// The visual channel playlist's display-ordered files — the Files & Tags overlay's list.
     /// This is the *display* sequence (it keeps skipped files under the Skipped filter), because
     /// the Files & Tags overlay is an editing surface where skipped rows are triaged and un-skipped.
-    var visualChannelFiles: [PlaylistFile] { coordinator.visualPlaylist?.displaySequence ?? [] }
+    var visualChannelFiles: [PlaylistFile] { coordinator.liveVisualPlaylist?.displaySequence ?? [] }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
     /// Resolved from the playlist's persisted `currentFileID` against its file list, not the
@@ -268,7 +268,7 @@ final class AppState {
     /// that reads `audioChannelFiles` for its list passes that same list here instead of letting
     /// the accessor re-walk the whole sequence to look one file up.
     func currentAudioFile(in files: [PlaylistFile]) -> PlaylistFile? {
-        guard let id = audioChannelSlot?.currentFileID else { return nil }
+        guard let id = audioChannelPlaylist?.currentFileID else { return nil }
         return files.first { $0.id == id }
     }
 
@@ -282,7 +282,7 @@ final class AppState {
     /// Resolves the visual channel's current file within an already-derived file list, so a view
     /// holding `visualChannelFiles` need not re-walk the sequence to look one file up.
     func currentVisualFile(in files: [PlaylistFile]) -> PlaylistFile? {
-        guard let id = coordinator.visualPlaylist?.currentFileID else { return nil }
+        guard let id = coordinator.liveVisualPlaylist?.currentFileID else { return nil }
         return files.first { $0.id == id }
     }
 
@@ -327,11 +327,11 @@ final class AppState {
     /// Restores the slot references and scope from the persisted IDs, then loads the
     /// persisted scope's remembered playlist into the managed slot.
     private func resolveActivePlaylists() {
-        lastActiveVideoPlaylist = appStateModel.lastActiveVideoPlaylistId.flatMap(playlist(withID:))
-        lastActiveImagePlaylist = appStateModel.lastActiveImagePlaylistId.flatMap(playlist(withID:))
-        audioChannelSlot = appStateModel.audioChannelPlaylistId.flatMap(playlist(withID:))
+        lastManagedVideoPlaylist = appStateModel.lastManagedVideoPlaylistId.flatMap(playlist(withID:))
+        lastManagedImagePlaylist = appStateModel.lastManagedImagePlaylistId.flatMap(playlist(withID:))
+        audioChannelPlaylist = appStateModel.audioChannelPlaylistId.flatMap(playlist(withID:))
         managerScope = appStateModel.managerScopeRaw.flatMap(ManagerScope.init(rawValue:)) ?? .video
-        managedPlaylist = rememberedPlaylist(for: managerScope)
+        managedPlaylist = lastManagedPlaylist(for: managerScope)
     }
 
     private func playlist(withID id: UUID) -> Playlist? {
@@ -343,34 +343,34 @@ final class AppState {
     /// Records `playlist` as its type's remembered playlist, persisting the choice. The visual
     /// memories (video / image) are independent of each other; audio's memory is the channel
     /// slot itself. Touches neither the managed slot, the scope, nor playback.
-    func remember(_ playlist: Playlist) {
+    func rememberLastManaged(_ playlist: Playlist) {
         switch playlist.mediaType {
         case .video:
-            lastActiveVideoPlaylist = playlist
-            appStateModel.lastActiveVideoPlaylistId = playlist.id
+            lastManagedVideoPlaylist = playlist
+            appStateModel.lastManagedVideoPlaylistId = playlist.id
         case .image:
-            lastActiveImagePlaylist = playlist
-            appStateModel.lastActiveImagePlaylistId = playlist.id
+            lastManagedImagePlaylist = playlist
+            appStateModel.lastManagedImagePlaylistId = playlist.id
         case .audio:
-            audioChannelSlot = playlist
+            audioChannelPlaylist = playlist
             appStateModel.audioChannelPlaylistId = playlist.id
         }
     }
 
     /// The remembered playlist for a scope — what switching to it loads into the managed slot.
-    private func rememberedPlaylist(for scope: ManagerScope) -> Playlist? {
+    private func lastManagedPlaylist(for scope: ManagerScope) -> Playlist? {
         switch scope {
-        case .video: return lastActiveVideoPlaylist
-        case .image: return lastActiveImagePlaylist
-        case .audio: return audioChannelSlot
+        case .video: return lastManagedVideoPlaylist
+        case .image: return lastManagedImagePlaylist
+        case .audio: return audioChannelPlaylist
         }
     }
 
     /// Loads `playlist` into the managed slot: records it and sets the scope to its type, so the
     /// whole Manager binds to it. The one load step that makes a playlist managed; playback is a
     /// separate concern handled by the callers that start it.
-    private func loadManaged(_ playlist: Playlist) {
-        remember(playlist)
+    private func setManaged(_ playlist: Playlist) {
+        rememberLastManaged(playlist)
         managedPlaylist = playlist
         managerScope = ManagerScope(playlist.mediaType)
         appStateModel.managerScopeRaw = managerScope.rawValue
@@ -383,7 +383,7 @@ final class AppState {
         guard scope != managerScope else { return }
         managerScope = scope
         appStateModel.managerScopeRaw = scope.rawValue
-        managedPlaylist = rememberedPlaylist(for: scope)
+        managedPlaylist = lastManagedPlaylist(for: scope)
         managerSelection = []
         if let playlist = managedPlaylist, let id = playlist.currentFileID,
            playlist.displaySequence.contains(where: { $0.id == id }) {
@@ -405,11 +405,11 @@ final class AppState {
 
     /// A double-click in the Manager center: a visual playlist enters the fullscreen player at
     /// the file; an audio playlist starts the audio channel there, staying in Manager.
-    func beginManagerPlayback(of playlist: Playlist, startingAt file: PlaylistFile) {
+    func playFromManager(of playlist: Playlist, startingAt file: PlaylistFile) {
         if playlist.mediaType == .audio {
             coordinator.play(playlist, startingAt: file)
         } else {
-            beginPlayback(of: playlist, startingAt: file)
+            startPlayback(of: playlist, startingAt: file)
         }
     }
 
@@ -541,13 +541,13 @@ final class AppState {
         // into the managed slot and switches the scope to its type.
         let startsPlaying = mode == .player
         if startsPlaying {
-            remember(playlist)
+            rememberLastManaged(playlist)
             coordinator.play(playlist)
         } else {
             // Only one audio playlist is ever live; releasing the channel keeps a background
             // playlist from playing on behind a stopped audio creation.
-            if mediaType == .audio, let live = coordinator.audioPlaylist { coordinator.stop(live) }
-            loadManaged(playlist)
+            if mediaType == .audio, let live = coordinator.liveAudioPlaylist { coordinator.stop(live) }
+            setManaged(playlist)
             managerSelection = []
         }
         if mode == .welcome { mode = .manager }
@@ -563,18 +563,18 @@ final class AppState {
 
     /// Makes `playlist` the Manager selection, activates it for its channel, and
     /// kicks off a background re-scan to pick up files added or removed on disk.
-    func select(_ playlist: Playlist) {
+    func manage(_ playlist: Playlist) {
         let isNewSelection = managedPlaylist !== playlist
         if isNewSelection {
             managerSelection = []
             // Selecting a different audio playlist swaps the audio channel slot; only one audio
             // playlist is ever live, so release the channel to keep a background one from playing
             // on behind the new selection. (Visual playback is stopped while browsing in Manager.)
-            if playlist.mediaType == .audio, let live = coordinator.audioPlaylist, live !== playlist {
+            if playlist.mediaType == .audio, let live = coordinator.liveAudioPlaylist, live !== playlist {
                 coordinator.stop(live)
             }
         }
-        loadManaged(playlist)   // managed slot + scope, restoring the persisted filter at once
+        setManaged(playlist)   // managed slot + scope, restoring the persisted filter at once
         // Highlight where playback will resume and scroll the list to it. Re-selecting the managed
         // playlist snaps the highlight back to the playing file — the one way to do so without
         // leaving it. Skipped when the resume file is filtered out (or none has played yet).
@@ -598,14 +598,14 @@ final class AppState {
         updateTask = task
     }
 
-    /// The visual Files & Tags overlay's analog of `selectAudioPlaylist(_:)`: switches the
-    /// visual channel to `playlist` through `select(_:)` — restoring its filter, re-reading its
+    /// The visual Files & Tags overlay's analog of `playOnAudioChannel(_:)`: switches the
+    /// visual channel to `playlist` through `manage(_:)` — restoring its filter, re-reading its
     /// folder (every click, the automatic Update), and re-centering the file list — and starts a
     /// genuinely new selection playing. Re-selecting the playing playlist re-scans and re-centers
     /// without restarting it.
-    func selectVisualPlaylistInPlayer(_ playlist: Playlist) {
-        let isNewSelection = coordinator.visualPlaylist !== playlist
-        select(playlist)
+    func playOnVisualChannel(_ playlist: Playlist) {
+        let isNewSelection = coordinator.liveVisualPlaylist !== playlist
+        manage(playlist)
         if isNewSelection { coordinator.play(playlist) }
     }
 
@@ -614,9 +614,9 @@ final class AppState {
     /// genuinely new selection also starts it playing; re-selecting the loaded one re-scans and
     /// re-centers without restarting playback. Independent of the managed slot — the overlay
     /// drives the audio channel, not the Manager.
-    func selectAudioPlaylist(_ playlist: Playlist) {
-        let isNewSelection = audioChannelSlot !== playlist
-        remember(playlist)   // audioChannelSlot = playlist
+    func playOnAudioChannel(_ playlist: Playlist) {
+        let isNewSelection = audioChannelPlaylist !== playlist
+        rememberLastManaged(playlist)   // audioChannelPlaylist = playlist
         if isNewSelection { coordinator.play(playlist) }
         audioScrollToken += 1   // re-center the overlay file list on the current track
         rescan(playlist)
@@ -627,7 +627,7 @@ final class AppState {
     /// active, the inlet shows the transport instead, whose Play continues that playlist.)
     func startFirstAudioPlaylistOrAdd() {
         if let first = modelContext.playlists(ofType: .audio).first {
-            beginPlayback(of: first)
+            startPlayback(of: first)
         } else {
             isImportingPlaylist = true
         }
@@ -653,16 +653,16 @@ final class AppState {
         // its next advance would dereference a destroyed model.
         coordinator.stop(playlist)
         if managedPlaylist === playlist { managedPlaylist = nil }
-        if lastActiveVideoPlaylist === playlist {
-            lastActiveVideoPlaylist = nil
-            appStateModel.lastActiveVideoPlaylistId = nil
+        if lastManagedVideoPlaylist === playlist {
+            lastManagedVideoPlaylist = nil
+            appStateModel.lastManagedVideoPlaylistId = nil
         }
-        if lastActiveImagePlaylist === playlist {
-            lastActiveImagePlaylist = nil
-            appStateModel.lastActiveImagePlaylistId = nil
+        if lastManagedImagePlaylist === playlist {
+            lastManagedImagePlaylist = nil
+            appStateModel.lastManagedImagePlaylistId = nil
         }
-        if audioChannelSlot === playlist {
-            audioChannelSlot = nil
+        if audioChannelPlaylist === playlist {
+            audioChannelPlaylist = nil
             appStateModel.audioChannelPlaylistId = nil
         }
         let mediaType = playlist.mediaType
@@ -913,7 +913,7 @@ final class AppState {
         // Capture the live position just before the swap so the reload looks seamless,
         // and whether playback was paused so the reload doesn't resume it. Only the file
         // showing on the visual channel needs reloading.
-        let onScreen = coordinator.visualCurrentFile?.id == file.id ? coordinator.visualPlaylist : nil
+        let onScreen = coordinator.visualCurrentFile?.id == file.id ? coordinator.liveVisualPlaylist : nil
         let resumeAt = onScreen != nil ? coordinator.visualCurrentTime : nil
         let wasPaused = onScreen?.playbackState == .paused
 
@@ -992,16 +992,16 @@ final class AppState {
     /// Starts a playlist playing through the coordinator. A visual playlist takes the window
     /// into Player mode and becomes the managed playlist; an audio playlist plays on its
     /// independent channel without changing mode or the managed (visual) slot.
-    func beginPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
+    func startPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
         // Audio is an independent channel driven from its overlay/inlet, so starting it must
         // not disturb the managed visual playlist or the scope.
         if playlist.mediaType == .audio {
-            remember(playlist)   // audioChannelSlot = playlist
+            rememberLastManaged(playlist)   // audioChannelPlaylist = playlist
             coordinator.play(playlist, startingAt: file)
             return
         }
         if managedPlaylist !== playlist { managerSelection = [] }
-        loadManaged(playlist)
+        setManaged(playlist)
         coordinator.play(playlist, startingAt: file)
         mode = .player
     }
@@ -1013,7 +1013,7 @@ final class AppState {
     func playSelectedFile() -> Bool {
         guard let playlist = managedPlaylist,
               let file = managerFiles.first(where: { managerSelection.contains($0.id) }) else { return false }
-        beginPlayback(of: playlist, startingAt: file)
+        startPlayback(of: playlist, startingAt: file)
         return true
     }
 
@@ -1226,14 +1226,14 @@ final class AppState {
     /// Stop, the `[s]`/`[delete]`-after exits, and the Back control). Stopping the transient
     /// visual channel ejects its playlist into the managed slot, switching scope to its type.
     func stopAndExitPlayer() {
-        let visual = coordinator.visualPlaylist
+        let visual = coordinator.liveVisualPlaylist
         // Remember the file that was on screen so Manager reopens with it selected and
         // scrolled into view, rather than at the top.
         let lastFileID = coordinator.visualCurrentFile?.id
         if let visual { coordinator.stop(visual) }
         coordinator.unsuppress()
         playerDeleteCandidate = nil
-        if let visual { loadManaged(visual) }
+        if let visual { setManaged(visual) }
         if let lastFileID { managerSelection = [lastFileID] }
         scrollSelectionToken += 1
         mode = .manager

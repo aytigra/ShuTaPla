@@ -87,12 +87,12 @@ struct ModelTests {
         let context = container.mainContext
 
         let first = AppStateModel.fetchOrCreate(in: context)
-        first.lastActiveVideoPlaylistId = UUID()
+        first.lastManagedVideoPlaylistId = UUID()
         try context.save()
 
         let second = AppStateModel.fetchOrCreate(in: context)
         #expect(first.persistentModelID == second.persistentModelID)
-        #expect(second.lastActiveVideoPlaylistId == first.lastActiveVideoPlaylistId)
+        #expect(second.lastManagedVideoPlaylistId == first.lastManagedVideoPlaylistId)
         #expect(try context.fetch(FetchDescriptor<AppStateModel>()).count == 1)
     }
 

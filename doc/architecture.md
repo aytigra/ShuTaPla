@@ -101,8 +101,8 @@ Playlist
       └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
 AppStateModel (singleton, persisted)
- ├── lastActiveVideoPlaylistId: UUID?   // video scope's remembered playlist — pre-loaded into the managed slot on a switch to video
- ├── lastActiveImagePlaylistId: UUID?   // image scope's remembered playlist — same, for image
+ ├── lastManagedVideoPlaylistId: UUID?   // video scope's remembered playlist — pre-loaded into the managed slot on a switch to video
+ ├── lastManagedImagePlaylistId: UUID?   // image scope's remembered playlist — same, for image
  ├── audioChannelPlaylistId: UUID?      // the audio-channel playlist (persistent); doubles as audio's remembered managed playlist
  ├── managerScopeRaw: String?           // persisted Manager scope: "image" | "video" | "audio"
  └── windowFrame: Data?                 // encoded NSRect
@@ -156,8 +156,8 @@ The app uses two layers of state:
 ```
                   ┌──────────────────────────┐
                   │      AppStateModel       │  (persisted singleton)
-                  │ lastActiveVideoPlaylistId│
-                  │ lastActiveImagePlaylistId│
+                  │ lastManagedVideoPlaylistId│
+                  │ lastManagedImagePlaylistId│
                   │ audioChannelPlaylistId   │
                   │ managerScopeRaw          │
                   └────────────┬─────────────┘
@@ -179,7 +179,7 @@ The app uses two layers of state:
 #### AppState
 
 `@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds the SwiftData model context and the three playlist slots that drive the UI. Responsible for:
-- Holding the three slots as independent references, kept consistent by explicit load steps (never by deriving one slot from another): the **managed-playlist slot** (`managedPlaylist`, what the whole Manager binds to, any type), the **audio-channel slot** (`audioChannelSlot`, persistent), and the visual channel (owned by the coordinator). `lastActiveVideoPlaylist` / `lastActiveImagePlaylist` remember each visual type's last-managed playlist so a scope switch can pre-load it; audio's memory *is* the audio-channel slot.
+- Holding the three slots as independent references, kept consistent by explicit load steps (never by deriving one slot from another): the **managed-playlist slot** (`managedPlaylist`, what the whole Manager binds to, any type), the **audio-channel slot** (`audioChannelPlaylist`, persistent), and the visual channel (owned by the coordinator). `lastManagedVideoPlaylist` / `lastManagedImagePlaylist` remember each visual type's last-managed playlist so a scope switch can pre-load it; audio's memory *is* the audio-channel slot.
 - Persisting the slot IDs and the Manager scope to the SwiftData `AppStateModel` singleton on change; restoring them on launch (`resolveActivePlaylists` loads the persisted scope's remembered playlist into the managed slot).
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
 - **Deriving, not caching, the filtered file lists.** The filter (`filterState`, tag filter *and* service filter) and the current file (`currentFileID`) are persisted, per-playlist `@Model` state; the display-ordered list and the current-file highlight are pure derivations of it (`Playlist.displaySequence` / `playbackSequence`). A view reading `managedPlaylist?.displaySequence` (exposed as `managerFiles`; `audioChannelFiles` / `visualChannelFiles` for the channel slots) re-derives on its own when the model changes — no recompute-and-reconcile machinery, and two slots pointing at the same `Playlist` are consistent for free.

@@ -34,7 +34,7 @@ struct PlaybackControlsBar: View {
         HStack(spacing: 10) {
             transportButton("backward.fill") { coordinator.previous(playlist) }
             if showsPlayPause {
-                transportButton(isPaused ? "play.fill" : "pause.fill") { coordinator.togglePause(playlist) }
+                transportButton(isPaused ? "play.fill" : "pause.fill") { coordinator.togglePauseIfActive(playlist) }
             }
             transportButton("stop.fill") { appState.stopAndExitPlayer() }
             transportButton("forward.fill") { coordinator.next(playlist) }

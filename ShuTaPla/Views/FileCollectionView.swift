@@ -207,7 +207,7 @@ struct FileCollectionView<Cell: View>: View {
     /// A double-click plays the file; a single click adjusts the selection.
     private func handleTap(_ file: PlaylistFile) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            appState.beginManagerPlayback(of: playlist, startingAt: file)
+            appState.playFromManager(of: playlist, startingAt: file)
         } else {
             handleClick(file)
         }

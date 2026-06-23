@@ -20,6 +20,12 @@
 
 import AppKit
 
+/// Which surface currently receives the contextual keys (arrows, `[space]`, `[l]`, seek,
+/// `[delete]`): the Visual Channel or the Audio Overlay.
+enum KeyContext {
+    case visual, audio
+}
+
 /// The overlay/key-context state and actions the router consults. The player shell
 /// supplies `NoOverlayContext`; Tasks 13–15 swap in the real `OverlayManager`.
 @MainActor
@@ -30,9 +36,10 @@ protocol HotkeyOverlayContext: AnyObject {
     /// The Files & Tags overlay is open, so `[arrow up]`/`[tab]` is a no-op and
     /// `[arrow down]` closes it rather than revealing audio.
     var isFilesTagsOpen: Bool { get }
-    /// The audio overlay is fully revealed and owns key context, so arrows, `[space]`,
-    /// `[l]`, and seek act on the audio playlist.
-    var audioHoldsKeyContext: Bool { get }
+    /// Which surface owns key context. `.audio` once the audio overlay is fully revealed —
+    /// arrows, `[space]`, `[l]`, seek, and `[delete]` then act on the audio playlist;
+    /// otherwise `.visual`.
+    var keyContext: KeyContext { get }
 
     func closeTopmostOverlay()
     func openFilesTags()
@@ -47,7 +54,7 @@ protocol HotkeyOverlayContext: AnyObject {
 final class NoOverlayContext: HotkeyOverlayContext {
     var isAnyOverlayOpen: Bool { false }
     var isFilesTagsOpen: Bool { false }
-    var audioHoldsKeyContext: Bool { false }
+    var keyContext: KeyContext { .visual }
     func closeTopmostOverlay() {}
     func openFilesTags() {}
     func closeFilesTags() {}
@@ -255,24 +262,24 @@ final class HotkeyRouter {
         // the audio overlay holds key context, otherwise the visual channel's file. Every other
         // contextual key already respects key context, so `[delete]` does too.
         if key == .delete {
-            return overlayContext.audioHoldsKeyContext
+            return overlayContext.keyContext == .audio
                 ? appState.requestDeletePlayingAudioFile()
                 : appState.requestDeletePlayingFile()
         }
 
-        return overlayContext.audioHoldsKeyContext
+        return overlayContext.keyContext == .audio
             ? routeAudio(key, rightOption: rightOption)
             : routeVisual(key, rightOption: rightOption)
     }
 
     private func routeVisual(_ key: Hotkey, rightOption: Bool) -> Bool {
-        guard let coordinator, let visual = coordinator.visualPlaylist else { return false }
+        guard let coordinator, let visual = coordinator.liveVisualPlaylist else { return false }
 
         if rightOption, key == .arrowLeft { coordinator.seek(visual, by: -3); return true }
         if rightOption, key == .arrowRight { coordinator.seek(visual, by: 3); return true }
 
         switch key {
-        case .space: coordinator.togglePause(visual)
+        case .space: coordinator.togglePauseIfActive(visual)
         case .arrowRight: coordinator.next(visual)
         case .arrowLeft: coordinator.previous(visual)
         case .tab:
@@ -301,17 +308,17 @@ final class HotkeyRouter {
         }
 
         // `[space]` drives the channel's transport off the persistent slot, so — like the
-        // overlay's Play button — it can restart a Stopped audio playlist (which `togglePause`
-        // can't, since Stop clears `audioPlaylist`). The slot is the live channel while it plays;
+        // overlay's Play button — it can restart a Stopped audio playlist (which `togglePauseIfActive`
+        // can't, since Stop clears `liveAudioPlaylist`). The slot is the live channel while it plays;
         // it outlives Stop, falling back to the live channel only if no slot is loaded.
         if key == .space, let coordinator,
-           let target = appState?.audioChannelSlot ?? coordinator.audioPlaylist {
-            coordinator.togglePlayback(target)
+           let target = appState?.audioChannelPlaylist ?? coordinator.liveAudioPlaylist {
+            coordinator.playOrTogglePause(target)
             return true
         }
 
         // Seek, advance, and loop need an active audio playlist.
-        guard let coordinator, let audio = coordinator.audioPlaylist else { return false }
+        guard let coordinator, let audio = coordinator.liveAudioPlaylist else { return false }
 
         if rightOption, key == .arrowLeft { coordinator.seek(audio, by: -3); return true }
         if rightOption, key == .arrowRight { coordinator.seek(audio, by: 3); return true }
@@ -328,7 +335,7 @@ final class HotkeyRouter {
     private func routeManager(_ key: Hotkey, rightOption: Bool) -> Bool {
         // A top-edge-hover audio overlay can take key context in Manager too; otherwise
         // arrows are left for the file list.
-        if overlayContext.audioHoldsKeyContext {
+        if overlayContext.keyContext == .audio {
             return routeAudio(key, rightOption: rightOption)
         }
         switch key {
