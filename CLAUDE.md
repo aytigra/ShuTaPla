@@ -4,7 +4,7 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 ## Key docs
 
-- `doc/features.md` — complete feature specification
+- `doc/features.md` — feature-spec entry point: overview, Terminology glossary, and a map of the per-topic chapters in `doc/features/` (load only the chapter you need)
 - `doc/architecture.md` — system design and architecture
 
 ## Writing rules
