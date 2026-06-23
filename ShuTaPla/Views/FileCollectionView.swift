@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The Manager center file browser, shared by the list and gallery presentations.
-//  Both show the same filtered files (`AppState.filteredFiles`) with the same
+//  Both show the active scope's filtered files (`AppState.managerFiles`) with the same
 //  interactions — click / shift-click / cmd-click selection, double-click to play,
 //  inline rename, a per-item context menu, and keyboard-selection auto-scroll —
 //  differing only in layout (a divided `LazyVStack` of rows vs a `LazyVGrid` of
@@ -137,7 +137,7 @@ struct FileCollectionView<Cell: View>: View {
             }
             // Keep the keyboard-driven selection (single item) visible as it moves. A
             // mouse-driven change skips this — the clicked item is already on screen.
-            .onChange(of: appState.selectedFileIDs) { _, ids in
+            .onChange(of: appState.managerSelection) { _, ids in
                 if skipSelectionScroll { skipSelectionScroll = false; return }
                 guard ids.count == 1, let id = ids.first else { return }
                 withAnimation { proxy.scrollTo(id, anchor: .center) }
@@ -145,15 +145,15 @@ struct FileCollectionView<Cell: View>: View {
             // Selecting a playlist (or re-selecting the current one) asks to re-center
             // the resume file even when the selection didn't move. Deferred a layout
             // pass so a just-switched playlist's items exist for `scrollTo` to land on.
-            .onChange(of: appState.scrollSelectionToken) { _, _ in
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
+            .onChange(of: appState.managerScrollToken) { _, _ in
+                guard appState.managerSelection.count == 1, let id = appState.managerSelection.first else { return }
                 DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
             // Returning from the player selects the last-played file before this view
             // mounts, so `onChange` never fires for it. Defer past the first layout pass
             // so the lazy container has realized items for `scrollTo` to land on.
             .onAppear {
-                guard appState.selectedFileIDs.count == 1, let id = appState.selectedFileIDs.first else { return }
+                guard appState.managerSelection.count == 1, let id = appState.managerSelection.first else { return }
                 DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
             }
         }
@@ -165,7 +165,7 @@ struct FileCollectionView<Cell: View>: View {
         cell(FileCellConfiguration(
             file: file,
             playlist: playlist,
-            isSelected: appState.selectedFileIDs.contains(file.id),
+            isSelected: appState.managerSelection.contains(file.id),
             isRenaming: renamingID == file.id,
             isStripping: appState.strippingFileIDs.contains(file.id),
             draftName: $draftName,
@@ -190,16 +190,16 @@ struct FileCollectionView<Cell: View>: View {
 
     // MARK: - Data
 
-    /// The filtered, sorted files for the selected playlist, cached on `AppState`
-    /// and kept in sync with the tag/service filter.
+    /// The active scope's filtered, sorted files, cached on `AppState` and kept in sync
+    /// with the tag/service filter.
     private var visibleFiles: [PlaylistFile] {
-        appState.filteredFiles
+        appState.managerFiles
     }
 
     /// The files a context-menu action targets: the multi-selection when the clicked
     /// item is part of it, otherwise just that item.
     private func targets(for file: PlaylistFile) -> [PlaylistFile] {
-        FileSelection.actionTargets(for: file, selection: appState.selectedFileIDs, visible: visibleFiles)
+        FileSelection.actionTargets(for: file, selection: appState.managerSelection, visible: visibleFiles)
     }
 
     // MARK: - Selection
@@ -207,14 +207,14 @@ struct FileCollectionView<Cell: View>: View {
     /// A double-click plays the file; a single click adjusts the selection.
     private func handleTap(_ file: PlaylistFile) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            appState.beginPlayback(of: playlist, startingAt: file)
+            appState.playFromManager(of: playlist, startingAt: file)
         } else {
             handleClick(file)
         }
     }
 
     private func handleClick(_ file: PlaylistFile) {
-        let before = appState.selectedFileIDs
+        let before = appState.managerSelection
         // Read the modifiers from the click that triggered this handler, not the
         // global keyboard state at handler-run time: `onTapGesture` fires on mouse-up,
         // so a shift/cmd released a few milliseconds early would otherwise downgrade a
@@ -223,10 +223,10 @@ struct FileCollectionView<Cell: View>: View {
             click: file.id,
             modifiers: NSApp.currentEvent?.modifierFlags ?? [],
             in: visibleFiles,
-            selection: &appState.selectedFileIDs,
+            selection: &appState.managerSelection,
             anchor: &anchor
         )
-        if appState.selectedFileIDs != before { skipSelectionScroll = true }
+        if appState.managerSelection != before { skipSelectionScroll = true }
     }
 
     // MARK: - Rename

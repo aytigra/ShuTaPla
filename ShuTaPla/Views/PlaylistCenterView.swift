@@ -2,9 +2,10 @@
 //  PlaylistCenterView.swift
 //  ShuTaPla
 //
-//  The Manager center panel: a header (name, Play, Reshuffle, view-mode toggle),
-//  the tagging counter notices, and the file list. Owns the shared
-//  delete, remove-audio, and error confirmations used by the list's interactions.
+//  The Manager center panel for the active scope: the tagging counter notices and the
+//  file list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the
+//  Manager toolbar. Owns the shared delete, remove-audio, and error confirmations used
+//  by the list's interactions.
 //
 
 import SwiftUI
@@ -16,27 +17,10 @@ struct PlaylistCenterView: View {
 
     var body: some View {
         Group {
-            if let playlist = appState.selectedPlaylist {
-                VStack(spacing: 0) {
-                    header(playlist)
-                    Divider()
-                    noticeBar(playlist)
-                    if playlist.preferences.viewMode == .gallery {
-                        FileGalleryView(
-                            playlist: playlist,
-                            confirmDelete: { appState.requestManagerDelete($0) },
-                            reportError: { errorMessage = $0 }
-                        )
-                    } else {
-                        FileListView(
-                            playlist: playlist,
-                            confirmDelete: { appState.requestManagerDelete($0) },
-                            reportError: { errorMessage = $0 }
-                        )
-                    }
-                }
+            if let playlist = appState.managedPlaylist {
+                center(playlist)
             } else {
-                ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
+                placeholder
             }
         }
         .alert(
@@ -107,46 +91,33 @@ struct PlaylistCenterView: View {
         )
     }
 
-    // MARK: - Header
+    // MARK: - Center
 
+    /// The managed playlist's center: notices over its file list. Visual playlists offer the
+    /// gallery presentation; audio has no gallery, so it is always the list.
     @ViewBuilder
-    private func header(_ playlist: Playlist) -> some View {
-        @Bindable var playlist = playlist
-        HStack(spacing: 12) {
-            Text(playlist.name)
-                .font(.title2.weight(.semibold))
-                .lineLimit(1)
-
-            Spacer()
-
-            Button {
-                appState.beginPlayback(of: playlist)
-            } label: {
-                Label("Play", systemImage: "play.fill")
+    private func center(_ playlist: Playlist) -> some View {
+        VStack(spacing: 0) {
+            noticeBar(playlist)
+            if playlist.mediaType != .audio, playlist.preferences.viewMode == .gallery {
+                FileGalleryView(
+                    playlist: playlist,
+                    confirmDelete: { appState.requestManagerDelete($0) },
+                    reportError: { errorMessage = $0 }
+                )
+            } else {
+                FileListView(
+                    playlist: playlist,
+                    confirmDelete: { appState.requestManagerDelete($0) },
+                    reportError: { errorMessage = $0 }
+                )
             }
-            .disabled(!hasPlayableFiles(playlist))
-
-            Button {
-                appState.reshuffle(playlist)
-            } label: {
-                Label("Reshuffle", systemImage: "shuffle")
-            }
-
-            Picker("View", selection: $playlist.preferences.viewMode) {
-                Image(systemName: "list.bullet").tag(ViewMode.list)
-                Image(systemName: "square.grid.2x2").tag(ViewMode.gallery)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
         }
-        .labelStyle(.iconOnly)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
-    private func hasPlayableFiles(_ playlist: Playlist) -> Bool {
-        playlist.files.contains { !$0.isSkipped }
+    /// Shown when no playlist is managed in the current scope.
+    private var placeholder: some View {
+        ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
     }
 
     // MARK: - Counter notices
@@ -155,15 +126,13 @@ struct PlaylistCenterView: View {
     /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
-        let untagged = playlist.files(matching: .untagged).count
-        let invalid = playlist.files(matching: .invalidTagging).count
-        let skipped = playlist.files(matching: .skipped).count
+        let (untagged, invalid, skipped) = playlist.serviceFilterCounts
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {
-                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged) }
-                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging) }
-                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped) }
+                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged, on: playlist) }
+                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging, on: playlist) }
+                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped, on: playlist) }
                 Spacer()
             }
             .font(.caption)
@@ -173,10 +142,10 @@ struct PlaylistCenterView: View {
         }
     }
 
-    private func notice(_ text: String, filter: ServiceFilter) -> some View {
-        let isActive = appState.activeServiceFilter == filter
+    private func notice(_ text: String, filter: ServiceFilter, on playlist: Playlist) -> some View {
+        let isActive = playlist.filterState.serviceFilter == filter
         return Button {
-            appState.toggleServiceFilter(filter)
+            appState.toggleServiceFilter(filter, on: playlist)
         } label: {
             Label(text, systemImage: filter.systemImage)
                 .padding(.horizontal, 7)

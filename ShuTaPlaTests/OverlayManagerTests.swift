@@ -15,13 +15,11 @@ import Testing
 
     // MARK: - Exclusivity
 
-    @Test func audioExtendedClosesFilesTagsAndPlaylists() {
+    @Test func audioExtendedClosesFilesTags() {
         let m = OverlayManager()
         m.show(.filesTags)
-        m.show(.playlistsSidebar)   // suppressed while filesTags open, but assert regardless
         m.show(.audioExtended)
         #expect(!m.active.contains(.filesTags))
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(m.active.contains(.audioExtended))
     }
 
@@ -51,21 +49,17 @@ import Testing
         #expect(m.active.contains(.audioCompact))
     }
 
-    @Test func hoverOverlaysSuppressedWhileFilesTagsOpen() {
+    @Test func bottomControlsSuppressedWhileFilesTagsOpen() {
         let m = OverlayManager()
         m.show(.filesTags)
-        m.show(.playlistsSidebar)
         m.show(.bottomControls)
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(!m.active.contains(.bottomControls))
     }
 
-    @Test func hoverOverlaysSuppressedWhileAudioExtendedOpen() {
+    @Test func bottomControlsSuppressedWhileAudioExtendedOpen() {
         let m = OverlayManager()
         m.show(.audioExtended)
-        m.show(.playlistsSidebar)
         m.show(.bottomControls)
-        #expect(!m.active.contains(.playlistsSidebar))
         #expect(!m.active.contains(.bottomControls))
     }
 
@@ -76,19 +70,19 @@ import Testing
         #expect(!m.isAnyOverlayOpen)
         m.show(.bottomControls)          // passive hover chrome — not a closable overlay
         #expect(!m.isAnyOverlayOpen)
-        m.show(.playlistsSidebar)
+        m.show(.filesTags)
         #expect(m.isAnyOverlayOpen)
     }
 
     @Test func closeTopmostFollowsPriorityOrder() {
         let m = OverlayManager()
-        m.show(.playlistsSidebar)
-        m.show(.audioCompact)
-        m.closeTopmostOverlay()          // audioCompact outranks playlistsSidebar
-        #expect(!m.active.contains(.audioCompact))
-        #expect(m.active.contains(.playlistsSidebar))
+        m.show(.filesTags)
+        m.show(.audioCompact)            // compact sits on top of files & tags
+        m.closeTopmostOverlay()          // filesTags outranks audioCompact
+        #expect(!m.active.contains(.filesTags))
+        #expect(m.active.contains(.audioCompact))
         m.closeTopmostOverlay()
-        #expect(!m.active.contains(.playlistsSidebar))
+        #expect(!m.active.contains(.audioCompact))
     }
 
     // MARK: - Audio key context
@@ -96,18 +90,18 @@ import Testing
     @Test func audioKeyContextRequiresRevealAndActiveOverlay() {
         let m = OverlayManager()
         m.revealCompactAudio()
-        #expect(!m.audioHoldsKeyContext)         // shown but not yet fully revealed
+        #expect(m.keyContext == .visual)         // shown but not yet fully revealed
         m.audioDidFullyReveal()
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
     }
 
     @Test func audioKeyContextClearsWhenOverlayCloses() {
         let m = OverlayManager()
         m.revealCompactAudio()
         m.audioDidFullyReveal()
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
         m.closeAudioOverlay()
-        #expect(!m.audioHoldsKeyContext)
+        #expect(m.keyContext == .visual)
         #expect(!m.active.contains(.audioCompact))
         #expect(!m.active.contains(.audioExtended))
     }
@@ -117,7 +111,33 @@ import Testing
         m.revealCompactAudio()
         m.audioDidFullyReveal()
         m.show(.filesTags)                        // exclusivity removes audioCompact
-        #expect(!m.audioHoldsKeyContext)
+        #expect(m.keyContext == .visual)
+    }
+
+    // MARK: - Compact audio: hover vs. hotkey
+
+    @Test func hoverRevealedCompactClosesOnHoverExit() {
+        let m = OverlayManager()
+        m.revealCompactAudioOnHover()
+        #expect(m.active.contains(.audioCompact))
+        m.hideCompactAudioOnHoverExit()                  // cursor leaves → auto-close
+        #expect(!m.active.contains(.audioCompact))
+    }
+
+    @Test func hotkeyRevealedCompactStaysOnHoverExit() {
+        let m = OverlayManager()
+        m.revealCompactAudio()                           // [arrow down] — pinned open
+        #expect(m.active.contains(.audioCompact))
+        m.hideCompactAudioOnHoverExit()                  // a stray hover-exit must not close it
+        #expect(m.active.contains(.audioCompact))
+    }
+
+    @Test func hoverRevealIsANoOpWhileExtendedOpen() {
+        let m = OverlayManager()
+        m.expandAudioToExtended()
+        m.revealCompactAudioOnHover()                    // must not disturb the extended overlay
+        #expect(m.active.contains(.audioExtended))
+        #expect(!m.active.contains(.audioCompact))
     }
 
     @Test func expandToExtendedKeepsKeyContext() {
@@ -126,6 +146,26 @@ import Testing
         m.audioDidFullyReveal()
         m.expandAudioToExtended()                 // audioCompact → audioExtended, both are audio
         #expect(m.active.contains(.audioExtended))
-        #expect(m.audioHoldsKeyContext)
+        #expect(m.keyContext == .audio)
+    }
+
+    @Test func collapseToCompactReturnsToCompactAndKeepsKeyContext() {
+        let m = OverlayManager()
+        m.revealCompactAudio()
+        m.audioDidFullyReveal()
+        m.expandAudioToExtended()
+        m.collapseAudioToCompact()                // audioExtended → audioCompact, still audio
+        #expect(m.active.contains(.audioCompact))
+        #expect(!m.active.contains(.audioExtended))
+        #expect(m.keyContext == .audio)
+    }
+
+    // The collapsed bar stays pinned, so a stray hover-exit after collapsing doesn't close it.
+    @Test func collapseToCompactPinsTheBar() {
+        let m = OverlayManager()
+        m.expandAudioToExtended()
+        m.collapseAudioToCompact()
+        m.hideCompactAudioOnHoverExit()
+        #expect(m.active.contains(.audioCompact))
     }
 }

@@ -78,9 +78,10 @@ Playlist
  │    ├── filePositionPersistence: Bool?      // nil = use global default
  │    └── viewMode: ViewMode                 // .list | .gallery
  │
- ├── filterState: FilterState          // embedded value — persisted tag filter
+ ├── filterState: FilterState          // embedded value — persisted per-playlist filter
  │    ├── selectedTags: [String]
- │    └── filterMode: FilterMode       // .and | .or
+ │    ├── filterMode: FilterMode       // .and | .or
+ │    └── serviceFilter: ServiceFilter? // .untagged | .invalidTagging | .skipped; nil = tag filter active
  │
  ├── savedSearches: [SavedSearch]      // 10 most recent unique multi-tag searches;
  │    └── each: { tags: [String], mode: FilterMode }   // re-applying an existing one moves it to the top
@@ -100,9 +101,10 @@ Playlist
       └── (runtime) cloudStatus: CloudStatus  // not persisted — derived from disk each scan/observation
 
 AppStateModel (singleton, persisted)
- ├── activeVideoPlaylistId: UUID?       // video and image share the visual channel:
- ├── activeImagePlaylistId: UUID?       // at most one of these two is non-nil
- ├── activeAudioPlaylistId: UUID?
+ ├── lastManagedVideoPlaylistId: UUID?   // video scope's remembered playlist — pre-loaded into the managed slot on a switch to video
+ ├── lastManagedImagePlaylistId: UUID?   // image scope's remembered playlist — same, for image
+ ├── audioChannelPlaylistId: UUID?      // the audio-channel playlist (persistent); doubles as audio's remembered managed playlist
+ ├── managerScopeRaw: String?           // persisted Manager scope: "image" | "video" | "audio"
  └── windowFrame: Data?                 // encoded NSRect
 ```
 
@@ -127,7 +129,7 @@ enum FilterMode: String, Codable, Sendable { case and, or }
 enum TaggingStatus: String, Codable, Sendable { case valid, untagged, invalid }
 enum PlaybackState: String, Codable, Sendable { case stopped, playing, paused }
 enum CloudStatus: String, Sendable { case local, inCloud, downloading }     // runtime only, not persisted
-enum ServiceFilter: String, Sendable { case untagged, invalidTagging, skipped }  // runtime only, not persisted
+enum ServiceFilter: String, Codable, Sendable { case untagged, invalidTagging, skipped }  // persisted on FilterState
 ```
 
 ### Sendable conformance
@@ -152,33 +154,38 @@ The app uses two layers of state:
 ### Observable state objects
 
 ```
-                    ┌─────────────────────┐
-                    │   AppStateModel     │  (persisted singleton)
-                    │  active playlist IDs│
-                    └────────┬────────────┘
-                             │ references
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-   ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-   │PlaybackCoord.│ │ OverlayMgr   │ │  HotkeyRouter│
-   │              │ │              │ │              │
-   │ videoPlayer  │ │ filesTagsOpen│ │ resolves key │
-   │ audioPlayer  │ │ audioState   │ │ to action    │
-   │ imageTimer   │ │ playlistsOpen│ │ based on     │
-   │ playback     │ │ pauseShown   │ │ current      │
-   │ state per    │ │ exclusivity  │ │ focus +      │
-   │ playlist     │ │ rules        │ │ overlay      │
-   └──────────────┘ └──────────────┘ └──────────────┘
+                  ┌──────────────────────────┐
+                  │      AppStateModel       │  (persisted singleton)
+                  │ lastManagedVideoPlaylistId│
+                  │ lastManagedImagePlaylistId│
+                  │ audioChannelPlaylistId   │
+                  │ managerScopeRaw          │
+                  └────────────┬─────────────┘
+                               │ references
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+   ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐
+   │ PlaybackCoord.   │ │   OverlayMgr     │ │ HotkeyRouter │
+   │                  │ │                  │ │              │
+   │ videoEngine      │ │ active:          │ │ resolves key │
+   │ imageEngine      │ │   Set<Overlay>   │ │ to action    │
+   │ audioEngine      │ │ audioFullyRevealed│ │ based on    │
+   │ visual/audio     │ │ audioCompactPinned│ │ key context │
+   │ playlist +       │ │ (Esc chain +     │ │ (visual vs   │
+   │ isSuppressed     │ │  exclusivity)    │ │  audio)      │
+   └──────────────────┘ └──────────────────┘ └──────────────┘
 ```
 
 #### AppState
 
-`@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds references to the SwiftData model context and the active playlist models. Responsible for:
-- Tracking which playlists are active (by media category).
-- Persisting active-playlist IDs to the SwiftData `AppStateModel` singleton on change.
+`@MainActor @Observable final class`. Injected into the SwiftUI environment via `.environment(appState)` at the scene level and consumed in views via `@Environment(AppState.self) private var appState`. Holds the SwiftData model context and the three playlist slots that drive the UI. Responsible for:
+- Holding the three slots as independent references, kept consistent by explicit load steps (never by deriving one slot from another): the **managed-playlist slot** (`managedPlaylist`, what the whole Manager binds to, any type), the **audio-channel slot** (`audioChannelPlaylist`, persistent), and the visual channel (owned by the coordinator). `lastManagedVideoPlaylist` / `lastManagedImagePlaylist` remember each visual type's last-managed playlist so a scope switch can pre-load it; audio's memory *is* the audio-channel slot.
+- Persisting the slot IDs and the Manager scope to the SwiftData `AppStateModel` singleton on change; restoring them on launch (`resolveActivePlaylists` loads the persisted scope's remembered playlist into the managed slot).
 - Providing the current app mode (`.welcome`, `.manager`, `.player`).
-- Holding the transient Manager-mode service filter (`ServiceFilter?` — Untagged / Invalid tagging / Skipped). Service filters are mutually exclusive, temporarily override the tag filter while active, and are not persisted.
-- Computing filtered file lists as cached properties (not inline `.filter {}` in ForEach). When `FilterState` or the file list changes, the filtered array is recomputed and stored. Views bind to the precomputed array for optimal ForEach diffing.
+- **Deriving, not caching, the filtered file lists.** The filter (`filterState`, tag filter *and* service filter) and the current file (`currentFileID`) are persisted, per-playlist `@Model` state; the display-ordered list and the current-file highlight are pure derivations of it (`Playlist.displaySequence` / `playbackSequence`). A view reading `managedPlaylist?.displaySequence` (exposed as `managerFiles`; `audioChannelFiles` / `visualChannelFiles` for the channel slots) re-derives on its own when the model changes — no recompute-and-reconcile machinery, and two slots pointing at the same `Playlist` are consistent for free.
+- Driving Manager mode as a **three-scope library** via `managerScope: ManagerScope { case image, video, audio }`. The scope is *only* the sidebar's playlist-type filter — which playlists you can pick to become the managed one — not selection, filter, or routing state. `switchScope(to:)` is the browse gesture: it sets the scope and pre-loads that scope's remembered playlist into the managed slot. One managed selection set (`managerSelection`) belongs to the managed playlist; `scrollSelectionToken` stays as a deliberate "re-center now" event (not a derived value), with `audioScrollToken` its overlay counterpart.
+- Converging the select paths onto one `select(_:)` that loads the picked playlist into the managed slot (and, for audio, into the audio channel, stopping whichever audio playlist was live). The overlays keep play-on-select variants: `selectVisualPlaylistInPlayer` and `selectAudioPlaylist`. The audio channel's "current track" is `currentAudioFile`, resolved from the playlist's persisted `currentFileID` against its display list — anchored on the model, not the live engine, so a stopped playlist still shows and resumes from where it left off.
+- Applying every filter edit to the target playlist's persisted `filterState` (the `*(on: playlist)` methods: `toggleFilterTag`, `setFilterMode`, `clearTagFilter`, `toggleServiceFilter`, the saved-search API); surfaces re-derive. The one explicit side effect is the live-channel reconcile: when an edit to a playlist that is currently playing removes the file the engine is on, the engine is advanced to a matching file (`reconcileAudioSelection` / the visual analog). A re-scan or trash that removes a file prunes it from `managerSelection`.
 - Centralizing scoped folder access for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt.
 - Exposing optimistic-progress state that the sidebar renders as spinners: folders being scanned into new playlists, playlists with a background re-scan in flight, and playlists being deleted (whose files are removed in batches, yielding between each so the UI stays responsive).
 
@@ -191,15 +198,17 @@ Owns both mpv instances (video, audio) and the image slideshow timer. Enforces c
 
 It also owns the single transient **suppression** flag: effective playback is `playing && !suppression`. `[p]`/`[esc]` (pause overlay) and window close activate suppression; Unpause (or `[p]`/`[space]` on the pause overlay) and window reopen lift it. Playlist states are untouched either way.
 
-Exposes playback state (playing/paused/stopped, current time, duration) as observable properties for UI binding.
+Keeps each channel's loaded file consistent with its playback sequence. When a filter, re-scan, or deletion reshapes a sequence, `reconcileVisualSelection()` / `reconcileAudioSelection()` jump the engine to the first surviving file if the current one was dropped, or clear the engine when nothing matches. Because loading a file auto-starts it, a `jump` re-suspends the channel afterward unless it should be playing (a paused, suppressed, or overlay-halted channel stays halted). Deleting a playing playlist stops its channel first, so the engine never references models that are about to be freed. Exposes playback state (playing/paused/stopped, current time, duration) as observable properties for UI binding, per channel (`visualCurrentFile`/`audioCurrentFile`, etc.).
 
 #### OverlayManager
 
 Tracks visibility of all overlays in Player mode and enforces exclusivity rules from the feature spec:
-- Extended audio is exclusive — opening it closes Files & Tags and Playlists.
-- Compact audio closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Files & Tags overlay when summoned by top-edge hover.
-- Files & Tags suppresses hover triggers for Playlists and bottom controls; it closes automatically only when Extended audio opens.
-- Owns **key context** — which target (player vs. audio overlay) currently receives arrow/space/loop/seek. The audio overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
+- Expanded audio (`.audioExtended`) is exclusive — opening it closes the Visual Overlay.
+- Compact audio (`.audioCompact`) closes when a *hotkey-triggered* overlay opens, but may re-appear on top of an open Visual Overlay when summoned by top-edge hover.
+- The Visual Overlay suppresses the bottom controls' hover trigger; it closes automatically only when Expanded audio opens.
+- Owns **key context** — which target (player vs. Audio Overlay) currently receives arrow/space/loop/seek. The Audio Overlay claims key context only once it is *fully revealed* (slide-in animation complete) and returns it to the player when it closes to Hidden.
+
+`.audioCompact` and `.audioExtended` are two states of one view, `AudioOverlay`: it always draws the compact transport bar and, while `.audioExtended` is active, reveals the expanded lower section. `expandAudioToExtended()` / `collapseAudioToCompact()` toggle between them (collapse pins the compact bar so a stray hover-exit can't dismiss it); `closeAudioOverlay()` returns to Hidden. The overlay mounts only in Player mode.
 
 State is an enum set, not a stack — overlays don't nest arbitrarily.
 
@@ -208,7 +217,7 @@ State is an enum set, not a stack — overlays don't nest arbitrarily.
 Receives raw key events and routes them to the appropriate handler based on:
 1. Is a text input focused? → swallow the event (the field handles it).
 2. Is it `[esc]`? → apply the esc priority chain (unfocus input → close overlay → suppress → close window).
-3. Does the audio overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
+3. Does the Audio Overlay hold **key context** (fully revealed)? → route arrow/space/loop/seek to audio controls.
 4. Default → player or manager hotkey table. In Manager mode, arrow keys are standard file-list navigation, not audio-overlay control.
 
 Key context is read from the OverlayManager so the router and the overlay layer agree on who owns the keys.
@@ -230,10 +239,10 @@ Each playlist tracks its own playback state independently:
           │              │               │
           │         ┌────▼─────┐         │
           └─────────│ Paused   │─────────┘
-         play button └──────────┘
+        play button └──────────┘
 ```
 
-The state is persisted per playlist (`Playlist.playbackState`); the coordinator mirrors it at runtime. The play/pause button in a playlist's own controls (video/image bottom bar, audio overlay) toggles Playing ↔ Paused; making another playlist of the same kind active resets the previous one to Stopped.
+The state is persisted per playlist (`Playlist.playbackState`); the coordinator mirrors it at runtime. The play/pause button in a playlist's own controls (video/image bottom bar, Audio Overlay) toggles Playing ↔ Paused; making another playlist of the same kind active resets the previous one to Stopped.
 
 **Suppression** is a single transient layer on top of these states, owned by the coordinator and never persisted: effective playback is `playing && !suppression`. It is active while the pause overlay is shown or the window is closed; when it lifts (Unpause, window reopen, app relaunch), Playing playlists continue and Paused playlists stay paused.
 
@@ -386,15 +395,18 @@ The orchestration lives on `AppState` (`stripAudio(from:)`), mirroring the delet
 
 ```
 Responsibilities:
-  - Extract the running time of a video file (AVURLAsset.load(.duration), falling back
-    to a libmpv duration probe for containers AVFoundation can't open — see MPVThumbnailer).
+  - Extract the running time of a video or audio file (AVURLAsset.load(.duration),
+    falling back to a libmpv duration probe for containers AVFoundation can't open
+    — see MPVThumbnailer).
   - Cache the result on the model (PlaylistFile.duration) for instant later reads.
 
 Key method:
   duration(for file: PlaylistFile, in playlist: Playlist) async -> TimeInterval?
 ```
 
-This is the **standalone** path, used where no thumbnail is generated to carry the length along: the file-list rows (which have no thumbnails) and the gallery's cache-hit case (a thumbnail served from cache reports no duration). The `@MainActor` entry point returns `PlaylistFile.duration` when already known, otherwise a `nonisolated` worker resolves the bookmark, reads the duration, and writes it back onto the model; rows and cells load via `.task(id:)` for video playlists only (images have no timeline), and the persisted value means the indicator appears instantly on later displays and across launches. For AVFoundation-readable containers the length comes from `AVURLAsset.load(.duration)` — a moov-atom read, no frame decode. The webm/mkv fallback is **`MPVThumbnailer.duration(at:)`**, which loads the file into a windowless, paused mpv instance (`vo=null`) just far enough to read the demuxer's `duration` property — decoding nothing — on the same pool as frame extraction.
+The service is media-type-agnostic — it reads a container's running time without consulting the playlist's media type — so audio-scope file rows get lengths the same way video does.
+
+This is the **standalone** path, used where no thumbnail is generated to carry the length along: the file-list rows (which have no thumbnails) and the gallery's cache-hit case (a thumbnail served from cache reports no duration). The `@MainActor` entry point returns `PlaylistFile.duration` when already known, otherwise a `nonisolated` worker resolves the bookmark, reads the duration, and writes it back onto the model; rows and cells load via `.task(id:)` for video and audio playlists (images have no timeline), and the persisted value means the indicator appears instantly on later displays and across launches. For AVFoundation-readable containers the length comes from `AVURLAsset.load(.duration)` — a moov-atom read, no frame decode. The webm/mkv fallback is **`MPVThumbnailer.duration(at:)`**, which loads the file into a windowless, paused mpv instance (`vo=null`) just far enough to read the demuxer's `duration` property — decoding nothing — on the same pool as frame extraction.
 
 In the **gallery**, a freshly generated thumbnail already delivers the length (see ThumbnailService), so the cell sets `PlaylistFile.duration` straight from the thumbnail result and only consults `DurationService` when the model still lacks a value (a cache-served thumbnail). A webm/mkv gallery cell therefore pays a single libmpv decode for both its thumbnail and its length, with no separate probe queued behind the frame extractions.
 
@@ -486,30 +498,34 @@ struct ShuTaPlaApp: App {
 ### Manager mode layout
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  ┌──────────┐  ┌─────────────────────────┐  ┌─────────┐ │
-│  │          │  │                         │  │         │ │
-│  │ Playlists│  │  Playlist header        │  │  Tag    │ │
-│  │ panel    │  │  Filter controls        │  │  panel  │ │
-│  │          │  │  File list / gallery    │  │         │ │
-│  │ (collaps-│  │                         │  │ (collaps│ │
-│  │  ible)   │  │                         │  │  -ible) │ │
-│  │          │  │                         │  │         │ │
-│  └──────────┘  └─────────────────────────┘  └─────────┘ │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│[][Image][Video][Audio] +│ Playlist name  ▶︎ ...│             🏷 []│  ← toolbar
+├─────────────────────────┬─────────────────────┬──────────────────┤
+│  ┌────────────┐         │                     │  ┌────────────┐  │
+│  │ audio inlet│         │                     │  │  Filter    │  │
+│  ├────────────┤         │  Filter controls    │  │  controls  │  │
+│  │            │         │                     │  ├────────────┤  │
+│  │ Playlists  │         │  File list /        │  │  Tag       │  │
+│  │ (scope)    │         │  gallery            │  │  panel     │  │
+│  │            │         │                     │  │            │  │
+│  │ (collaps-) │         │                     │  │ (collaps-) │  │
+│  └────────────┘         │                     │  └────────────┘  │
+└─────────────────────────┴─────────────────────┴──────────────────┘
 ```
 
-Implemented with `NavigationSplitView` — the Playlists sidebar and the center detail — plus a trailing `.inspector` for the Tag panel. Each region fills the full window height and is independently resizable, and the split view remembers the widths the user sets. The sidebar collapses via the system sidebar toggle; the Tag inspector toggles from a toolbar button. The inspector (rather than a third split-view column) is what makes the right panel independently collapsible and resizable — a two-column split view only offers progressive left-to-right column hiding, which can't toggle a trailing panel on its own. The Add-Playlist control lives in a `.safeAreaInset` bar at the bottom of the sidebar so it stays grouped with the playlists.
+The Manager shell is an AppKit `NSSplitViewController` (`ManagerSplitScene` / `ManagerSplitViewController`) that hosts the three SwiftUI panes (`PlaylistSidebar`, `PlaylistCenterView`, `TagSidebar`) in `NSHostingController`s, bridged into the SwiftUI `WindowGroup` via `NSViewControllerRepresentable` (`ManagerView` → `ManagerSplitScene`). Its custom `NSToolbar` has three regions — sidebar / center / inspector — bounded by `NSTrackingSeparatorToolbarItem`s pinned to the split dividers, so each region's items align over its pane. `ManagerChrome` (an `@Observable`: `sidebarCollapsed`, `inspectorVisible`, `managingTags`) is the shared source of truth the controller and the SwiftUI panes both read. The representable's `sizeThatFits` returns the full proposed size so a divider drag hands freed width to the center pane and a collapsing pane stays pinned to the window edge.
 
-**Playlists panel structure**: The left panel groups playlists into sections by media type — **Video**, **Image** — each with full management controls (create, rename, delete, reorder via drag). At the top, a collapsed **Audio** section acts as a visual hint; clicking it opens the extended audio overlay (where audio playlists are managed). Playlists are rendered from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro — `@ObservationIgnored` would be required), filtered by `mediaType`, sorted by `sortOrder`.
+**Toolbar regions**: leading — the **scope tabs** (`ScopeTabButton`, one per scope — Image · Video · Audio — a custom toggle so a click on the already-active scope can collapse the sidebar; a native segmented `Picker` can't report that re-click) and the **New Playlist `+`**; center — the managed playlist's name via `.navigationTitle` and its type's actions (image/video: Play · Reshuffle · List/Gallery · Settings; audio: Reshuffle · Settings); trailing — the tag controls (Manage Tags toggle, inspector show/hide). Full-height-sidebar toolbar coordination (reserving a sidebar toolbar region and relocating its items on collapse) engages only when the split controller is the window's `contentViewController`; here SwiftUI owns the window content, so the `+` overflows rather than relocating when the sidebar collapses — an accepted limitation.
 
-**Playlists overlay (Player mode)**: The left-hover overlay in Player mode mirrors this section structure but is read-only — no create/rename/delete/reorder. Selecting a playlist immediately starts playing it. The bottom Audio hint opens the extended audio overlay.
+**Sidebar structure**: `PlaylistSidebar` pins the **audio inlet** (`AudioInlet`) at the top via `.safeAreaInset(edge: .top)` in every scope, then lists the active scope's single section — Image, Video, or Audio — with full management (inline rename, delete with confirmation, drag reorder); a row's selection makes that playlist the managed one (`appState.select`), and the selected row is the managed playlist. Create is the toolbar's New Playlist. The playlist delete confirmation is presented here for every scope. Rows come from a `@Query` in the view (not inside `@Observable` classes, where `@Query` would conflict with the `@Observable` macro), filtered by `mediaType`, sorted by `sortOrder`.
+
+**Player-mode playlist switching**: Quick switching lives in the overlays' selectors, not a separate panel — the `LibrarySurface` selector column lists the active channel's single media type and is a pure switcher (no create/rename/delete/reorder). Selecting a playlist immediately starts playing it. Full management stays in Manager's sidebar.
 
 ### Player mode layout
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ top hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ top hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    │
 │ ▓                                                      ▓ │
 │ ▓     ┌─────────────────────────────────────┐          ▓ │
 │ l     │                                     │          ▓ │
@@ -520,10 +536,10 @@ Implemented with `NavigationSplitView` — the Playlists sidebar and the center 
 │ h     └─────────────────────────────────────┘          ▓ │
 │ o                                                      ▓ │
 │ v     ┌─────────────────────────────────────────────┐  ▓ │
-│ e     │  Files & Tags overlay (when visible)        │  ▓ │
+│ e     │  Visual Overlay (when visible)              │  ▓ │
 │ r     │  slides up from bottom                      │  ▓ │
 │       └─────────────────────────────────────────────┘  ▓ │
-│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ bottom hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ bottom hover zone ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -538,7 +554,6 @@ The OverlayManager maintains a set of active overlays and enforces rules declara
 ```swift
 enum Overlay: Hashable {
     case filesTags
-    case playlistsSidebar
     case audioCompact
     case audioExtended
     case pauseOverlay
@@ -554,19 +569,17 @@ final class OverlayManager {
         switch overlay {
         case .audioExtended:                 // exclusive — closes everything else
             active.remove(.filesTags)
-            active.remove(.playlistsSidebar)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
             active.remove(.audioCompact)
-            active.remove(.playlistsSidebar)
             active.remove(.bottomControls)
         case .audioCompact:
-            // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
+            // Compact audio may sit on top of an open Visual Overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
-        case .playlistsSidebar, .bottomControls:
-            // Hover overlays are suppressed while Files & Tags or Extended audio is open.
+        case .bottomControls:
+            // Passive hover chrome is suppressed while Visual Overlay or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
@@ -832,22 +845,23 @@ Key event arrives
   3. Is it [space]?
      → If the pause overlay is shown: end suppression (same as pressing Unpause).
      → If playing: advance to next file in active playlist.
-     → If the audio overlay holds key context: applies to the audio playlist instead of video/image.
+     → If the Audio Overlay holds key context: applies to the audio playlist instead of video/image.
        │
        ▼
-  4. Does the audio overlay hold key context (revealed AND fully animated in)?
+  4. Does the Audio Overlay hold key context (revealed AND fully animated in)?
      YES → route arrow keys, [space], [l], and seek to audio controls.
      NO  → continue.
        │
        ▼
   5. Is app in Player mode?
-     YES → player hotkey table ([tab] toggles Files & Tags; [arrow up] opens it
+     YES → player hotkey table ([tab] toggles Visual Overlay; [arrow up] opens it
            but never closes it; [arrow down] closes it or reveals Compact audio;
            [s] stops to Manager; [delete] raises the trash confirmation).
      NO  → manager hotkey table (arrows move the file selection — 1-D in the list,
            2-D in the gallery, stepping a full row on up/down and one cell on
-           left/right; [enter] plays the selected file; the audio overlay is opened
-           by hover or the Audio section, not by arrows).
+           left/right; [enter] plays the selected file). There is no Audio Overlay
+           in Manager mode — the audio channel is driven by the sidebar inlet — so
+           arrows always stay with file-list navigation.
 ```
 
 ### Modifier key handling
@@ -962,7 +976,7 @@ While ShuTaPla is primarily hotkey-driven in Player mode, all interactive UI mus
 - Pause overlay buttons ("Unpause", "Stop") are standard `Button` elements.
 - Playback controls bar uses `accessibilityLabel` for icon-only buttons (previous, next, loop, volume).
 - Volume sliders use `accessibilityValue` with percentage.
-- Files & Tags overlay file list follows the same patterns as Manager mode.
+- Visual Overlay file list follows the same patterns as Manager mode.
 
 ### General
 
@@ -1022,12 +1036,14 @@ ShuTaPla/                            (app source)
 │   │   └── WelcomeView.swift
 │   │
 │   ├── Manager/
-│   │   ├── ManagerView.swift            // three-panel layout
-│   │   ├── PlaylistSidebar.swift        // left panel
-│   │   ├── PlaylistCenterView.swift     // header + filter + file list
+│   │   ├── ManagerView.swift            // bridges the AppKit split shell into the WindowGroup
+│   │   ├── ManagerSplitScene.swift      // NSSplitViewController + NSToolbar (scope tabs, +, actions) + ManagerChrome
+│   │   ├── PlaylistSidebar.swift        // left panel: audio inlet + scope sections
+│   │   ├── PlaylistCenterView.swift     // tagging counter notices + file list for the managed playlist
+│   │   ├── FileCollectionView.swift     // selection/scroll over the managed playlist's list/gallery
 │   │   ├── FileListView.swift           // LazyVStack-based list mode
-│   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode
-│   │   ├── FilterBar.swift              // tag filter controls (TagTokenField, search-only)
+│   │   ├── FileGalleryView.swift        // LazyVGrid-based gallery mode (visual only)
+│   │   ├── FilterBar.swift              // shared filter controls (TagTokenField, saved searches, service-filter banner) targeting a given playlist's persisted filterState
 │   │   ├── PlaylistTagsView.swift       // right panel's Manage Tags mode: playlist-wide rename/remove
 │   │   └── TagSidebar.swift             // right panel: toggles filter+edit vs. Manage Tags mode
 │   │
@@ -1036,19 +1052,20 @@ ShuTaPla/                            (app source)
 │   │   ├── VideoPlayerView.swift        // hosts MPVVideoView via NSViewRepresentable
 │   │   ├── ImagePlayerView.swift        // image display + pan/zoom
 │   │   ├── PauseOverlay.swift
-│   │   ├── PlaybackControlsBar.swift    // bottom hover controls (both: prev/play-pause/stop/next; video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
-│   │   └── PlaylistsOverlay.swift       // left hover playlist selector
+│   │   └── PlaybackControlsBar.swift    // bottom hover controls (both: prev/play-pause/stop/next; video: progress/scrub, volume, loop; image: slideshow toggle, interval selector)
 │   │
 │   ├── Audio/
-│   │   ├── AudioOverlayCompact.swift
-│   │   └── AudioOverlayExtended.swift
+│   │   ├── AudioInlet.swift             // Manager sidebar inlet + shared AudioTransport + AudioVolumeControl
+│   │   └── AudioOverlay.swift           // player-mode overlay: compact transport bar + expandable lower section (LibrarySurface)
 │   │
 │   ├── Shared/
 │   │   ├── TagEditorView.swift          // tag editor (TagTokenField, create-enabled) + invalid-name rename
 │   │   ├── TagTokenField.swift          // shared multiselect-autocomplete tag control
 │   │   ├── FlowLayout.swift             // wrapping chip layout
-│   │   ├── FilesTagsOverlayView.swift   // used in both video and image player
+│   │   ├── FilesTagsOverlayView.swift   // visual player library overlay (wraps LibrarySurface)
+│   │   ├── LibrarySurface.swift         // shared selector | files (topped by FilterBar) | tags surface (audio + visual)
 │   │   ├── HoverZone.swift              // NSTrackingArea wrapper
+│   │   ├── ControlButtonStyle.swift     // shared button style for the bottom bar + audio controls
 │   │   ├── CloudStatusBadge.swift       // "in the cloud" / "downloading" indicator
 │   │   ├── FileSelection.swift          // shared click-selection + delete-target logic (list + gallery)
 │   │   └── FileRowView.swift            // single file row in list
@@ -1119,8 +1136,8 @@ Tests use **Swift Testing** (`import Testing`) for all unit and integration test
 | **TagParser** | Parameterized tests via `@Test(arguments:)` — a single test function covers valid tags, multiple bracket groups, nested brackets, a stray unmatched bracket, empty/ineffective brackets (→ untagged), short tags, and special characters as input rows. Pure functions — no mocking needed. `#expect` for assertions, `#require` for preconditions. |
 | **FileSystemService** | Integration tests using temporary directories. Create known file structures, scan, verify results. Test rename and trash operations. Use `async` test functions with `await`. |
 | **PlaybackCoordinator** | Unit tests with mock engines (injected via protocol). Verify state machine transitions, mutual exclusivity rules, and suppression vs per-playlist pause (`playback = playing && !suppression`). |
-| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Files & Tags; key context transfers only when fully revealed. |
-| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key navigation — 1-D list and 2-D gallery, `[enter]` playing the selected file, `[tab]` toggling Files & Tags, `[s]` stop, and the `[delete]` confirmation holding key context). |
+| **OverlayManager** | Unit tests. Verify exclusivity rules — opening one overlay correctly closes others per spec; Compact audio may coexist with Visual Overlay; key context transfers only when fully revealed. |
+| **HotkeyRouter** | Unit tests with synthetic NSEvent objects. Verify routing priority for each context (text focused, overlay open, audio holds key context vs. not, Manager arrow-key navigation — 1-D list and 2-D gallery, `[enter]` playing the selected file, `[tab]` toggling Visual Overlay, `[s]` stop, and the `[delete]` confirmation holding key context). |
 | **CloudFileService** | Unit tests with a mock providing canned cloud statuses and a recording download requester. Verify status mapping, prefetch requests the next N files in order, on-demand download when playback reaches an in-cloud file, and advance-on-timeout. |
 | **UI** | Manual testing and SwiftUI Previews. Snapshot tests for overlay layouts if needed. |
 

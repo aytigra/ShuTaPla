@@ -11,13 +11,18 @@ import SwiftData
 
 @Model
 final class AppStateModel {
-    /// Video and image share the visual channel: at most one of these two is
-    /// non-nil at a time.
-    var activeVideoPlaylistId: UUID?
-    var activeImagePlaylistId: UUID?
+    /// The last-managed video and image playlists — the Manager's per-type memory, used to
+    /// restore the managed slot when switching to that scope. Independent of each other.
+    var lastManagedVideoPlaylistId: UUID?
+    var lastManagedImagePlaylistId: UUID?
 
-    /// Audio runs as an independent parallel channel.
-    var activeAudioPlaylistId: UUID?
+    /// The persistent audio channel playlist (survives Stop). Also serves as the remembered
+    /// audio playlist when switching to audio scope.
+    var audioChannelPlaylistId: UUID?
+
+    /// The scope the Manager was last in, so a relaunch reopens it and derives the managed
+    /// playlist from that scope's remembered playlist. Raw value of `ManagerScope`.
+    var managerScopeRaw: String?
 
     /// Encoded `NSRect` of the window.
     var windowFrame: Data?

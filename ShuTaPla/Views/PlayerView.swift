@@ -6,8 +6,8 @@
 //  image), drives the window into fullscreen while it is on screen, and hosts the
 //  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
 //  zones drive the `OverlayManager`; this view composes its overlay content: the bottom
-//  controls bar, the left playlists selector, and the Files & Tags overlay.
-//  (Compact/extended audio content arrives in Task 15.)
+//  controls bar, the left playlists selector, and the Files & Tags overlay. The independent
+//  audio overlay is layered above by `RootView`.
 //
 
 import SwiftUI
@@ -16,9 +16,6 @@ struct PlayerView: View {
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
     @Environment(OverlayManager.self) private var overlays
-
-    /// Thickness of the invisible edge strips that trigger the hover overlays.
-    private let hoverThickness: CGFloat = 4
 
     /// Width of the bottom controls and their matching hover trigger, so revealing
     /// the bar never pulls the cursor off the strip that triggered it.
@@ -48,9 +45,7 @@ struct PlayerView: View {
         }
         .background(FullscreenView())
         .background(CursorAutoHider(isActive: cursorShouldAutoHide))
-        .overlay(alignment: .leading) { playlistsContainer }
         .overlay(alignment: .bottom) { bottomControlsContainer }
-        .overlay(alignment: .top) { topAudioHoverStrip }
         .overlay { filesTagsContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
         .animation(.easeInOut(duration: 0.2), value: visualHasNoFiles)
@@ -128,14 +123,14 @@ struct PlayerView: View {
 
     /// Whether the visual playlist's filtered playback sequence is empty.
     private var visualHasNoFiles: Bool {
-        guard let visual = coordinator.visualPlaylist else { return false }
+        guard let visual = coordinator.liveVisualPlaylist else { return false }
         return !visual.hasPlaybackFiles
     }
 
     /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is
     /// playing, nothing is suppressing it, and no overlay is on screen to interact with.
     private var cursorShouldAutoHide: Bool {
-        guard let visual = coordinator.visualPlaylist else { return false }
+        guard let visual = coordinator.liveVisualPlaylist else { return false }
         return visual.playbackState == .playing && !coordinator.isSuppressed && overlays.active.isEmpty
     }
 
@@ -143,12 +138,10 @@ struct PlayerView: View {
     //
     // The bottom controls occupy a fixed bottom-center spot and stay transparent until the
     // cursor hovers their footprint, then fade in (an opacity-0 view keeps receiving hover).
-    // The left Playlists overlay is triggered by a thin edge `HoverZone`, and the revealed
-    // panel carries `.onHover` to dismiss itself when the cursor leaves.
 
     @ViewBuilder
     private var bottomControlsContainer: some View {
-        if let visual = coordinator.visualPlaylist, !coordinator.isSuppressed {
+        if let visual = coordinator.liveVisualPlaylist, !coordinator.isSuppressed {
             let revealed = overlays.active.contains(.bottomControls)
             PlaybackControlsBar(playlist: visual)
                 .frame(width: bottomControlsWidth)
@@ -161,46 +154,12 @@ struct PlayerView: View {
         }
     }
 
-    @ViewBuilder
-    private var playlistsContainer: some View {
-        let open = overlays.active.contains(.playlistsSidebar) && !coordinator.isSuppressed
-        ZStack(alignment: .leading) {
-            HoverZone(
-                onEnter: { if !coordinator.isSuppressed { overlays.show(.playlistsSidebar) } },
-                onExit: {}
-            )
-            .frame(width: hoverThickness)
-            .frame(maxHeight: .infinity)
-
-            if open {
-                PlaylistsOverlay()
-                    .contentShape(Rectangle())
-                    .onHover { if !$0 { overlays.hide(.playlistsSidebar) } }
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .leading)
-        .allowsHitTesting(!coordinator.isSuppressed)
-    }
-
-    /// Top-edge trigger for the compact audio overlay. Its content lands in Task 15; the
-    /// strip already drives the `OverlayManager` so the wiring is in place.
-    private var topAudioHoverStrip: some View {
-        HoverZone(
-            onEnter: { if !coordinator.isSuppressed { overlays.revealCompactAudio() } },
-            onExit: { overlays.hide(.audioCompact) }
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: hoverThickness)
-        .allowsHitTesting(!coordinator.isSuppressed)
-    }
-
     /// Opened by `[tab]`/`[arrow up]` or the bottom bar's button — not by hover — and
     /// slides up from the bottom over the player.
     @ViewBuilder
     private var filesTagsContainer: some View {
         if overlays.active.contains(.filesTags), !coordinator.isSuppressed,
-           let visual = coordinator.visualPlaylist {
+           let visual = coordinator.liveVisualPlaylist {
             FilesTagsOverlayView(playlist: visual)
                 .transition(.move(edge: .bottom))
         }

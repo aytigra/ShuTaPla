@@ -21,7 +21,6 @@ final class OverlayManager: HotkeyOverlayContext {
 
     enum Overlay: Hashable {
         case filesTags
-        case playlistsSidebar
         case audioCompact
         case audioExtended
         case pauseOverlay
@@ -32,17 +31,22 @@ final class OverlayManager: HotkeyOverlayContext {
     /// `.overlay()`/`.transition()` modifiers.
     private(set) var active: Set<Overlay> = []
 
-    /// Set by the audio overlay once its slide-in animation completes (Task 15) and
-    /// cleared whenever no audio overlay remains active. Gates `audioHoldsKeyContext`:
-    /// the audio overlay claims key context only when *fully revealed*, not the moment
-    /// it begins to appear.
+    /// Granted by `audioDidFullyReveal()` once the audio overlay's slide-in completes,
+    /// cleared whenever no audio overlay remains active. Gates `keyContext`: the audio
+    /// overlay claims key context only when *fully revealed*, not the moment it begins
+    /// to appear.
     private(set) var audioFullyRevealed = false
+
+    /// Whether the compact audio overlay was opened by a hotkey (`[arrow down]`), which
+    /// keeps it open until explicitly closed, versus a top-edge hover, which auto-closes
+    /// when the cursor leaves the overlay.
+    private(set) var audioCompactPinned = false
 
     /// Closable overlays in topmost-first order — the ones the user explicitly opened;
     /// `[esc]`/`closeTopmostOverlay()` and `isAnyOverlayOpen` consider exactly these.
     /// Bottom controls are passive hover chrome and aren't closed by `[esc]`.
     private static let closablePriority: [Overlay] =
-        [.audioExtended, .filesTags, .audioCompact, .playlistsSidebar]
+        [.audioExtended, .filesTags, .audioCompact]
 
     private static let closableSet = Set(closablePriority)
 
@@ -64,7 +68,26 @@ final class OverlayManager: HotkeyOverlayContext {
         withAnimation(Self.transition) {
             active.removeAll()
             audioFullyRevealed = false
+            audioCompactPinned = false
         }
+    }
+
+    // MARK: - Compact audio reveal (hover vs. hotkey)
+
+    /// Reveals compact audio from a top-edge hover: it auto-closes when the cursor leaves.
+    /// A no-op while an audio overlay is already on screen, so it never un-pins a
+    /// hotkey-opened compact or fights an open extended overlay.
+    func revealCompactAudioOnHover() {
+        guard active.isDisjoint(with: Self.audioSet) else { return }
+        audioCompactPinned = false
+        show(.audioCompact)
+    }
+
+    /// Closes a hover-opened compact audio overlay when the cursor leaves; a pinned
+    /// (hotkey-opened) overlay stays.
+    func hideCompactAudioOnHoverExit() {
+        guard !audioCompactPinned else { return }
+        hide(.audioCompact)
     }
 
     /// Mutates `active` per the exclusivity rules. Pure (no animation) so the rules are
@@ -73,19 +96,17 @@ final class OverlayManager: HotkeyOverlayContext {
         switch overlay {
         case .audioExtended:                 // exclusive — closes everything else
             active.remove(.filesTags)
-            active.remove(.playlistsSidebar)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
             active.remove(.audioCompact)
-            active.remove(.playlistsSidebar)
             active.remove(.bottomControls)
         case .audioCompact:
             // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
-        case .playlistsSidebar, .bottomControls:
-            // Hover overlays are suppressed while Files & Tags or Extended audio is open.
+        case .bottomControls:
+            // Passive hover chrome is suppressed while Files & Tags or Extended audio is open.
             if active.contains(.filesTags) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
@@ -102,7 +123,10 @@ final class OverlayManager: HotkeyOverlayContext {
     /// Key context belongs to audio only while an audio overlay is actually on screen; drop
     /// the reveal flag the moment the last audio overlay leaves so the player reclaims it.
     private func syncAudioKeyContext() {
-        if active.isDisjoint(with: Self.audioSet) { audioFullyRevealed = false }
+        if active.isDisjoint(with: Self.audioSet) {
+            audioFullyRevealed = false
+            audioCompactPinned = false
+        }
     }
 
     // MARK: - HotkeyOverlayContext
@@ -111,8 +135,8 @@ final class OverlayManager: HotkeyOverlayContext {
 
     var isFilesTagsOpen: Bool { active.contains(.filesTags) }
 
-    var audioHoldsKeyContext: Bool {
-        audioFullyRevealed && !active.isDisjoint(with: Self.audioSet)
+    var keyContext: KeyContext {
+        audioFullyRevealed && !active.isDisjoint(with: Self.audioSet) ? .audio : .visual
     }
 
     func closeTopmostOverlay() {
@@ -122,18 +146,43 @@ final class OverlayManager: HotkeyOverlayContext {
 
     func openFilesTags() { show(.filesTags) }
     func closeFilesTags() { hide(.filesTags) }
-    func revealCompactAudio() { show(.audioCompact) }
+
+    /// Reveals compact audio from `[arrow down]`: pinned, so it stays open until
+    /// explicitly closed (unlike a hover reveal).
+    func revealCompactAudio() {
+        audioCompactPinned = true
+        show(.audioCompact)
+    }
+
     func expandAudioToExtended() { show(.audioExtended) }
+
+    /// Collapses the expanded audio overlay back to the compact transport bar, the inverse of
+    /// `expandAudioToExtended()`. The bar stays pinned so it persists until explicitly closed —
+    /// a deliberate collapse shouldn't leave it dismissable by a stray hover-exit.
+    func collapseAudioToCompact() {
+        withAnimation(Self.transition) {
+            active.remove(.audioExtended)
+            audioCompactPinned = true
+            applyShow(.audioCompact)
+        }
+    }
 
     func closeAudioOverlay() {
         withAnimation(Self.transition) {
             active.remove(.audioCompact)
             active.remove(.audioExtended)
             audioFullyRevealed = false
+            audioCompactPinned = false
         }
     }
 
-    /// Called by the audio overlay once its slide-in animation completes (Task 15), granting
-    /// key context to the audio playlist.
-    func audioDidFullyReveal() { audioFullyRevealed = true }
+    /// Called by the audio overlay once its slide-in animation completes, granting key
+    /// context to the audio playlist. Gated behind the animation (not `show`) so a quick
+    /// hover that grazes the top edge and leaves before the slide finishes never claims
+    /// key context — its overlay is already gone, so the overlay view's reveal task is
+    /// cancelled before it fires this.
+    func audioDidFullyReveal() {
+        guard !active.isDisjoint(with: Self.audioSet) else { return }
+        audioFullyRevealed = true
+    }
 }

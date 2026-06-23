@@ -66,9 +66,9 @@ nonisolated enum CloudStatus: String, Sendable {
     case downloading
 }
 
-/// Runtime-only Manager-mode filter that overrides the tag filter while active.
-/// Mutually exclusive; never persisted.
-nonisolated enum ServiceFilter: String, Sendable {
+/// A triage filter that overrides the tag filter while set. Mutually exclusive,
+/// and persisted on the playlist's `filterState` so triage resumes across launches.
+nonisolated enum ServiceFilter: String, Codable, Sendable {
     case untagged
     case invalidTagging
     case skipped

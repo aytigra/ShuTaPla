@@ -86,12 +86,12 @@ import SwiftData
         defer { coordinator.shutdown() }
 
         coordinator.play(video)
-        #expect(coordinator.visualPlaylist === video)
+        #expect(coordinator.liveVisualPlaylist === video)
         #expect(coordinator.visualKind == .video)
         #expect(video.playbackState == .playing)
 
         coordinator.play(image)
-        #expect(coordinator.visualPlaylist === image)
+        #expect(coordinator.liveVisualPlaylist === image)
         #expect(coordinator.visualKind == .image)
         #expect(image.playbackState == .playing)
         #expect(video.playbackState == .stopped)   // the visual channel is shared
@@ -110,8 +110,8 @@ import SwiftData
         coordinator.play(video)
         coordinator.play(audio)
 
-        #expect(coordinator.visualPlaylist === video)
-        #expect(coordinator.audioPlaylist === audio)
+        #expect(coordinator.liveVisualPlaylist === video)
+        #expect(coordinator.liveAudioPlaylist === audio)
         #expect(video.playbackState == .playing)
         #expect(audio.playbackState == .playing)
     }
@@ -256,7 +256,7 @@ import SwiftData
         // Filter to "b" — the playing "1.jpg" (tagged "a") is excluded, so reconciling
         // jumps to the first file that still matches.
         image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
 
         let matching = image.playbackSequence
         #expect(matching.map(\.fileName) == ["2.jpg", "3.jpg"])
@@ -282,7 +282,7 @@ import SwiftData
 
         // The playing file still matches the new filter, so reconciling leaves it put.
         image.filterState = FilterState(selectedTags: ["a"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
         #expect(coordinator.visualCurrentFile?.id == currentID)
     }
 
@@ -306,10 +306,10 @@ import SwiftData
         // player shows its "no files" placeholder), but the engine's current file is cleared
         // so a later advance/seek can't act on a file no longer in the playlist.
         image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
 
         #expect(image.playbackSequence.isEmpty)
-        #expect(coordinator.visualPlaylist === image)   // still in Player mode
+        #expect(coordinator.liveVisualPlaylist === image)   // still in Player mode
         #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
     }
 
@@ -327,9 +327,9 @@ import SwiftData
 
         coordinator.shutdown()
 
-        #expect(coordinator.visualPlaylist == nil)
+        #expect(coordinator.liveVisualPlaylist == nil)
         #expect(coordinator.visualKind == nil)
-        #expect(coordinator.audioPlaylist == nil)
+        #expect(coordinator.liveAudioPlaylist == nil)
         #expect(!coordinator.isSuppressed)
         #expect(!coordinator.visualHaltedForOverlay)
     }
@@ -345,9 +345,38 @@ import SwiftData
 
         coordinator.play(image)
         #expect(image.playbackState == .playing)
-        coordinator.togglePause(image)
+        coordinator.togglePauseIfActive(image)
         #expect(image.playbackState == .paused)
-        coordinator.togglePause(image)
+        coordinator.togglePauseIfActive(image)
+        #expect(image.playbackState == .playing)
+    }
+
+    @Test func togglePlaybackStartsStoppedAndTogglesLive() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
+        try context.save()
+        let frames = image.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        image.currentFileID = frames[1].id
+        coordinator.stop(image)
+        #expect(image.playbackState == .stopped)
+
+        // Stopped: the play/pause button starts it again, resuming from the remembered file —
+        // a plain `togglePauseIfActive` would no-op because Stop removed the playlist from the channel.
+        coordinator.playOrTogglePause(image)
+        #expect(image.playbackState == .playing)
+        #expect(image.currentFileID == frames[1].id)
+
+        // Live: the same button now toggles pause/resume.
+        coordinator.playOrTogglePause(image)
+        #expect(image.playbackState == .paused)
+        coordinator.playOrTogglePause(image)
         #expect(image.playbackState == .playing)
     }
 
@@ -369,7 +398,7 @@ import SwiftData
         coordinator.suppress()
         #expect(coordinator.isSuppressed)
 
-        coordinator.playNow(image, file: files[2])
+        coordinator.playNow(image, startingAt: files[2])
         #expect(!coordinator.isSuppressed)                         // global pause lifted
         #expect(image.playbackState == .playing)
         #expect(coordinator.visualCurrentFile?.id == files[2].id)  // jumped to the chosen file
@@ -390,7 +419,7 @@ import SwiftData
         coordinator.pause(image)
         #expect(image.playbackState == .paused)
 
-        coordinator.playNow(image, file: files[1])
+        coordinator.playNow(image, startingAt: files[1])
         #expect(image.playbackState == .playing)                   // its own pause cleared
         #expect(coordinator.visualCurrentFile?.id == files[1].id)
     }
@@ -430,6 +459,218 @@ import SwiftData
         // balance later) rather than double-counting the suspend.
         coordinator.haltVisualForOverlay()
         #expect(!coordinator.visualHaltedForOverlay)
+    }
+
+    // MARK: - Audio overlay surface (Task 15)
+
+    @Test func audioSurfaceReportsTheCurrentTrack() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["a1.mp3", "a2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("a1.mp3", []), ("a2.mp3", [])], in: context)
+        try context.save()
+        let tracks = audio.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        #expect(coordinator.audioCurrentFile?.id == tracks.first?.id)
+        #expect(coordinator.audioDuration >= 0)
+    }
+
+    @Test func reconcileAudioJumpsWhenCurrentTrackFilteredOut() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", ["a"]), ("2.mp3", ["b"]), ("3.mp3", ["b"])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        let firstID = coordinator.audioCurrentFile?.id
+
+        audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        coordinator.reconcile(playlistThatChanged: audio)
+
+        let matching = audio.playbackSequence
+        #expect(matching.map(\.fileName) == ["2.mp3", "3.mp3"])
+        #expect(coordinator.audioCurrentFile?.id == matching.first?.id)
+        #expect(coordinator.audioCurrentFile?.id != firstID)
+    }
+
+    @Test func reconcileAudioStopsTheChannelWhenSequenceEmpties() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", ["a"]), ("2.mp3", ["a"])], in: context)
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        #expect(coordinator.audioCurrentFile != nil)
+
+        audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
+        coordinator.reconcile(playlistThatChanged: audio)
+
+        // Unlike the visual channel (which stays live and empty so the player can show a "no files"
+        // placeholder and the user can lift the filter from there), the audio channel has no such
+        // placeholder, so an emptied audio sequence stops the playlist outright — easy to restart
+        // from the same overlay.
+        #expect(audio.playbackSequence.isEmpty)
+        #expect(coordinator.liveAudioPlaylist == nil)           // the channel stops
+        #expect(audio.playbackState == .stopped)
+        #expect(coordinator.audioCurrentFile == nil)
+    }
+
+    @Test func playNowStartsAnIdleAudioChannel() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        try context.save()
+        let tracks = audio.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        // Nothing is playing yet — the extended overlay opened on a restored playlist, or the
+        // channel was stopped. Double-clicking a track must start it, not silently no-op.
+        #expect(coordinator.liveAudioPlaylist == nil)
+        coordinator.playNow(audio, startingAt: tracks[1])
+        #expect(coordinator.liveAudioPlaylist === audio)
+        #expect(coordinator.audioCurrentFile?.id == tracks[1].id)
+    }
+
+    @Test func switchingTrackFromPausedAudioChannelReturnsToPlaying() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.togglePauseIfActive(audio)
+        #expect(audio.playbackState == .paused)
+
+        // Switching tracks from the compact overlay loads and auto-starts the new file, so the
+        // transport must read Playing again rather than stay on the stale Pause/Play button.
+        coordinator.next(audio)
+        #expect(audio.playbackState == .playing)
+
+        coordinator.togglePauseIfActive(audio)
+        #expect(audio.playbackState == .paused)
+        coordinator.previous(audio)
+        #expect(audio.playbackState == .playing)
+    }
+
+    @Test func reconcileKeepsAPausedAudioChannelPaused() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", ["a"]), ("2.mp3", ["b"]), ("3.mp3", ["b"])], in: context
+        )
+        try context.save()
+
+        // A recording engine reveals the re-suspend: mpv's real pause state isn't reflected
+        // synchronously, so the test counts pause() calls instead.
+        let recorder = try RecordingAudioEngine()
+        let coordinator = PlaybackCoordinator(
+            bookmarkService: BookmarkService(),
+            makeVideoEngine: { recorder },
+            makeAudioEngine: { recorder }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.togglePauseIfActive(audio)                  // pause the channel (state .paused)
+        #expect(audio.playbackState == .paused)
+        let pausesBeforeReconcile = recorder.pauseCount
+
+        // A filter drops the paused current track: reconcile jumps to the survivor, but the
+        // channel must stay paused — loading the new file can't silently resume playback.
+        audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        coordinator.reconcile(playlistThatChanged: audio)
+
+        #expect(coordinator.audioCurrentFile?.fileName == "2.mp3")   // jumped to the survivor
+        #expect(recorder.pauseCount > pausesBeforeReconcile)         // re-suspended, not resumed
+    }
+
+    /// An audio engine that counts `pause()` calls, so a test can tell a `jump` re-suspended a
+    /// paused channel rather than resuming it.
+    @MainActor
+    private final class RecordingAudioEngine: MPVPlaybackEngine {
+        private(set) var pauseCount = 0
+        init() throws { try super.init(configuration: .audio) }
+        override func pause() { pauseCount += 1; super.pause() }
+    }
+
+    @Test func advanceWhileSuppressedDoesNotFlipPausedToPlaying() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.pause(audio)            // its own pause → .paused
+        coordinator.suppress()              // pause overlay up
+        coordinator.next(audio)
+
+        // An arrow key while the pause overlay is up must not resume a paused playlist: the
+        // state stays Paused so lifting suppression doesn't silently treat it as playing.
+        #expect(audio.playbackState == .paused)
+        #expect(coordinator.isSuppressed)
+    }
+
+    @Test func advanceWhileSuppressedReSuspendsTheEngine() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3", "3.mp3"])
+        let audio = makePlaylist(
+            .audio, folder: folder,
+            files: [("1.mp3", []), ("2.mp3", []), ("3.mp3", [])], in: context
+        )
+        try context.save()
+
+        // A recording engine reveals the re-suspend: advancing loads (and auto-starts) the next
+        // track, so the fix must immediately pause it back rather than let it play behind the overlay.
+        let recorder = try RecordingAudioEngine()
+        let coordinator = PlaybackCoordinator(
+            bookmarkService: BookmarkService(),
+            makeVideoEngine: { recorder },
+            makeAudioEngine: { recorder }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.suppress()
+        let pausesBeforeAdvance = recorder.pauseCount
+
+        coordinator.next(audio)
+        #expect(audio.playbackState == .playing)            // it was playing; stays playing
+        #expect(recorder.pauseCount > pausesBeforeAdvance)  // ...but re-suspended, not left audible
     }
 
     @Test func jumpLoadsRequestedFileOnImageChannel() throws {

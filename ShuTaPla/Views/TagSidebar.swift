@@ -17,7 +17,7 @@ struct TagSidebar: View {
     @Binding var managingTags: Bool
 
     var body: some View {
-        if let playlist = appState.selectedPlaylist {
+        if let playlist = appState.managedPlaylist {
             if managingTags {
                 PlaylistTagsView(playlist: playlist)
             } else {
@@ -51,10 +51,10 @@ struct TagSidebar: View {
         }
     }
 
-    /// The selected files within this playlist, in display order.
+    /// The active scope's selected files within this playlist, in display order.
     private func selectedFiles(in playlist: Playlist) -> [PlaylistFile] {
         playlist.files
-            .filter { appState.selectedFileIDs.contains($0.id) }
+            .filter { appState.managerSelection.contains($0.id) }
             .sorted { $0.sortOrder < $1.sortOrder }
     }
 }

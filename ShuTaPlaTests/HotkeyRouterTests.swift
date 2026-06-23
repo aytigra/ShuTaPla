@@ -66,7 +66,7 @@ import AppKit
     private final class MockOverlay: HotkeyOverlayContext {
         var isAnyOverlayOpen = false
         var isFilesTagsOpen = false
-        var audioHoldsKeyContext = false
+        var keyContext: KeyContext = .visual
         var closeTopmostCalls = 0
         var openFilesTagsCalls = 0
         var closeFilesTagsCalls = 0
@@ -131,11 +131,10 @@ import AppKit
                        router: router, overlay: overlay, closeSpy: closeSpy)
     }
 
-    /// One playlist of `type` selected in Manager mode with its filtered files
-    /// recomputed. Selection is set directly rather than via `select(_:)`, which
-    /// launches an un-awaited re-scan task that would outlive the in-memory container
-    /// and trap on a torn-down model. `configure` runs after selection and before the
-    /// recompute, for view-mode tweaks (e.g. gallery) that change what it produces.
+    /// One playlist of `type` managed in Manager mode. The managed slot is set directly
+    /// rather than via `manage(_:)`, which launches an un-awaited re-scan task that would
+    /// outlive the in-memory container and trap on a torn-down model. `configure` runs after
+    /// the playlist is managed, for view-mode tweaks (e.g. gallery) that change the file list.
     private func managerFixture(
         _ type: MediaType, files: [String],
         configure: (AppState, Playlist) -> Void = { _, _ in }
@@ -146,9 +145,8 @@ import AppKit
         let playlist = makePlaylist(type, folder: folder, files: files, in: context)
         let appState = makeAppState(context)
         appState.mode = .manager
-        appState.selectedPlaylist = playlist
+        appState.managedPlaylist = playlist
         configure(appState, playlist)
-        appState.recomputeFilteredFiles()
         let closeSpy = CloseSpy()
         let overlay = MockOverlay()
         let router = makeRouter(appState, overlay: overlay, closeSpy: closeSpy)
@@ -159,7 +157,7 @@ import AppKit
     /// A fresh overlay double already holding the audio key context.
     private func audioOverlay() -> MockOverlay {
         let overlay = MockOverlay()
-        overlay.audioHoldsKeyContext = true
+        overlay.keyContext = .audio
         return overlay
     }
 
@@ -203,13 +201,35 @@ import AppKit
         #expect(!f.appState.coordinator.isSuppressed)
     }
 
-    @Test func spaceAdvancesVisualWhenPlaying() throws {
+    @Test func spacePausesVisualWhenPlaying() throws {
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
         defer { f.appState.coordinator.shutdown() }
         let first = f.playlist.currentFileID
 
         #expect(f.router.route(.space, rightOption: false))
-        #expect(f.playlist.currentFileID != first)
+        #expect(f.playlist.playbackState == .paused)   // pauses, never advances
+        #expect(f.playlist.currentFileID == first)
+    }
+
+    @Test func spacePausesAudioWhenPlaying() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        defer { f.appState.coordinator.shutdown() }
+        let first = f.playlist.currentFileID
+
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(f.playlist.playbackState == .paused)   // pauses, never advances
+        #expect(f.playlist.currentFileID == first)
+    }
+
+    @Test func spaceEndsSuppressionWhenAudioHoldsContext() throws {
+        // Suppression is global, so [space] lifts it whichever target holds key context — and
+        // only lifts it, leaving the playlist's own play/pause state alone.
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.coordinator.suppress()
+        defer { f.appState.coordinator.shutdown() }
+
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(!f.appState.coordinator.isSuppressed)
     }
 
     // MARK: - Player: esc priority chain
@@ -268,7 +288,7 @@ import AppKit
 
         #expect(f.router.route(.s, rightOption: false))
         #expect(f.appState.mode == .manager)
-        #expect(f.appState.coordinator.visualPlaylist == nil)
+        #expect(f.appState.coordinator.liveVisualPlaylist == nil)
     }
 
     @Test func deleteRaisesPlayerConfirmationAndHoldsContext() throws {
@@ -289,6 +309,33 @@ import AppKit
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)      // passed to the alert's Cancel button
         #expect(!f.appState.coordinator.isSuppressed)
+    }
+
+    @Test func deleteUnderAudioKeyContextTargetsTheAudioTrack() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.rememberLastManaged(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
+        defer { f.appState.coordinator.shutdown() }
+
+        // With the audio overlay holding key context, `[delete]` targets the focused audio track
+        // (the audio confirmation), not the visual file — like every other contextual key.
+        #expect(f.router.route(.delete, rightOption: false))
+        #expect(f.appState.audioDeleteCandidate != nil)
+        #expect(f.appState.playerDeleteCandidate == nil)
+    }
+
+    @Test func spaceRestartsAStoppedAudioChannel() throws {
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
+        f.appState.rememberLastManaged(f.playlist)   // the persistent slot survives Stop
+        defer { f.appState.coordinator.shutdown() }
+
+        f.appState.coordinator.stop(f.playlist)
+        #expect(f.appState.coordinator.liveAudioPlaylist == nil)   // Stop cleared the live channel
+        #expect(f.playlist.playbackState == .stopped)
+
+        // `[space]` restarts from the slot — a plain `togglePauseIfActive` would no-op after Stop.
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(f.appState.coordinator.liveAudioPlaylist === f.playlist)
+        #expect(f.playlist.playbackState == .playing)
     }
 
     @Test func loopTogglesOnAudioChannel() throws {
@@ -412,6 +459,21 @@ import AppKit
         #expect(overlay.expandAudioCalls == 1)
     }
 
+    @Test func audioOverlayNavigatesWithNoTrackPlaying() throws {
+        // The audio overlay can be opened (e.g. from the sidebar's Audio hint) with nothing
+        // playing; its [arrow up]/[arrow down] must still close and expand it. Those keys act
+        // on the overlay, not the audio channel, so they can't depend on an active playlist.
+        let overlay = audioOverlay()
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"], overlay: overlay)
+        defer { f.appState.coordinator.shutdown() }
+        #expect(f.appState.coordinator.liveAudioPlaylist == nil)
+
+        #expect(f.router.route(.arrowDown, rightOption: false))
+        #expect(overlay.expandAudioCalls == 1)
+        #expect(f.router.route(.arrowUp, rightOption: false))
+        #expect(overlay.closeAudioCalls == 1)
+    }
+
     // MARK: - Text input passthrough
 
     @Test func textInputSwallowsEverything() throws {
@@ -428,18 +490,18 @@ import AppKit
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4", "3.mp4"])
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
+        let files = f.appState.managerFiles
         #expect(files.count == 3)
 
         // With nothing selected, the first arrow-down lands on the first row and is consumed.
         #expect(f.router.route(.arrowDown, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
 
         #expect(f.router.route(.arrowDown, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
 
         #expect(f.router.route(.arrowUp, rightOption: false))
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
     }
 
     @Test func galleryArrowsNavigateInTwoDimensions() throws {
@@ -450,31 +512,31 @@ import AppKit
         f.appState.fileGridColumns = 3
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
+        let files = f.appState.managerFiles
         #expect(files.count == 6)
 
         #expect(f.router.route(.arrowRight, rightOption: false))   // nothing selected → first
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
         #expect(f.router.route(.arrowRight, rightOption: false))   // step right by one
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
         #expect(f.router.route(.arrowDown, rightOption: false))    // down a row (+3 columns)
-        #expect(f.appState.selectedFileIDs == [files[4].id])
+        #expect(f.appState.managerSelection == [files[4].id])
         #expect(f.router.route(.arrowUp, rightOption: false))      // up a row (-3 columns)
-        #expect(f.appState.selectedFileIDs == [files[1].id])
+        #expect(f.appState.managerSelection == [files[1].id])
         #expect(f.router.route(.arrowLeft, rightOption: false))    // step left by one
-        #expect(f.appState.selectedFileIDs == [files[0].id])
+        #expect(f.appState.managerSelection == [files[0].id])
     }
 
     @Test func managerEnterPlaysSelectedFile() throws {
         let f = try managerFixture(.image, files: ["1.jpg", "2.jpg", "3.jpg"])
         defer { f.appState.coordinator.shutdown() }
 
-        let files = f.appState.filteredFiles
-        f.appState.selectedFileIDs = [files[1].id]
+        let files = f.appState.managerFiles
+        f.appState.managerSelection = [files[1].id]
 
         #expect(f.router.route(.enter, rightOption: false))
         #expect(f.appState.mode == .player)
-        #expect(f.appState.coordinator.visualPlaylist === f.playlist)
+        #expect(f.appState.coordinator.liveVisualPlaylist === f.playlist)
         #expect(f.appState.coordinator.visualCurrentFile?.id == files[1].id)
     }
 
@@ -502,7 +564,7 @@ import AppKit
 
     @Test func managerDeleteRequestsConfirmationForSelection() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.delete, rightOption: false))
@@ -519,7 +581,7 @@ import AppKit
     @Test func tagRemovalConfirmationPassesEnterEscToTheAlertAndSwallowsTheRest() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
         // A file is selected, so an unguarded `[enter]` would otherwise play it.
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         // The alert owns its keys: while it's up, `[enter]`/`[esc]` pass through to it
@@ -556,7 +618,7 @@ import AppKit
 
     @Test func playlistDeleteConfirmationHoldsKeyboardContext() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
-        f.appState.selectedFileIDs = Set(f.appState.filteredFiles.prefix(1).map(\.id))
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
         f.appState.pendingPlaylistDelete = f.playlist

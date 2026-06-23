@@ -2,31 +2,37 @@
 //  FilterBar.swift
 //  ShuTaPla
 //
-//  The filter controls in the Manager tag panel: an AND/OR `TagTokenField` whose
-//  chips are the selected filter tags, the saved-search recents, and a banner shown
-//  while a service filter (from the center-panel counter notices) overrides the tag
-//  filter. Playlist-wide tag rename / remove lives in `PlaylistTagsView`.
+//  The tag-filter controls shared by every surface that filters a playlist: an AND/OR
+//  `TagTokenField` whose chips are the selected filter tags, the saved-search recents, and a
+//  banner shown while a triage (service) filter overrides the tag filter. Every edit targets
+//  the given `playlist`'s persisted `filterState` directly, so the same bar serves the Manager
+//  and both player overlays — they differ only in which playlist they pass. The triage banner
+//  reads from the model, so it appears (and clears) on any surface; the triage *toggles* live
+//  in the Manager's center notices. Playlist-wide tag rename / remove lives in `PlaylistTagsView`.
 //
 
 import SwiftUI
 
 struct FilterBar: View {
     let playlist: Playlist
+
     @Environment(AppState.self) private var appState
+
+    private var serviceFilter: ServiceFilter? { playlist.filterState.serviceFilter }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Filter").font(.headline)
                 Spacer()
-                if !playlist.filterState.isEmpty, appState.activeServiceFilter == nil {
-                    Button("Clear") { appState.clearTagFilter() }
+                if !playlist.filterState.isEmpty, serviceFilter == nil {
+                    Button("Clear") { appState.clearTagFilter(on: playlist) }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
             }
 
-            if let service = appState.activeServiceFilter {
+            if let service = serviceFilter {
                 serviceBanner(service)
             } else {
                 modePicker
@@ -38,14 +44,14 @@ struct FilterBar: View {
         .padding(12)
     }
 
-    // MARK: - Service filter banner
+    // MARK: - Triage filter banner
 
     private func serviceBanner(_ service: ServiceFilter) -> some View {
         HStack(spacing: 8) {
             Image(systemName: service.systemImage)
             Text("Showing \(service.label)").font(.callout)
             Spacer()
-            Button("Show all") { appState.toggleServiceFilter(service) }
+            Button("Show all") { appState.toggleServiceFilter(service, on: playlist) }
                 .buttonStyle(.borderless)
                 .font(.caption)
         }
@@ -58,8 +64,8 @@ struct FilterBar: View {
 
     private var modePicker: some View {
         Picker("Match", selection: Binding(
-            get: { appState.filterMode },
-            set: { appState.filterMode = $0 }
+            get: { playlist.filterState.filterMode },
+            set: { appState.setFilterMode($0, on: playlist) }
         )) {
             Text("All tags").tag(FilterMode.and)
             Text("Any tag").tag(FilterMode.or)
@@ -75,8 +81,8 @@ struct FilterBar: View {
             knownTags: playlist.tagFrequency,
             allowsCreate: false,
             placeholder: "Filter by tag",
-            onAdd: { appState.toggleFilterTag($0) },
-            onRemove: { appState.toggleFilterTag($0) }
+            onAdd: { appState.toggleFilterTag($0, on: playlist) },
+            onRemove: { appState.toggleFilterTag($0, on: playlist) }
         )
     }
 
@@ -87,7 +93,7 @@ struct FilterBar: View {
             HStack {
                 Text("Saved Searches").font(.subheadline.weight(.semibold))
                 Spacer()
-                Button("Save") { appState.saveCurrentSearch() }
+                Button("Save") { appState.saveCurrentSearch(on: playlist) }
                     .buttonStyle(.borderless)
                     .font(.caption)
                     .disabled(playlist.filterState.isEmpty)
@@ -107,7 +113,7 @@ struct FilterBar: View {
 
     private func savedSearchRow(_ search: SavedSearch) -> some View {
         HStack(spacing: 6) {
-            Button { appState.applySavedSearch(search) } label: {
+            Button { appState.applySavedSearch(search, on: playlist) } label: {
                 Text(search.tags.joined(separator: search.mode == .and ? "  +  " : "  /  "))
                     .font(.caption)
                     .lineLimit(1)
@@ -117,7 +123,7 @@ struct FilterBar: View {
             }
             .buttonStyle(.plain)
 
-            Button { appState.removeSavedSearch(search) } label: {
+            Button { appState.removeSavedSearch(search, on: playlist) } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
             }
@@ -125,5 +131,4 @@ struct FilterBar: View {
             .help("Remove saved search")
         }
     }
-
 }
