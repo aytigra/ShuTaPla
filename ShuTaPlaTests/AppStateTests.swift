@@ -820,6 +820,28 @@ struct AppStateTests {
         #expect(playlist.files.count == 3)
     }
 
+    @Test func selectingADifferentPlaylistDoesNotCancelTheFirstScan() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .video)
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .video)
+        context.insert(a)
+        context.insert(b)
+        addFile("a.mp4", order: 0, to: a, in: context)
+        addFile("b.mp4", order: 0, to: b, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        // Selecting A starts A's background re-scan; selecting a *different* playlist B must not
+        // cancel A's scan — the two playlists' re-reads are independent (keyed per playlist).
+        appState.select(a)
+        let scanA = appState.updateTask
+        appState.select(b)
+        #expect(scanA?.isCancelled == false)
+
+        await scanA?.value
+        await appState.updateTask?.value
+    }
+
     @Test func horizontalArrowInListIsConsumedWithoutChangingSelection() throws {
         let container = try makeContainer()
         let context = container.mainContext

@@ -160,26 +160,17 @@ struct AudioInlet: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary)
                 Capsule().fill(.secondary)
-                    .frame(width: geo.size.width * progressFraction)
+                    .frame(width: geo.size.width * coordinator.audioProgressFraction)
             }
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let fraction = min(max(value.location.x / geo.size.width, 0), 1)
-                        coordinator.seek(audio, to: fraction * coordinator.audioDuration)
+                        coordinator.seekAudio(toFraction: value.location.x / geo.size.width)
                     }
             )
         }
         .frame(height: 4)
-        .disabled(coordinator.audioDuration <= 0)
-    }
-
-    /// The current track's play position as a 0…1 fraction for the thin progress bar; 0 when
-    /// nothing is loaded (a stopped playlist showing its resume track).
-    private var progressFraction: Double {
-        let duration = coordinator.audioDuration
-        guard duration > 0 else { return 0 }
-        return min(max(coordinator.audioCurrentTime / duration, 0), 1)
+        .disabled(!coordinator.audioIsSeekable)
     }
 }

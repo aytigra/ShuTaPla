@@ -309,6 +309,25 @@ final class PlaybackCoordinator: PlaybackSource {
     var audioCurrentTime: TimeInterval { audioEngine?.currentTime ?? 0 }
     var audioDuration: TimeInterval { audioEngine?.duration ?? 0 }
 
+    /// Whether the audio channel has a seekable position yet (a known, positive duration). The
+    /// seek bars disable themselves until it does.
+    var audioIsSeekable: Bool { audioDuration > 0 }
+
+    /// The audio channel's play position as a 0…1 fraction of its duration, clamped; 0 when no
+    /// duration is known yet. The seek bars render their fill from this.
+    var audioProgressFraction: Double {
+        guard audioDuration > 0 else { return 0 }
+        return min(max(audioCurrentTime / audioDuration, 0), 1)
+    }
+
+    /// Seeks the audio channel to `fraction` (0…1, clamped) of its duration. The one place the
+    /// fraction→seconds mapping lives, shared by the inlet and overlay seek bars.
+    func seekAudio(toFraction fraction: Double) {
+        guard let audioPlaylist else { return }
+        let clamped = min(max(fraction, 0), 1)
+        seek(audioPlaylist, to: clamped * audioDuration)
+    }
+
     /// Plays `file` on `playlist`'s channel right away: lifts a global pause, clears the
     /// playlist's own pause, then jumps to it. The "play this one now" intent behind a
     /// double-click in the Files & Tags overlay.
@@ -352,42 +371,29 @@ final class PlaybackCoordinator: PlaybackSource {
         return true
     }
 
-    /// After a filter (or a deletion) reshapes the playback sequence, if the visual
-    /// channel's current file is no longer in it, jump to the first remaining file.
-    /// When nothing remains, the channel is left as-is so the player can show a
-    /// "no files" placeholder rather than dropping out of Player mode.
-    func reconcileVisualSelection() {
-        guard let playlist = visualPlaylist else { return }
+    /// After a filter, deletion, or re-scan prune reshapes a playback sequence, advance the
+    /// channel playing `playlist` off a current file that just left the sequence: jump to the
+    /// first remaining file, or — when nothing remains — settle the now-empty channel. A no-op
+    /// when `playlist` isn't live on a channel, and idempotent when its current file survives.
+    ///
+    /// The empty case diverges by channel. The visual channel stays live and empty (its engine
+    /// is unloaded so a later advance/seek can't act on a departed file) so the player keeps
+    /// showing its "no files" placeholder and the user can lift the filter from there; the audio
+    /// channel has no such placeholder, so it stops the playlist instead (easy to restart from
+    /// the audio overlay).
+    func reconcile(playlistThatChanged playlist: Playlist) {
+        guard let channel = channel(of: playlist) else { return }
+        let current = channel == .audio ? audioCurrentFile : visualCurrentFile
         let sequence = playlist.playbackSequence
-        if let current = visualCurrentFile, sequence.contains(where: { $0.id == current.id }) { return }
+        if let current, sequence.contains(where: { $0.id == current.id }) { return }
         if let first = sequence.first {
             jump(playlist, to: first)
-        } else {
-            // The sequence is empty (a filter excluded everything). Clear the engine's
-            // loaded file so a later advance/seek can't act on a file no longer in the
-            // playlist, while keeping the visual channel set so the player shows its
-            // "no files" placeholder instead of dropping out of Player mode.
-            switch visualKind {
-            case .image: imageEngine.stop()
-            default: videoEngine?.stop()
-            }
+            return
         }
-    }
-
-    /// After a filter reshapes the audio playback sequence, if the audio channel's
-    /// current track is no longer in it, jump to the first remaining track. When
-    /// nothing remains, the channel stops: unlike the visual channel — which stays live
-    /// and empty so the player can show a "no files" placeholder and the user can lift
-    /// the filter from there — the audio channel has no such placeholder, so an emptied
-    /// sequence stops the playlist (easy to restart from the same overlay).
-    func reconcileAudioSelection() {
-        guard let playlist = audioPlaylist else { return }
-        let sequence = playlist.playbackSequence
-        if let current = audioCurrentFile, sequence.contains(where: { $0.id == current.id }) { return }
-        if let first = sequence.first {
-            jump(playlist, to: first)
-        } else {
-            stopAudio()
+        switch channel {
+        case .visualImage: imageEngine.stop()
+        case .visualVideo: videoEngine?.stop()
+        case .audio: stopAudio()
         }
     }
 

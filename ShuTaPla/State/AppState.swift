@@ -135,9 +135,14 @@ final class AppState {
     var lastActiveVideoPlaylist: Playlist?
     var lastActiveImagePlaylist: Playlist?
 
-    /// In-flight background re-scan started by `select`. Tracked so a newer
-    /// selection (or a delete) can cancel a stale update, and so tests can await
-    /// it to completion.
+    /// In-flight background re-scans, keyed by playlist id, started by `rescan(_:)`. Keyed
+    /// per playlist so re-reading one playlist supersedes only its own stale scan: selecting
+    /// an audio playlist while a Manager visual re-scan is in flight leaves the visual scan
+    /// running, rather than dropping it on the floor.
+    private var updateTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// The most recently started re-scan, so a delete can cancel it and tests can await it
+    /// to completion. Points at whichever `rescan(_:)` ran last.
     private(set) var updateTask: Task<Void, Never>?
 
     /// In-flight confirmation operations (delete / strip-audio / tag removal) launched
@@ -578,11 +583,19 @@ final class AppState {
             managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
-        // Re-read the folder on every (re-)select — the automatic Update, the reason there's no
-        // dedicated control: re-clicking the open playlist re-scans and re-centers. An in-flight
-        // scan is cancelled first so rapid clicks don't pile up.
-        updateTask?.cancel()
-        updateTask = Task { await update(playlist) }
+        rescan(playlist)
+    }
+
+    /// Re-reads `playlist`'s folder on disk in the background — the automatic Update, the reason
+    /// there's no dedicated control: re-clicking the open playlist re-scans and re-centers.
+    /// Supersedes any in-flight re-scan of the *same* playlist so rapid clicks don't pile up,
+    /// while leaving a different playlist's scan running. The spawned task is also remembered as
+    /// `updateTask` so a delete can cancel it and tests can await it.
+    private func rescan(_ playlist: Playlist) {
+        updateTasks[playlist.id]?.cancel()
+        let task = Task { await update(playlist) }
+        updateTasks[playlist.id] = task
+        updateTask = task
     }
 
     /// The visual Files & Tags overlay's analog of `selectAudioPlaylist(_:)`: switches the
@@ -606,8 +619,7 @@ final class AppState {
         remember(playlist)   // audioChannelSlot = playlist
         if isNewSelection { coordinator.play(playlist) }
         audioScrollToken += 1   // re-center the overlay file list on the current track
-        updateTask?.cancel()
-        updateTask = Task { await update(playlist) }
+        rescan(playlist)
     }
 
     /// The audio inlet's Play when no audio playlist is active: start the first audio playlist
@@ -634,7 +646,8 @@ final class AppState {
     /// each) so a large playlist's cleanup keeps the UI responsive and its row can
     /// show a spinner until it disappears.
     func delete(_ playlist: Playlist) async {
-        updateTask?.cancel()
+        updateTasks[playlist.id]?.cancel()
+        updateTasks[playlist.id] = nil
         // Release the playback channel first: a playing audio playlist (which runs even in
         // Manager mode) would otherwise leave the engine on files about to be deleted, and
         // its next advance would dereference a destroyed model.
@@ -761,15 +774,7 @@ final class AppState {
         rebuildTagFrequency(playlist)
         // A re-scan can drop either channel's playing file; advance off it just like a delete
         // does, so neither engine holds a file that's no longer in the playlist.
-        reconcileChannels(for: playlist)
-    }
-
-    /// Advances whichever live channel(s) play `playlist` off a file that has just left its
-    /// playback sequence (a delete or a re-scan prune). A no-op when the playlist isn't on a
-    /// channel, and idempotent when its current file still survives.
-    private func reconcileChannels(for playlist: Playlist) {
-        if coordinator.visualPlaylist === playlist { coordinator.reconcileVisualSelection() }
-        if coordinator.audioPlaylist === playlist { coordinator.reconcileAudioSelection() }
+        coordinator.reconcile(playlistThatChanged: playlist)
     }
 
     /// Recomputes the per-playlist tag usage counts from its playable files.
@@ -855,7 +860,7 @@ final class AppState {
         // Advance whichever channel was playing this playlist off a trashed track, so the
         // engine never holds a file that's no longer in the playlist. Covers every delete
         // entry point (Manager list, Files & Tags overlay, audio overlay) in one place.
-        reconcileChannels(for: playlist)
+        coordinator.reconcile(playlistThatChanged: playlist)
 
         guard result.failed.isEmpty else {
             return "\(result.failed.count) file(s) couldn't be moved to the Trash."
@@ -1018,7 +1023,8 @@ final class AppState {
     @discardableResult
     func cancelInProgressOperation() -> Bool {
         guard !busyPlaylistIDs.isEmpty else { return false }
-        updateTask?.cancel()
+        for task in updateTasks.values { task.cancel() }
+        updateTasks.removeAll()
         updateTask = nil
         return true
     }
@@ -1050,8 +1056,18 @@ final class AppState {
     func confirmManagerDelete() {
         let targets = pendingManagerDelete
         pendingManagerDelete = []
-        guard !targets.isEmpty else { return }
-        runConfirmation { if let error = await self.deleteFiles(targets) { self.managerDeleteError = error } }
+        performDelete(targets) { self.managerDeleteError = $0 }
+    }
+
+    /// Trashes `files` as a retained confirmation task — `deleteFiles` advances any live channel
+    /// off them — routing the first failure message to `report`. The one place the trash + the
+    /// post-delete error handling lives, shared by the Manager, Player, and audio confirmations.
+    private func performDelete(_ files: [PlaylistFile], onError report: @escaping (String) -> Void) {
+        guard !files.isEmpty else { return }
+        // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is a
+        // no-op and the surface stays on the file; surface the message rather than silently
+        // advancing past an undeleted file.
+        runConfirmation { if let error = await self.deleteFiles(files) { report(error) } }
     }
 
     /// Runs a confirmation operation as a retained, self-pruning Task so the SwiftData work
@@ -1085,9 +1101,7 @@ final class AppState {
     func confirmAudioDelete() {
         guard let file = audioDeleteCandidate else { return }
         audioDeleteCandidate = nil
-        runConfirmation {
-            if let error = await self.deleteFiles([file]) { self.audioDeleteError = error }
-        }
+        performDelete([file]) { self.audioDeleteError = $0 }
     }
 
     /// Requests confirmation to remove the audio track from a video-row's selection
@@ -1205,12 +1219,7 @@ final class AppState {
     func confirmPlayerDelete() {
         guard let file = playerDeleteCandidate else { return }
         playerDeleteCandidate = nil
-        runConfirmation {
-            // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is
-            // a no-op and the player stays on the file; surface the message rather than silently
-            // advancing past an undeleted file.
-            if let error = await self.deleteFiles([file]) { self.playerDeleteError = error }
-        }
+        performDelete([file]) { self.playerDeleteError = $0 }
     }
 
     /// Stops the visual playlist and returns the window to Manager mode (the pause overlay's
@@ -1383,8 +1392,7 @@ final class AppState {
     /// live channel and its playing file fell out of the new filter, advance the engine to a file
     /// that still matches. Every other surface re-derives from the model on its own.
     private func filterChanged(on playlist: Playlist) {
-        if coordinator.visualPlaylist === playlist { coordinator.reconcileVisualSelection() }
-        if coordinator.audioPlaylist === playlist { coordinator.reconcileAudioSelection() }
+        coordinator.reconcile(playlistThatChanged: playlist)
     }
 
     private func message(for error: FileSystemError) -> String {

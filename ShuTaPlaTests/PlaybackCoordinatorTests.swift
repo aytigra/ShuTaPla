@@ -256,7 +256,7 @@ import SwiftData
         // Filter to "b" — the playing "1.jpg" (tagged "a") is excluded, so reconciling
         // jumps to the first file that still matches.
         image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
 
         let matching = image.playbackSequence
         #expect(matching.map(\.fileName) == ["2.jpg", "3.jpg"])
@@ -282,7 +282,7 @@ import SwiftData
 
         // The playing file still matches the new filter, so reconciling leaves it put.
         image.filterState = FilterState(selectedTags: ["a"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
         #expect(coordinator.visualCurrentFile?.id == currentID)
     }
 
@@ -306,7 +306,7 @@ import SwiftData
         // player shows its "no files" placeholder), but the engine's current file is cleared
         // so a later advance/seek can't act on a file no longer in the playlist.
         image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
-        coordinator.reconcileVisualSelection()
+        coordinator.reconcile(playlistThatChanged: image)
 
         #expect(image.playbackSequence.isEmpty)
         #expect(coordinator.visualPlaylist === image)   // still in Player mode
@@ -496,7 +496,7 @@ import SwiftData
         let firstID = coordinator.audioCurrentFile?.id
 
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
-        coordinator.reconcileAudioSelection()
+        coordinator.reconcile(playlistThatChanged: audio)
 
         let matching = audio.playbackSequence
         #expect(matching.map(\.fileName) == ["2.mp3", "3.mp3"])
@@ -518,7 +518,7 @@ import SwiftData
         #expect(coordinator.audioCurrentFile != nil)
 
         audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
-        coordinator.reconcileAudioSelection()
+        coordinator.reconcile(playlistThatChanged: audio)
 
         // Unlike the visual channel (which stays live and empty so the player can show a "no files"
         // placeholder and the user can lift the filter from there), the audio channel has no such
@@ -605,7 +605,7 @@ import SwiftData
         // A filter drops the paused current track: reconcile jumps to the survivor, but the
         // channel must stay paused — loading the new file can't silently resume playback.
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
-        coordinator.reconcileAudioSelection()
+        coordinator.reconcile(playlistThatChanged: audio)
 
         #expect(coordinator.audioCurrentFile?.fileName == "2.mp3")   // jumped to the survivor
         #expect(recorder.pauseCount > pausesBeforeReconcile)         // re-suspended, not resumed

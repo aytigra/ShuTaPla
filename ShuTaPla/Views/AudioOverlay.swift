@@ -107,7 +107,7 @@ struct AudioOverlay: View {
             if let audio = activePlaylist {
                 HStack(spacing: 12) {
                     AudioTransport(playlist: audio)
-                    scrubber(audio)
+                    scrubber
                 }
                 .fixedSize()
             }
@@ -139,17 +139,17 @@ struct AudioOverlay: View {
         }
     }
 
-    private func scrubber(_ audio: Playlist) -> some View {
+    private var scrubber: some View {
         HStack(spacing: 8) {
             Text(coordinator.audioCurrentTime.formattedDuration)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             Slider(value: Binding(
-                get: { min(coordinator.audioCurrentTime, max(coordinator.audioDuration, 0.1)) },
-                set: { coordinator.seek(audio, to: $0) }
-            ), in: 0...max(coordinator.audioDuration, 0.1))
+                get: { coordinator.audioProgressFraction },
+                set: { coordinator.seekAudio(toFraction: $0) }
+            ), in: 0...1)
             .frame(width: 160)
-            .disabled(coordinator.audioDuration <= 0)
+            .disabled(!coordinator.audioIsSeekable)
             Text(coordinator.audioDuration.formattedDuration)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
