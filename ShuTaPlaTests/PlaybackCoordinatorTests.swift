@@ -504,7 +504,7 @@ import SwiftData
         #expect(coordinator.audioCurrentFile?.id != firstID)
     }
 
-    @Test func reconcileAudioClearsWhenSequenceEmpties() throws {
+    @Test func reconcileAudioStopsTheChannelWhenSequenceEmpties() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.mp3", "2.mp3"])
@@ -520,9 +520,14 @@ import SwiftData
         audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
         coordinator.reconcileAudioSelection()
 
+        // Unlike the visual channel (which stays live and empty so the player can show a "no files"
+        // placeholder and the user can lift the filter from there), the audio channel has no such
+        // placeholder, so an emptied audio sequence stops the playlist outright — easy to restart
+        // from the same overlay.
         #expect(audio.playbackSequence.isEmpty)
-        #expect(coordinator.audioPlaylist === audio)        // overlay stays on the playlist
-        #expect(coordinator.audioCurrentFile == nil)        // but no stale current track
+        #expect(coordinator.audioPlaylist == nil)           // the channel stops
+        #expect(audio.playbackState == .stopped)
+        #expect(coordinator.audioCurrentFile == nil)
     }
 
     @Test func playNowStartsAnIdleAudioChannel() throws {

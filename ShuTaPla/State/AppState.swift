@@ -241,31 +241,44 @@ final class AppState {
     var audioDeleteError: String?
     var audioRenameError: String?
 
-    /// The audio channel playlist's display-ordered files under its effective filter — the
-    /// audio overlay's list. Derived from the model; the service filter, if set, applies here
-    /// too (the overlay carries no notice toggles but honors a filter set in Manager).
-    var audioChannelFiles: [PlaylistFile] { audioChannelSlot?.displaySequence ?? [] }
+    /// The audio channel playlist's files under its effective filter — the audio overlay's list.
+    /// This is the *playback* sequence, so skipped tracks never appear: the audio overlay is a
+    /// transport list (no triage toggles), and a track the engine won't play has no place in it.
+    /// Under the Skipped filter the list is therefore empty. The service filter set in Manager
+    /// still applies (e.g. Untagged narrows the channel to its untagged playable tracks).
+    var audioChannelFiles: [PlaylistFile] { audioChannelSlot?.playbackSequence ?? [] }
 
     /// The visual channel playlist's display-ordered files — the Files & Tags overlay's list.
+    /// This is the *display* sequence (it keeps skipped files under the Skipped filter), because
+    /// the Files & Tags overlay is an editing surface where skipped rows are triaged and un-skipped.
     var visualChannelFiles: [PlaylistFile] { coordinator.visualPlaylist?.displaySequence ?? [] }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
-    /// Resolved from the playlist's persisted `currentFileID` against its display list, not the
+    /// Resolved from the playlist's persisted `currentFileID` against its file list, not the
     /// live engine, so it survives Stop: a stopped audio playlist still shows (and resumes from)
     /// where it left off. `nil` when the remembered file is filtered out of view.
-    var currentAudioFile: PlaylistFile? {
+    var currentAudioFile: PlaylistFile? { currentAudioFile(in: audioChannelFiles) }
+
+    /// Resolves the audio channel's current track within an already-derived file list. A view
+    /// that reads `audioChannelFiles` for its list passes that same list here instead of letting
+    /// the accessor re-walk the whole sequence to look one file up.
+    func currentAudioFile(in files: [PlaylistFile]) -> PlaylistFile? {
         guard let id = audioChannelSlot?.currentFileID else { return nil }
-        return audioChannelFiles.first { $0.id == id }
+        return files.first { $0.id == id }
     }
 
     /// The visual channel's current file — the Files & Tags overlay's analog of
     /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`
-    /// against its display list, not the live engine, so it's available synchronously when
+    /// against its file list, not the live engine, so it's available synchronously when
     /// the overlay's file list re-centers after a playlist switch (the video engine reports
     /// its current file asynchronously). `nil` when the remembered file is filtered out of view.
-    var currentVisualFile: PlaylistFile? {
+    var currentVisualFile: PlaylistFile? { currentVisualFile(in: visualChannelFiles) }
+
+    /// Resolves the visual channel's current file within an already-derived file list, so a view
+    /// holding `visualChannelFiles` need not re-walk the sequence to look one file up.
+    func currentVisualFile(in files: [PlaylistFile]) -> PlaylistFile? {
         guard let id = coordinator.visualPlaylist?.currentFileID else { return nil }
-        return visualChannelFiles.first { $0.id == id }
+        return files.first { $0.id == id }
     }
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as

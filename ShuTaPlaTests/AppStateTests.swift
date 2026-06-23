@@ -1316,6 +1316,54 @@ struct AppStateTests {
         #expect(appState.currentAudioFile == nil)
     }
 
+    @Test func audioOverlayHidesSkippedTracksAndNeverMakesOneCurrent() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
+        context.insert(audio)
+        addFile("1.mp3", order: 0, to: audio, in: context)
+        let skipped = addFile("2.mp3", skipped: true, order: 1, to: audio, in: context)
+        // The Skipped triage filter is the one effective filter whose display list contains skipped
+        // files; honoring it in the overlay would otherwise surface them on the audio channel.
+        audio.filterState = FilterState(selectedTags: [], filterMode: .and, serviceFilter: .skipped)
+        audio.currentFileID = skipped.id
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.remember(audio)
+
+        // The audio overlay is a transport list, not a triage surface: skipped tracks are never
+        // playable, so they must not appear in it, and a skipped resume track must not resolve as
+        // the current (transport) track. Under the Skipped filter nothing is playable, so the list
+        // is empty.
+        #expect(appState.audioChannelFiles.allSatisfy { !$0.isSkipped })
+        #expect(appState.audioChannelFiles.isEmpty)
+        #expect(appState.currentAudioFile == nil)
+    }
+
+    @Test func currentVisualFileResolvesFromTheLiveVisualPlaylist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "1.jpg"))
+        try Data().write(to: dir.appending(path: "2.jpg"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let image = Playlist(name: "I", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(image)
+        let first = addFile("1.jpg", order: 0, to: image, in: context)
+        addFile("2.jpg", order: 1, to: image, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(image)   // the image engine has no libmpv, so this is trap-safe
+
+        // The Files & Tags overlay resolves its highlighted/centered file from the live visual
+        // playlist's persisted current id against the displayed list.
+        #expect(appState.currentVisualFile?.id == first.id)
+        #expect(appState.currentVisualFile?.id == appState.visualChannelFiles.first?.id)
+    }
+
     // MARK: - Manager audio scope (audio manager redesign — Phase 2)
     //
     // Stop-on-switch and the inlet Play cascade. These exercise the live audio channel, so

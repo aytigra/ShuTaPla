@@ -376,8 +376,10 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// After a filter reshapes the audio playback sequence, if the audio channel's
     /// current track is no longer in it, jump to the first remaining track. When
-    /// nothing remains, the engine's loaded file is cleared so a later advance/seek
-    /// can't act on a track no longer in the playlist.
+    /// nothing remains, the channel stops: unlike the visual channel — which stays live
+    /// and empty so the player can show a "no files" placeholder and the user can lift
+    /// the filter from there — the audio channel has no such placeholder, so an emptied
+    /// sequence stops the playlist (easy to restart from the same overlay).
     func reconcileAudioSelection() {
         guard let playlist = audioPlaylist else { return }
         let sequence = playlist.playbackSequence
@@ -385,7 +387,7 @@ final class PlaybackCoordinator: PlaybackSource {
         if let first = sequence.first {
             jump(playlist, to: first)
         } else {
-            audioEngine?.stop()
+            stopAudio()
         }
     }
 

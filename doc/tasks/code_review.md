@@ -52,7 +52,7 @@ The `[delete]` branch runs **before** the audio/visual key-context split (`:259`
 **Fix:** route audio `[space]` to `togglePlayback(audioChannelSlot)` to mirror the transport button.
 
 ### C6 — `reconcileAudioSelection` leaves `audioPlaylist` set on an empty sequence (MEDIUM)
-- [ ] `ShuTaPla/Engines/PlaybackCoordinator.swift:379`
+- [x] `ShuTaPla/Engines/PlaybackCoordinator.swift:379` — **FIXED** (behavior decided: stop the channel). The visual channel deliberately stays live-and-empty so the player can show a "no files" placeholder and the user can lift the filter from there; the audio channel has no such placeholder, so an emptied audio sequence now calls `stopAudio()` (clears `audioPlaylist`, sets `.stopped`) — easy to restart from the same overlay. Test `reconcileAudioStopsTheChannelWhenSequenceEmpties` updated to the new behavior: reproduced the old "stays live" state red first (`audioPlaylist` non-nil, `.playing`), then green after the fix. The visual analog (`reconcileClearsCurrentFileWhenSequenceEmpties`) is untouched and still passes.
 
 On an empty `playbackSequence` it calls `audioEngine?.stop()` but does not clear `audioPlaylist` or the playlist state. `AudioTransport` then still reads as live (Prev/Stop/Next/Loop) with `audioCurrentFile == nil`; pressing Next advances over an empty sequence. The visual analog keeps the channel deliberately so the player can show a "no files" placeholder — but audio has no such placeholder, so the live-but-empty transport is just inconsistent.
 
@@ -71,7 +71,7 @@ On an empty `playbackSequence` it calls `audioEngine?.stop()` but does not clear
 **Fix:** reset the rename state on active-playlist-id change (`.onChange`) or `.id(playlist.id)` the surface.
 
 ### C9 — `currentAudioFile` (displaySequence) vs reconcile (playbackSequence) disagree under the Skipped filter (LOW)
-- [ ] `ShuTaPla/State/AppState.swift:256`
+- [x] `ShuTaPla/State/AppState.swift:256` — **FIXED.** `audioChannelFiles` now derives from `playbackSequence` (skipped tracks excluded), so the audio overlay — a transport list, not a triage surface — never shows a skipped track and `currentAudioFile` (which resolves within that list) never makes one current; under the Skipped filter the list is empty. `visualChannelFiles` stays `displaySequence` because the Files & Tags overlay is an editing surface where skipped rows are triaged/un-skipped (the asymmetry is now documented on both accessors). Test `audioOverlayHidesSkippedTracksAndNeverMakesOneCurrent`: reproduced red first (skipped track present and current), green after the fix.
 
 `currentAudioFile` resolves against `audioChannelFiles` = `displaySequence`, which **includes** skipped files under the `.skipped` filter; `reconcileAudioSelection` uses `playbackSequence`, which never does. Under `.skipped` the overlay can highlight a "current" track the engine treats as unplayable.
 
@@ -80,7 +80,7 @@ On an empty `playbackSequence` it calls `audioEngine?.stop()` but does not clear
 ## Efficiency
 
 ### E1 — `currentAudioFile`/`currentVisualFile` re-derive the whole `displaySequence` per render (MEDIUM)
-- [ ] `ShuTaPla/State/AppState.swift:256,266`
+- [x] `ShuTaPla/State/AppState.swift:256,266` — **FIXED** (the simple, self-contained part). Added list-aware overloads `currentAudioFile(in:)` / `currentVisualFile(in:)` that resolve the current file within an already-derived list; the zero-arg properties delegate to them (one resolution rule). `AudioOverlay.audioContext` and `FilesTagsOverlayView.visualContext` now derive their list once and pass it to the overload, dropping the redundant second O(n) walk in the expanded surface. Guarded by the existing `currentAudioFile*` tests plus a new `currentVisualFileResolvesFromTheLiveVisualPlaylist` baseline (run green before and after the refactor). The deeper "thread the list through the compact bar too" change is left to Task 17's view-layer pass.
 
 Each accessor calls `audioChannelFiles`/`visualChannelFiles` (a full `displaySequence` walk + sort) just to look up one file by id. The overlays read both the list **and** the current file in the same body, so each render does two full O(n) derivations; the body re-evaluates on every `audioCurrentTime`/`visualCurrentTime` scrubber tick during playback. This is a new double-walk the diff introduces, compounding the known single-walk cost that Task 17 addresses.
 

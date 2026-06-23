@@ -291,7 +291,7 @@ Like the tag filter, an active Untagged or Invalid tagging Service Filter affect
 
 The Service Filter is persisted on the playlist, alongside the tag filter, and applied uniformly — Manager, the overlays, and playback all honor it — so triaging the untagged or invalid-tagged set resumes across launches. The counter-notice **toggles** that set it live only in the Manager center; the Visual Overlay and the Audio Overlay carry no Service Filter toggles, but they still honor a Service Filter set in Manager (and show its "Showing untagged — clear" banner, which clears it).
 
-Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the current file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file.
+Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the current file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file. When nothing remains to advance to — a filter change (or deletions) empties the playable sequence — the two channels diverge: the Visual Channel stays in Player mode showing the "No files match the filter" placeholder, so the filter can be lifted from there; the Audio Channel, which has no such placeholder surface, instead returns its Audio Channel Playlist to **Stopped** (easy to restart from the Audio Inlet or Overlay).
 
 ### Filter persistence and history
 
