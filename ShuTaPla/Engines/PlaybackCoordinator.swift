@@ -47,7 +47,18 @@ final class PlaybackCoordinator: PlaybackSource {
     var videoRenderView: MPVVideoView? { (videoEngine as? VideoPlaybackEngine)?.renderView }
 
     private let bookmarkService: BookmarkService
-    private let defaultSlideshowInterval: () -> TimeInterval
+
+    /// Global defaults a playlist's unset (`nil`) preferences fall back to — the slideshow
+    /// interval and file-position persistence the coordinator resolves per playlist. Held live
+    /// (not snapshotted), so editing a global default in Settings takes effect immediately.
+    private let globalSettings: GlobalSettings
+
+    /// The repeating "write the live position" loop, run while a timeline channel plays so a
+    /// crash or hard quit still leaves a recent resume point. Started lazily, cancelled on shutdown.
+    private var positionPersistTask: Task<Void, Never>?
+
+    /// How often `positionPersistTask` writes the live position to disk.
+    private let positionPersistInterval: TimeInterval = 5
 
     private let makeVideoEngine: () throws -> MPVPlaybackEngine
     private let makeAudioEngine: () throws -> MPVPlaybackEngine
@@ -63,13 +74,13 @@ final class PlaybackCoordinator: PlaybackSource {
     /// window-free audio engine for the video slot, avoiding Vulkan startup.
     init(
         bookmarkService: BookmarkService,
-        defaultSlideshowInterval: @escaping () -> TimeInterval = { 5 },
+        globalSettings: GlobalSettings = GlobalSettings(),
         imageEngine: ImagePlaybackEngine = ImagePlaybackEngine(),
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() },
         makeAudioEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() }
     ) {
         self.bookmarkService = bookmarkService
-        self.defaultSlideshowInterval = defaultSlideshowInterval
+        self.globalSettings = globalSettings
         self.imageEngine = imageEngine
         self.makeVideoEngine = makeVideoEngine
         self.makeAudioEngine = makeAudioEngine
@@ -78,6 +89,8 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// Tears down the engines and releases every scoped-access session.
     func shutdown() {
+        positionPersistTask?.cancel()
+        positionPersistTask = nil
         videoEngine?.shutdown()
         audioEngine?.shutdown()
         imageEngine.stop()
@@ -110,6 +123,7 @@ final class PlaybackCoordinator: PlaybackSource {
         guard let folder = beginFolderAccess(for: playlist) else { return }
 
         let start = startFile(for: playlist, requested: file)
+        let resumeAt = resumePosition(for: playlist, start: start, explicit: file != nil)
         liveVisualPlaylist = playlist
         visualKind = playlist.mediaType
         playlist.playbackState = .playing
@@ -118,14 +132,17 @@ final class PlaybackCoordinator: PlaybackSource {
         switch playlist.mediaType {
         case .image:
             imageEngine.source = self
+            imageEngine.fitMode = playlist.effectiveImageFitMode(globalSettings)
+            // Images have no timeline, so file-position persistence doesn't apply to them.
             if let start { imageEngine.load(start, at: folder.appending(path: start.relativePath)) }
             if !isSuppressed { applySlideshow(for: playlist) }
         default:   // video
             guard let engine = ensureVideoEngine() else { return }
             engine.source = self
             engine.volume = volume(for: playlist)
-            if let start { engine.load(start, at: folder.appending(path: start.relativePath)) }
+            if let start { engine.load(start, at: folder.appending(path: start.relativePath), startingAt: resumeAt) }
             if isSuppressed { engine.pause() }
+            startPositionPersistLoop()
         }
     }
 
@@ -135,14 +152,16 @@ final class PlaybackCoordinator: PlaybackSource {
               let engine = ensureAudioEngine() else { return }
 
         let start = startFile(for: playlist, requested: file)
+        let resumeAt = resumePosition(for: playlist, start: start, explicit: file != nil)
         liveAudioPlaylist = playlist
         playlist.playbackState = .playing
         if let start { playlist.currentFileID = start.id }
 
         engine.source = self
         engine.volume = volume(for: playlist)
-        if let start { engine.load(start, at: folder.appending(path: start.relativePath)) }
+        if let start { engine.load(start, at: folder.appending(path: start.relativePath), startingAt: resumeAt) }
         if isSuppressed { engine.pause() }
+        startPositionPersistLoop()
     }
 
     // MARK: - Stopping
@@ -156,6 +175,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     private func stopVisual() {
         guard let playlist = liveVisualPlaylist else { return }
+        persistVisualPosition()   // capture where it stopped before the engine clears
         switch visualKind {
         case .image: imageEngine.stop()
         default: videoEngine?.stop()
@@ -165,14 +185,17 @@ final class PlaybackCoordinator: PlaybackSource {
         liveVisualPlaylist = nil
         visualKind = nil
         visualHaltedForOverlay = false
+        stopPositionPersistLoopIfIdle()
     }
 
     private func stopAudio() {
         guard let playlist = liveAudioPlaylist else { return }
+        persistAudioPosition()   // capture where it stopped before the engine clears
         audioEngine?.stop()
         playlist.playbackState = .stopped
         endFolderAccess(for: playlist.id)
         liveAudioPlaylist = nil
+        stopPositionPersistLoopIfIdle()
     }
 
     // MARK: - Per-playlist pause / unpause
@@ -231,6 +254,7 @@ final class PlaybackCoordinator: PlaybackSource {
     func previous(_ playlist: Playlist) { advance(playlist, forward: false) }
 
     private func advance(_ playlist: Playlist, forward: Bool) {
+        persistPosition(on: playlist)   // save the outgoing file before it loads the next
         // Each engine reports the file it lands on through `engineDidAdvance(to:)`,
         // which syncs `currentFileID` — the same path the unattended end-of-file and
         // slideshow advances take, so there is one place that records the move.
@@ -348,6 +372,7 @@ final class PlaybackCoordinator: PlaybackSource {
     /// channel the playlist occupies.
     func jump(_ playlist: Playlist, to file: PlaylistFile) {
         guard let folder = folderURLByPlaylist[playlist.id] else { return }
+        persistPosition(on: playlist)   // save the outgoing file before loading the new one
         let url = folder.appending(path: file.relativePath)
         playlist.currentFileID = file.id
         switch channel(of: playlist) {
@@ -447,11 +472,26 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     /// Sets and persists the slideshow interval for an image `playlist`, restarting a
-    /// running timer at the new cadence.
-    func setSlideshowInterval(_ playlist: Playlist, _ interval: TimeInterval) {
+    /// running timer at the new cadence. `nil` clears the override (the playlist falls back
+    /// to the global default), applied live when it is the active image channel.
+    func setSlideshowInterval(_ playlist: Playlist, _ interval: TimeInterval?) {
         playlist.preferences.slideshowInterval = interval
         guard channel(of: playlist) == .visualImage else { return }
-        imageEngine.slideshowInterval = interval
+        imageEngine.slideshowInterval = playlist.effectiveSlideshowInterval(globalSettings)
+    }
+
+    /// Sets and persists the image fit mode for an image `playlist`, applied live when it is the
+    /// active image channel. `nil` clears the override (falls back to the global default).
+    func setImageFitMode(_ playlist: Playlist, _ mode: ImageFitMode?) {
+        playlist.preferences.imageFitMode = mode
+        guard channel(of: playlist) == .visualImage else { return }
+        imageEngine.fitMode = playlist.effectiveImageFitMode(globalSettings)
+    }
+
+    /// Cycles the image `playlist`'s fit mode (the `[shift]` hotkey) — Fit → Cover →
+    /// Original → Fit — persisting the result as a per-playlist override.
+    func cycleImageFitMode(_ playlist: Playlist) {
+        setImageFitMode(playlist, playlist.effectiveImageFitMode(globalSettings).next)
     }
 
     // MARK: - PlaybackSource
@@ -511,7 +551,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     private func applySlideshow(for playlist: Playlist) {
         guard playlist.preferences.slideshowEnabled else { return }
-        imageEngine.startSlideshow(interval: playlist.preferences.slideshowInterval ?? defaultSlideshowInterval())
+        imageEngine.startSlideshow(interval: playlist.effectiveSlideshowInterval(globalSettings))
     }
 
     /// The file to start at: the explicit request, else the remembered current
@@ -542,6 +582,79 @@ final class PlaybackCoordinator: PlaybackSource {
         guard let engine = try? makeAudioEngine() else { return nil }
         audioEngine = engine
         return engine
+    }
+
+    // MARK: - File-position persistence
+
+    /// Whether `playlist` resumes mid-file: its own preference, or the global default when unset.
+    private func persistsPosition(_ playlist: Playlist) -> Bool {
+        playlist.effectiveFilePositionPersistence(globalSettings)
+    }
+
+    /// The position a freshly loaded file should resume from. An explicitly picked file (a
+    /// double-click / `[enter]`) always plays from the beginning and its saved position is
+    /// cleared; the remembered file resumes from `lastPosition` only while persistence is on.
+    private func resumePosition(for playlist: Playlist, start: PlaylistFile?, explicit: Bool) -> TimeInterval? {
+        guard let start else { return nil }
+        if explicit {
+            start.lastPosition = nil
+            return nil
+        }
+        guard persistsPosition(playlist) else { return nil }
+        return start.lastPosition
+    }
+
+    /// Writes the live position of the file playing on `playlist`'s channel back to its model,
+    /// so a later launch can resume it. Routed to the right channel; a no-op when persistence
+    /// is off for the playlist, or for the timeline-less image channel.
+    private func persistPosition(on playlist: Playlist) {
+        switch channel(of: playlist) {
+        case .visualVideo: persistVisualPosition()
+        case .audio: persistAudioPosition()
+        case .visualImage, nil: break
+        }
+    }
+
+    /// Persists both live channels' positions — the periodic loop's per-tick work and the
+    /// final write on stop / app teardown.
+    func persistLivePositions() {
+        persistVisualPosition()
+        persistAudioPosition()
+    }
+
+    private func persistVisualPosition() {
+        guard visualKind == .video, let playlist = liveVisualPlaylist, persistsPosition(playlist),
+              let file = videoEngine?.currentFile, let time = videoEngine?.currentTime else { return }
+        file.lastPosition = time
+    }
+
+    private func persistAudioPosition() {
+        guard let playlist = liveAudioPlaylist, persistsPosition(playlist),
+              let file = audioEngine?.currentFile, let time = audioEngine?.currentTime else { return }
+        file.lastPosition = time
+    }
+
+    /// Starts the periodic position-write loop if it isn't already running. A timeline channel
+    /// (video or audio) drives it; the image channel never does.
+    private func startPositionPersistLoop() {
+        guard positionPersistTask == nil else { return }
+        positionPersistTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.positionPersistInterval else { break }
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled, let self else { break }
+                self.persistLivePositions()
+            }
+        }
+    }
+
+    /// Cancels the persist loop once no timeline channel remains live (the image channel alone
+    /// has nothing to persist).
+    private func stopPositionPersistLoopIfIdle() {
+        let videoLive = liveVisualPlaylist != nil && visualKind == .video
+        guard !videoLive, liveAudioPlaylist == nil else { return }
+        positionPersistTask?.cancel()
+        positionPersistTask = nil
     }
 
     // MARK: - Scoped folder access

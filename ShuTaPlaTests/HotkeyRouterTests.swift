@@ -474,6 +474,28 @@ import AppKit
         #expect(overlay.closeAudioCalls == 1)
     }
 
+    // MARK: - Fit-mode cycle ([shift])
+
+    @Test func shiftCyclesTheImagePlayersFitMode() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+
+        #expect(f.playlist.preferences.imageFitMode == nil)     // inherits the global default (Fit)
+        f.router.cycleImageFitMode()
+        #expect(f.playlist.preferences.imageFitMode == .cover)
+        f.router.cycleImageFitMode()
+        #expect(f.playlist.preferences.imageFitMode == .original)
+    }
+
+    @Test func shiftDoesNothingWithoutAVisualImagePlayer() throws {
+        // An audio playlist holds no visual channel, so the cycle has no image player to act on.
+        let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"])
+        defer { f.appState.coordinator.shutdown() }
+
+        f.router.cycleImageFitMode()
+        #expect(f.playlist.preferences.imageFitMode == nil)
+    }
+
     // MARK: - Text input passthrough
 
     @Test func textInputSwallowsEverything() throws {

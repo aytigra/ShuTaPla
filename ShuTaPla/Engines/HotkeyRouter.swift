@@ -124,6 +124,10 @@ final class HotkeyRouter {
     /// can be told apart from a plain arrow without a device-dependent modifier mask.
     private var rightOptionDown = false
 
+    /// Whether a Shift key is currently held, tracked from `.flagsChanged` (keyCodes 56/60)
+    /// so the fit-mode cycle fires once on the press edge rather than repeatedly.
+    private var shiftDown = false
+
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
     /// Whether a modal confirmation or error alert is up and owns the keyboard. Covers the
@@ -177,6 +181,13 @@ final class HotkeyRouter {
     func handle(_ event: NSEvent) -> NSEvent? {
         if event.type == .flagsChanged {
             if event.keyCode == 61 { rightOptionDown = event.modifierFlags.contains(.option) }
+            // `[shift]` (left 56 / right 60) cycles the image player's fit mode, once on the
+            // press edge. A focused text field types a capital instead, so it's exempt.
+            if event.keyCode == 56 || event.keyCode == 60 {
+                let down = event.modifierFlags.contains(.shift)
+                if down, !shiftDown, !isTextInputActive() { cycleImageFitMode() }
+                shiftDown = down
+            }
             return event
         }
         guard event.type == .keyDown else { return event }
@@ -225,6 +236,15 @@ final class HotkeyRouter {
         case .manager: return routeManager(key, rightOption: rightOption)
         case .welcome: return false
         }
+    }
+
+    /// `[shift]` cycles the live image player's fit mode. A no-op unless an image playlist
+    /// holds the visual channel.
+    func cycleImageFitMode() {
+        guard let coordinator = appState?.coordinator,
+              let visual = coordinator.liveVisualPlaylist,
+              visual.mediaType == .image else { return }
+        coordinator.cycleImageFitMode(visual)
     }
 
     private func routePlayer(_ key: Hotkey, rightOption: Bool) -> Bool {

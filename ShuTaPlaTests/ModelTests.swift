@@ -125,6 +125,37 @@ struct ModelTests {
         #expect(try context.fetch(FetchDescriptor<GlobalSettings>()).count == 1)
     }
 
+    // MARK: - Effective preferences (Task 16)
+
+    @Test func effectivePreferencesFallBackToGlobalDefaults() throws {
+        let settings = GlobalSettings()
+        settings.defaultSlideshowInterval = 10
+        settings.defaultImageFitMode = .cover
+        settings.defaultFilePositionPersistence = true
+
+        // A fresh playlist has all overrides unset (nil), so every effective value is the global.
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        #expect(playlist.effectiveSlideshowInterval(settings) == 10)
+        #expect(playlist.effectiveImageFitMode(settings) == .cover)
+        #expect(playlist.effectiveFilePositionPersistence(settings) == true)
+    }
+
+    @Test func perPlaylistOverridesWinOverGlobalDefaults() throws {
+        let settings = GlobalSettings()
+        settings.defaultSlideshowInterval = 10
+        settings.defaultImageFitMode = .cover
+        settings.defaultFilePositionPersistence = true
+
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        playlist.preferences.slideshowInterval = 3
+        playlist.preferences.imageFitMode = .original
+        playlist.preferences.filePositionPersistence = false
+
+        #expect(playlist.effectiveSlideshowInterval(settings) == 3)
+        #expect(playlist.effectiveImageFitMode(settings) == .original)
+        #expect(playlist.effectiveFilePositionPersistence(settings) == false)
+    }
+
     // MARK: - Embedded value round-trips
 
     @Test func embeddedValuesRoundTrip() throws {
@@ -224,5 +255,14 @@ struct ModelTests {
     func serviceFilterDisplay(_ filter: ServiceFilter, _ image: String, _ label: String) {
         #expect(filter.systemImage == image)
         #expect(filter.label == label)
+    }
+
+    @Test(arguments: [
+        (ImageFitMode.fit, ImageFitMode.cover),
+        (ImageFitMode.cover, ImageFitMode.original),
+        (ImageFitMode.original, ImageFitMode.fit),
+    ])
+    func imageFitModeCyclesInOrder(_ mode: ImageFitMode, _ expectedNext: ImageFitMode) {
+        #expect(mode.next == expectedNext)
     }
 }

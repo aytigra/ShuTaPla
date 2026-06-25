@@ -34,8 +34,14 @@ final class ImagePlaybackEngine: SourceNavigating {
     /// The file currently shown. Anchor for advance/previous and the slideshow.
     private(set) var currentFile: PlaylistFile?
 
-    /// How the image is scaled to the surface. Cycle with `cycleFitMode()`.
-    var fitMode: ImageFitMode = .fit
+    /// How the image is scaled to the surface. Changing it resets pan/zoom, since the
+    /// transform only has meaning in `.original`.
+    var fitMode: ImageFitMode = .fit {
+        didSet {
+            guard fitMode != oldValue else { return }
+            transform = .identity
+        }
+    }
 
     /// Live pan/zoom. The player view reads and writes this through gestures.
     var transform: ImageTransform = .identity
@@ -87,16 +93,6 @@ final class ImagePlaybackEngine: SourceNavigating {
     // Advance / previous come from `SourceNavigating` (shared with the mpv engines).
 
     // MARK: - Fit mode & transform
-
-    /// Cycles fit → cover → original → fit and resets pan/zoom.
-    func cycleFitMode() {
-        switch fitMode {
-        case .fit: fitMode = .cover
-        case .cover: fitMode = .original
-        case .original: fitMode = .fit
-        }
-        transform = .identity
-    }
 
     /// Returns pan/zoom to identity without changing the image or fit mode.
     func resetTransform() { transform = .identity }

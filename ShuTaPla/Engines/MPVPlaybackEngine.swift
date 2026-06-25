@@ -83,9 +83,16 @@ class MPVPlaybackEngine: SourceNavigating {
 
     // MARK: - Loading & transport
 
-    /// Loads `file` from `url` and starts playing.
+    /// Loads `file` from `url` and starts playing. Satisfies `SourceNavigating`, so advance /
+    /// previous always start a file from the beginning.
     func load(_ file: PlaylistFile?, at url: URL) {
         load(file, resource: Self.mpvResource(for: url))
+    }
+
+    /// Loads `file` from `url`, seeking to `position` seconds — file-position persistence
+    /// resumes a video/audio file where it left off.
+    func load(_ file: PlaylistFile?, at url: URL, startingAt position: TimeInterval?) {
+        load(file, resource: Self.mpvResource(for: url), startingAt: position)
     }
 
     /// Loads an mpv resource string directly (a file path or a protocol URL such as

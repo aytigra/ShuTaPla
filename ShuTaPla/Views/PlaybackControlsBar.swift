@@ -136,7 +136,7 @@ struct PlaybackControlsBar: View {
 
     private var intervalSelector: some View {
         Menu {
-            ForEach([3.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { seconds in
+            ForEach(AppConstants.slideshowIntervals, id: \.self) { seconds in
                 Button("\(Int(seconds))s") { coordinator.setSlideshowInterval(playlist, seconds) }
             }
         } label: {
@@ -148,7 +148,7 @@ struct PlaybackControlsBar: View {
     }
 
     private var currentInterval: TimeInterval {
-        playlist.preferences.slideshowInterval ?? appState.globalSettings.defaultSlideshowInterval
+        playlist.effectiveSlideshowInterval(appState.globalSettings)
     }
 
     // MARK: - Helpers

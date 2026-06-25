@@ -11,7 +11,7 @@ import SwiftData
 
 @Model
 final class GlobalSettings {
-    var defaultSlideshowInterval: TimeInterval = 5.0
+    var defaultSlideshowInterval: TimeInterval = 10.0
     var defaultFilePositionPersistence: Bool = false
     var defaultImageFitMode: ImageFitMode = ImageFitMode.fit
 

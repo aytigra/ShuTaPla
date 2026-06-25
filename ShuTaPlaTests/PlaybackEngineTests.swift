@@ -221,19 +221,17 @@ import AppKit
         #expect(await poll(timeout: .seconds(5)) { engine.currentImage != nil })
     }
 
-    @Test func fitModeCyclesAndResetsTransform() {
+    @Test func changingFitModeResetsTransform() {
         let engine = ImagePlaybackEngine()
-        engine.transform = ImageTransform(offset: CGSize(width: 4, height: 4), scale: 3)
+        let zoomed = ImageTransform(offset: CGSize(width: 4, height: 4), scale: 3)
 
-        #expect(engine.fitMode == .fit)
-        engine.cycleFitMode()
-        #expect(engine.fitMode == .cover)
+        engine.transform = zoomed
+        engine.fitMode = .cover                 // a real change clears pan/zoom
         #expect(engine.transform == .identity)
 
-        engine.cycleFitMode()
-        #expect(engine.fitMode == .original)
-        engine.cycleFitMode()
-        #expect(engine.fitMode == .fit)
+        engine.transform = zoomed
+        engine.fitMode = .cover                 // setting the same mode leaves it alone
+        #expect(engine.transform == zoomed)
     }
 
     @Test func advanceNotifiesSourceOfTheLandedFile() throws {

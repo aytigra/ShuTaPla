@@ -311,7 +311,7 @@ final class AppState {
         self.globalSettings = settings
         self.coordinator = PlaybackCoordinator(
             bookmarkService: bookmarkService,
-            defaultSlideshowInterval: { settings.defaultSlideshowInterval }
+            globalSettings: settings
         )
 
         // Welcome until at least one playlist exists. Player mode is only ever

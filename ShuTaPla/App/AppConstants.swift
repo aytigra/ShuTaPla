@@ -13,6 +13,10 @@ nonisolated enum AppConstants {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "jxl", "gif", "heic", "heif", "webp", "tiff", "bmp"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "aiff", "wma"]
 
+    /// Selectable slideshow intervals (seconds), shared by the global Settings default picker
+    /// and the per-playlist interval selectors so they always offer the same choices.
+    static let slideshowIntervals: [TimeInterval] = [3, 5, 10, 15, 30]
+
     /// A type is dominant when ≥ 80% of recognized media files are that type.
     /// Below this, the folder is Mixed and the user is prompted to choose.
     static let dominanceThreshold = 0.8

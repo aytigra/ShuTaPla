@@ -235,6 +235,43 @@ import SwiftData
         #expect(image.preferences.slideshowEnabled)
         coordinator.setSlideshowInterval(image, 12)
         #expect(image.preferences.slideshowInterval == 12)
+        coordinator.setSlideshowInterval(image, nil)        // clearing falls back to the global default
+        #expect(image.preferences.slideshowInterval == nil)
+    }
+
+    @Test func imageFitModeOverridePersistsAndClears() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["i.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        #expect(image.preferences.imageFitMode == nil)      // unset → inherits the global default
+        coordinator.setImageFitMode(image, .cover)
+        #expect(image.preferences.imageFitMode == .cover)
+        coordinator.setImageFitMode(image, nil)             // back to inheriting the default
+        #expect(image.preferences.imageFitMode == nil)
+    }
+
+    @Test func cycleImageFitModeWalksFitCoverOriginalAndPersists() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["i.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        // Starts from the inherited global default (Fit); each cycle persists the next mode.
+        #expect(image.preferences.imageFitMode == nil)
+        coordinator.cycleImageFitMode(image)
+        #expect(image.preferences.imageFitMode == .cover)
+        coordinator.cycleImageFitMode(image)
+        #expect(image.preferences.imageFitMode == .original)
+        coordinator.cycleImageFitMode(image)
+        #expect(image.preferences.imageFitMode == .fit)     // wraps back to the start
     }
 
     @Test func reconcileJumpsWhenCurrentFileFilteredOut() throws {
@@ -691,5 +728,143 @@ import SwiftData
         coordinator.jump(image, to: files[2])
         #expect(image.currentFileID == files[2].id)
         #expect(coordinator.visualCurrentFile?.id == files[2].id)
+    }
+
+    // MARK: - File-position persistence (Task 16)
+
+    /// An engine that records the resume position each `load` is asked to start at, so a test
+    /// can assert whether file-position persistence threaded a saved position through.
+    @MainActor
+    private final class RecordingLoadEngine: MPVPlaybackEngine {
+        private(set) var loadedPositions: [TimeInterval?] = []
+        init() throws { try super.init(configuration: .audio) }
+        override func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval?) {
+            loadedPositions.append(position)
+            super.load(file, resource: resource, startingAt: position)
+        }
+    }
+
+    private func makeRecordingCoordinator(_ recorder: RecordingLoadEngine) -> PlaybackCoordinator {
+        PlaybackCoordinator(
+            bookmarkService: BookmarkService(),
+            makeVideoEngine: { recorder },
+            makeAudioEngine: { recorder }
+        )
+    }
+
+    @Test func resumesFromSavedPositionWhenPersistenceOn() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 30
+        audio.currentFileID = tracks[0].id
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)   // resumes the remembered track, no explicit file
+        #expect(recorder.loadedPositions.last == 30)
+    }
+
+    @Test func startsFromBeginningWhenPersistenceOff() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // No per-playlist preference and the global default is off → no resume.
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 30
+        audio.currentFileID = tracks[0].id
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        #expect(recorder.loadedPositions.last == .some(nil))
+    }
+
+    @Test func explicitFilePickResetsSavedPosition() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[1].lastPosition = 30
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        // A double-click / [enter] picks a file explicitly: it plays from the start and its
+        // saved position is cleared, even with persistence on.
+        coordinator.play(audio, startingAt: tracks[1])
+        #expect(recorder.loadedPositions.last == .some(nil))
+        #expect(tracks[1].lastPosition == nil)
+    }
+
+    @Test func writesPositionOnStopWhenEnabled() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)   // loads tracks[0]; its position starts unknown
+        #expect(tracks[0].lastPosition == nil)
+        coordinator.stop(audio)
+        // Stopping captures the live position (0 for the non-decoding test file) — the point is
+        // that the write happened, where an off playlist would leave it nil.
+        #expect(tracks[0].lastPosition == 0)
+    }
+
+    @Test func doesNotWritePositionWhenDisabled() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // Persistence off (no preference, default off).
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 99   // a sentinel a write would overwrite
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        coordinator.stop(audio)
+        #expect(tracks[0].lastPosition == 99)   // untouched: nothing was persisted
+    }
+
+    @Test func writesPositionBeforeJumpingAwayWhenEnabled() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)   // loads tracks[0]; its position starts unknown
+        #expect(tracks[0].lastPosition == nil)
+        coordinator.jump(audio, to: tracks[1])
+        // Jumping captures the file we leave (0 for the non-decoding test file) before switching.
+        #expect(tracks[0].lastPosition == 0)
     }
 }

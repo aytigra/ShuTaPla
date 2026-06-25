@@ -498,6 +498,7 @@ private struct ManagerTitleLabel: View {
 /// List/Gallery · Settings; audio gets Reshuffle · Settings. Empty when nothing is selected.
 private struct CenterActionsBar: View {
     @Environment(AppState.self) private var appState
+    @State private var showingSettings = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -542,7 +543,7 @@ private struct CenterActionsBar: View {
         .labelsHidden()
         .help("List or gallery")
 
-        settingsButton
+        settingsButton(playlist)
     }
 
     @ViewBuilder
@@ -554,17 +555,20 @@ private struct CenterActionsBar: View {
         }
         .help("Reshuffle")
 
-        settingsButton
+        settingsButton(playlist)
     }
 
-    /// Per-playlist settings — a placeholder affordance, disabled until the settings surface exists.
-    private var settingsButton: some View {
+    /// Opens the per-playlist settings popover (overrides of the global defaults).
+    private func settingsButton(_ playlist: Playlist) -> some View {
         Button {
+            showingSettings.toggle()
         } label: {
             Label("Settings", systemImage: "slider.horizontal.3")
         }
-        .disabled(true)
         .help("Playlist settings")
+        .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
+            PlaylistSettingsView(playlist: playlist)
+        }
     }
 }
 

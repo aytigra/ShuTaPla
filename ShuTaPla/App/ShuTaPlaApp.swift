@@ -51,6 +51,7 @@ struct ShuTaPlaApp: App {
 
         Settings {
             SettingsView()
+                .environment(appState)
         }
     }
 }

@@ -30,6 +30,24 @@ nonisolated enum ImageFitMode: String, Codable, Sendable, CaseIterable {
     case fit
     case cover
     case original
+
+    /// Capitalized human-facing name (the settings pickers).
+    var displayName: String {
+        switch self {
+        case .fit: return "Fit"
+        case .cover: return "Cover"
+        case .original: return "Original"
+        }
+    }
+
+    /// The next mode in the `[shift]` fit-mode cycle: Fit → Cover → Original → Fit.
+    var next: ImageFitMode {
+        switch self {
+        case .fit: return .cover
+        case .cover: return .original
+        case .original: return .fit
+        }
+    }
 }
 
 /// File-list presentation in Manager mode.
