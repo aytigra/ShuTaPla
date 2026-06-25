@@ -245,6 +245,19 @@ final class PlaybackCoordinator: PlaybackSource {
         if let playlist = liveAudioPlaylist, playlist.playbackState == .playing { resume(playlist) }
     }
 
+    // MARK: - Launch reconstruction
+
+    /// Rebuilds `playlist`'s channel at launch from its persisted state — launch's analog of
+    /// lifting suppression on a reopened window. A Playing playlist resumes; a Paused one loads
+    /// at its remembered file but stays paused; a Stopped one is left untouched. Loading the
+    /// channel sets `.playing`, so a Paused playlist is flipped back afterward.
+    func reconstruct(_ playlist: Playlist) {
+        let persisted = playlist.playbackState
+        guard persisted != .stopped else { return }
+        play(playlist)
+        if persisted == .paused { pause(playlist) }
+    }
+
     // MARK: - Advance / previous
 
     /// Advances `playlist` to the next file in its playback sequence (wrapping).

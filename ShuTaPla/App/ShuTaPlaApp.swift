@@ -9,9 +9,11 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
 
 @main
 struct ShuTaPlaApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     let modelContainer: ModelContainer
     @State private var appState: AppState
     @State private var thumbnailService = ThumbnailService()
@@ -43,6 +45,7 @@ struct ShuTaPlaApp: App {
                 .environment(thumbnailService)
                 .environment(durationService)
                 .frame(minWidth: 800, minHeight: 600)
+                .onAppear { appDelegate.appState = appState }
         }
         .modelContainer(modelContainer)
         .commands {
@@ -53,5 +56,32 @@ struct ShuTaPlaApp: App {
             SettingsView()
                 .environment(appState)
         }
+    }
+}
+
+/// Owns the app-level lifecycle hooks SwiftUI's `App` can't express: keeping the app
+/// running when the window closes, lifting the close-time suppression on a Dock reopen, and
+/// a final position persist on quit. The window-close halt itself is observed in-window by
+/// `WindowCloseBridge` (so the Settings window doesn't trigger it).
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Wired once the main window appears. The lifecycle callbacks below all run after that,
+    /// so it is set by the time they fire.
+    var appState: AppState?
+
+    /// Closing the window hides it but keeps the app running (Dock reopen restores it).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Dock-icon click with no visible window: lift the close-time suppression so Playing
+    /// playlists continue, and let AppKit re-show the window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { appState?.windowWillReopen() }
+        return true
+    }
+
+    /// Quit: a final write of both channels' live positions before teardown.
+    func applicationWillTerminate(_ notification: Notification) {
+        appState?.applicationWillTerminate()
     }
 }

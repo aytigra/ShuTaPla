@@ -314,12 +314,14 @@ final class AppState {
             globalSettings: settings
         )
 
-        // Welcome until at least one playlist exists. Player mode is only ever
-        // entered at runtime (Task 16 handles resume), never restored here.
+        // Welcome until at least one playlist exists, otherwise Manager — unless a
+        // visual playlist was playing at quit, in which case `reconstructPlayback`
+        // reopens Player mode below.
         let existing = (try? modelContext.fetch(FetchDescriptor<Playlist>())) ?? []
         self.mode = existing.isEmpty ? .welcome : .manager
 
         resolveActivePlaylists()
+        reconstructPlayback()
     }
 
     // MARK: - Slot references
@@ -338,6 +340,28 @@ final class AppState {
         var descriptor = FetchDescriptor<Playlist>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
         return try? modelContext.fetch(descriptor).first
+    }
+
+    /// Rebuilds the live channels from each playlist's persisted state at launch — relaunch
+    /// behaves like reopening the window, so Playing playlists resume and Paused stay paused.
+    /// The audio channel rebuilds in whatever mode the window opens; a non-stopped visual
+    /// playlist reopens Player mode (only if its channel actually came up).
+    private func reconstructPlayback() {
+        if let audio = audioChannelPlaylist, audio.playbackState != .stopped {
+            coordinator.reconstruct(audio)
+        }
+        if let visual = nonStoppedVisualPlaylist() {
+            coordinator.reconstruct(visual)
+            if coordinator.liveVisualPlaylist != nil { mode = .player }
+        }
+    }
+
+    /// The single video or image playlist that was Playing or Paused at quit, if any. Starting a
+    /// visual playlist stops the previous one, so at most one is ever non-stopped. `playbackState`
+    /// is a `Codable` enum (not predicate-queryable), so the small playlist set is filtered in memory.
+    private func nonStoppedVisualPlaylist() -> Playlist? {
+        let all = (try? modelContext.fetch(FetchDescriptor<Playlist>())) ?? []
+        return all.first { $0.mediaType != .audio && $0.playbackState != .stopped }
     }
 
     /// Records `playlist` as its type's remembered playlist, persisting the choice. The visual
@@ -390,6 +414,33 @@ final class AppState {
             managerSelection = [id]
         }
         scrollSelectionToken += 1
+    }
+
+    // MARK: - App lifecycle
+    //
+    // The window-close / reopen / terminate hooks the `AppDelegate` calls. Closing the window
+    // (not quitting) halts playback through suppression and keeps the app running; reopening lifts
+    // it. Launch resume is handled in `init` via `reconstructPlayback`.
+
+    /// Window close (not quit): write a resume point and activate suppression, leaving each
+    /// playlist's own Stopped/Playing/Paused state untouched. The window hides; the app keeps
+    /// running. Reopening the window calls `windowWillReopen`.
+    func windowWasClosed() {
+        coordinator.persistLivePositions()
+        coordinator.suppress()
+    }
+
+    /// Dock reopen of the hidden window: lift the close-time suppression so Playing playlists
+    /// continue and Paused stay paused.
+    func windowWillReopen() {
+        coordinator.unsuppress()
+    }
+
+    /// App termination: a final write of both channels' live positions, then a synchronous save
+    /// so the resume points survive the teardown (autosave may not flush in time).
+    func applicationWillTerminate() {
+        coordinator.persistLivePositions()
+        try? modelContext.save()
     }
 
     // MARK: - Manager accessors

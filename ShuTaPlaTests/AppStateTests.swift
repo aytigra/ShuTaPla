@@ -96,6 +96,93 @@ struct AppStateTests {
         #expect(appState.mode == .manager)
     }
 
+    // MARK: - Launch reconstruction & lifecycle (Task 16)
+
+    /// A real temp folder holding the named (empty) files, with a bookmark, so a reconstructed
+    /// channel's scoped access resolves at launch.
+    @MainActor
+    private func makeBookmarkedFolder(_ files: [String]) throws -> (url: URL, bookmark: Data) {
+        let url = try makeTempDir()
+        for name in files { try Data().write(to: url.appending(path: name)) }
+        return (url, try BookmarkService.makeBookmark(for: url))
+    }
+
+    /// A relaunch with a Playing visual and a Playing audio playlist reopens Player mode and
+    /// rebuilds both channels — Playing playlists resume. An image visual keeps the test off
+    /// libmpv's video path; empty files fail to load without triggering an advance.
+    @Test func launchResumesPlayingPlaylistsAndReopensPlayerMode() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeBookmarkedFolder(["i.jpg", "a.mp3"])
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+
+        let image = Playlist(name: "Pics", folderBookmark: folder.bookmark,
+                             folderPath: folder.url.path(percentEncoded: false), mediaType: .image)
+        context.insert(image)
+        let imageFile = addFile("i.jpg", order: 0, to: image, in: context)
+        image.currentFileID = imageFile.id
+        image.playbackState = .playing
+
+        let audio = Playlist(name: "Tunes", folderBookmark: folder.bookmark,
+                            folderPath: folder.url.path(percentEncoded: false), mediaType: .audio)
+        context.insert(audio)
+        addFile("a.mp3", order: 0, to: audio, in: context)
+        audio.playbackState = .playing
+
+        let model = AppStateModel.fetchOrCreate(in: context)
+        model.audioChannelPlaylistId = audio.id
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.mode == .player)
+        #expect(appState.coordinator.liveVisualPlaylist === image)
+        #expect(appState.coordinator.liveAudioPlaylist === audio)
+    }
+
+    /// A relaunch with everything Stopped stays in Manager and rebuilds no channel.
+    @Test func launchWithAllStoppedStaysInManager() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/tmp", mediaType: .video))
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.mode == .manager)
+        #expect(appState.coordinator.liveVisualPlaylist == nil)
+        #expect(appState.coordinator.liveAudioPlaylist == nil)
+    }
+
+    /// Closing the window suppresses both channels without changing their states; reopening lifts it.
+    @Test func windowCloseSuppressesAndReopenLifts() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeBookmarkedFolder(["a.mp3"])
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+
+        let audio = Playlist(name: "Tunes", folderBookmark: folder.bookmark,
+                            folderPath: folder.url.path(percentEncoded: false), mediaType: .audio)
+        context.insert(audio)
+        addFile("a.mp3", order: 0, to: audio, in: context)
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.coordinator.play(audio)
+        #expect(audio.playbackState == .playing)
+
+        appState.windowWasClosed()
+        #expect(appState.coordinator.isSuppressed)
+        #expect(audio.playbackState == .playing)   // suppression leaves the state alone
+
+        appState.windowWillReopen()
+        #expect(!appState.coordinator.isSuppressed)
+        #expect(audio.playbackState == .playing)
+    }
+
     @Test func dominantFolderCreatesPlaylistAndSwitchesToManager() async throws {
         let container = try makeContainer()
         let context = container.mainContext

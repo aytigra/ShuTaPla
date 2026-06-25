@@ -162,6 +162,37 @@ import SwiftData
         #expect(audio.playbackState == .playing)    // Playing resumes
     }
 
+    // MARK: - Launch reconstruction
+
+    @Test func reconstructHonorsPersistedStateAndSkipsStopped() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["i.jpg", "a.mp3", "v.mp4"])
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+        let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
+        let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
+        // The states a quit might have persisted: a paused visual, a playing audio, a stopped one.
+        image.playbackState = .paused
+        audio.playbackState = .playing
+        video.playbackState = .stopped
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.reconstruct(image)
+        coordinator.reconstruct(audio)
+        coordinator.reconstruct(video)
+
+        // The paused visual loads onto its channel but stays paused; the playing audio resumes;
+        // the stopped one never touches a channel.
+        #expect(coordinator.liveVisualPlaylist === image)
+        #expect(image.playbackState == .paused)
+        #expect(coordinator.liveAudioPlaylist === audio)
+        #expect(audio.playbackState == .playing)
+        #expect(video.playbackState == .stopped)
+    }
+
     // MARK: - Wrap-around order (PlaybackSource)
 
     @Test func advanceAndPreviousWrapAround() throws {
