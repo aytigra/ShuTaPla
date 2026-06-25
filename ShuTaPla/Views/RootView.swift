@@ -35,6 +35,10 @@ struct RootView: View {
         .environment(overlayManager)
         .addPlaylistFlow()
         .background(WindowCloseBridge { appState.windowWasClosed() })
+        .background(WindowFrameBridge(
+            restoredFrame: { appState.restoredWindowFrame },
+            onFrameChange: { appState.persistWindowFrame($0) }
+        ))
         // The pause overlay covers the whole screen, so suppression clears every overlay
         // (including audio) — matching the feature spec's "pause overlay clears everything".
         .onChange(of: coordinator.isSuppressed) { _, suppressed in

@@ -443,6 +443,21 @@ final class AppState {
         try? modelContext.save()
     }
 
+    /// The window's last frame, restored when the window attaches at launch so it reopens at the
+    /// same size and position. `nil` on first launch (nothing persisted) or if the stored data
+    /// can't be decoded — the window then keeps its default frame. `NSRect` is `Codable`.
+    var restoredWindowFrame: NSRect? {
+        guard let data = appStateModel.windowFrame else { return nil }
+        return try? JSONDecoder().decode(NSRect.self, from: data)
+    }
+
+    /// Records the window's frame, called debounced on every move/resize by `WindowFrameBridge`.
+    /// The encoded frame rides the model's autosave; `applicationWillTerminate`'s save flushes
+    /// the last one at quit.
+    func persistWindowFrame(_ frame: NSRect) {
+        appStateModel.windowFrame = try? JSONEncoder().encode(frame)
+    }
+
     // MARK: - Manager accessors
     //
     // The Manager's center panel, filter bar, and tag inspector read these; all derive from

@@ -183,6 +183,26 @@ struct AppStateTests {
         #expect(audio.playbackState == .playing)
     }
 
+    /// The window frame round-trips through persisted state: nothing restored on first launch,
+    /// then a persisted frame comes back unchanged (and survives a fresh `AppState` over the
+    /// same store, as a relaunch would see it).
+    @Test func windowFramePersistsAndRestores() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.restoredWindowFrame == nil)   // first launch: no saved frame
+
+        let frame = NSRect(x: 120, y: 240, width: 1280, height: 720)
+        appState.persistWindowFrame(frame)
+        #expect(appState.restoredWindowFrame == frame)
+
+        let relaunched = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { relaunched.coordinator.shutdown() }
+        #expect(relaunched.restoredWindowFrame == frame)
+    }
+
     @Test func dominantFolderCreatesPlaylistAndSwitchesToManager() async throws {
         let container = try makeContainer()
         let context = container.mainContext

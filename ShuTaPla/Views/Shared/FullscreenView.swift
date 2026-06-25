@@ -2,14 +2,15 @@
 //  FullscreenView.swift
 //  ShuTaPla
 //
-//  A zero-size bridge that drives the hosting window into fullscreen while it is
-//  in the view tree and back out when it leaves — the mechanism the window has no
-//  SwiftUI equivalent for. Player mode mounts it; returning to Manager unmounts
-//  it, which exits fullscreen. (Animated, polished transitions are Task 18.)
+//  A zero-size bridge that asks the hosting window to be fullscreen while it is in
+//  the view tree and windowed when it leaves — the mechanism the window has no
+//  SwiftUI equivalent for. Player mode mounts it; returning to Manager unmounts it.
+//  It only expresses the desired state; the window's `FullscreenController` owns the
+//  animated transition and reconciles rapid enter/exit without flicker or stale state.
 //
-//  The toggle is driven off the window-attachment callback rather than the layout
-//  pass, and always on a fresh run-loop turn, so it never resizes the hosting
-//  window while SwiftUI is mid-render (which AppKit reports as a reentrant layout).
+//  The request is made off the window-attachment callback (and on a fresh run-loop
+//  turn), never during the layout pass, so it never resizes the hosting window while
+//  SwiftUI is mid-render (which AppKit reports as a reentrant layout).
 //
 
 import SwiftUI
@@ -21,17 +22,15 @@ struct FullscreenView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
-        (nsView as? WindowFullscreenView)?.scheduleExit()
+        (nsView as? WindowFullscreenView)?.requestExit()
     }
 
-    /// A zero-size view that enters fullscreen once it is attached to a window and
-    /// exits when it is torn down.
+    /// A zero-size view that asks its window to go fullscreen once attached and back to windowed
+    /// when torn down.
     @MainActor
     private final class WindowFullscreenView: NSView {
-        private var didEnter = false
-
-        /// The window we drove into fullscreen, captured at entry. `dismantleNSView` runs after
-        /// the view has detached (`self.window` is already `nil`), so the exit toggle reads this.
+        /// The window we asked to go fullscreen, captured at attach. `dismantleNSView` runs after
+        /// the view has detached (`self.window` is already `nil`), so the exit request reads this.
         private weak var hostWindow: NSWindow?
 
         override func viewDidMoveToWindow() {
@@ -39,25 +38,17 @@ struct FullscreenView: NSViewRepresentable {
             guard let window else { return }
             hostWindow = window
             // Hop off the current layout/render pass before changing window geometry.
-            DispatchQueue.main.async { [weak self] in self?.enterFullscreen() }
-        }
-
-        private func enterFullscreen() {
-            guard !didEnter, let window = hostWindow, !window.styleMask.contains(.fullScreen) else { return }
-            didEnter = true
-            window.toggleFullScreen(nil)
-        }
-
-        /// Schedules the fullscreen exit off the current run-loop turn. Called from
-        /// `dismantleNSView` during SwiftUI teardown, so the toggle must not run inside that
-        /// layout/render pass (AppKit reports that as a reentrant layout).
-        func scheduleExit() {
-            guard let window = hostWindow, window.styleMask.contains(.fullScreen) else { return }
-            // Strongly capture the window (it outlives the view) so the deferred exit still
-            // runs after teardown.
-            DispatchQueue.main.async {
-                if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
+            DispatchQueue.main.async { [weak self] in
+                self?.hostWindow?.fullscreenController.setDesired(true)
             }
+        }
+
+        /// Asks the window back to windowed. Called from `dismantleNSView` during SwiftUI teardown,
+        /// so the request runs on a fresh run-loop turn (not inside that layout/render pass), with
+        /// the window captured strongly so it still fires after the view is gone.
+        func requestExit() {
+            guard let window = hostWindow else { return }
+            DispatchQueue.main.async { window.fullscreenController.setDesired(false) }
         }
     }
 }
