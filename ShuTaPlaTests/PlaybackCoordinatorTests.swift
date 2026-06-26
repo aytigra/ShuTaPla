@@ -821,7 +821,7 @@ import SwiftData
         #expect(recorder.loadedPositions.last == .some(nil))
     }
 
-    @Test func explicitFilePickResetsSavedPosition() throws {
+    @Test func explicitFilePickStartsFromBeginningButKeepsSavedPosition() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.mp3", "2.mp3"])
@@ -835,11 +835,12 @@ import SwiftData
         let coordinator = makeRecordingCoordinator(recorder)
         defer { coordinator.shutdown() }
 
-        // A double-click / [enter] picks a file explicitly: it plays from the start and its
-        // saved position is cleared, even with persistence on.
+        // A double-click / [enter] picks a file explicitly: it plays from the start (no resume
+        // position), but the saved position is left intact so a later auto-resume can still use it
+        // — picking a file is not a destructive "forget where I was".
         coordinator.play(audio, startingAt: tracks[1])
         #expect(recorder.loadedPositions.last == .some(nil))
-        #expect(tracks[1].lastPosition == nil)
+        #expect(tracks[1].lastPosition == 30)
     }
 
     @Test func writesPositionOnStopWhenEnabled() throws {
@@ -897,5 +898,58 @@ import SwiftData
         coordinator.jump(audio, to: tracks[1])
         // Jumping captures the file we leave (0 for the non-decoding test file) before switching.
         #expect(tracks[0].lastPosition == 0)
+    }
+
+    /// Resuming a file at a saved position must not be clobbered by a persist that fires before
+    /// the engine's async seek reports a real time. The engine adopts the requested position at
+    /// load, so an immediate `persistLivePositions` (window close / quit / first loop tick) writes
+    /// that position back rather than the not-yet-updated 0.
+    @Test func resumedPositionSurvivesPersistBeforeEngineReports() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 58
+        audio.currentFileID = tracks[0].id
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)            // resumes tracks[0] at 58; the empty file never reports time-pos
+        coordinator.persistLivePositions() // a persist in the load/seek gap must not overwrite 58 with 0
+        #expect(tracks[0].lastPosition == 58)
+    }
+
+    @Test func persistLoopDoesNotRunWhenPersistenceOff() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // Persistence off (no preference, default off) → the periodic loop has nothing to write.
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        #expect(!coordinator.isPositionPersistLoopRunning)
+    }
+
+    @Test func persistLoopRunsWhenPersistenceOn() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)
+        #expect(coordinator.isPositionPersistLoopRunning)
     }
 }

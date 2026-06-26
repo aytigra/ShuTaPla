@@ -32,9 +32,9 @@ struct SettingsView: View {
 
             Section("Images") {
                 Picker("Image fit mode", selection: $settings.defaultImageFitMode) {
-                    Text("Fit").tag(ImageFitMode.fit)
-                    Text("Cover").tag(ImageFitMode.cover)
-                    Text("Original").tag(ImageFitMode.original)
+                    ForEach(ImageFitMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
                 }
             }
         }

@@ -100,6 +100,7 @@ class MPVPlaybackEngine: SourceNavigating {
     /// virtual sources, which aren't expressible as `URL`s.
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
+        currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
         isPlaying = true               // optimistic; corrected by the next `pause` event
         if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)

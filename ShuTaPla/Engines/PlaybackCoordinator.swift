@@ -605,15 +605,11 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     /// The position a freshly loaded file should resume from. An explicitly picked file (a
-    /// double-click / `[enter]`) always plays from the beginning and its saved position is
-    /// cleared; the remembered file resumes from `lastPosition` only while persistence is on.
+    /// double-click / `[enter]`) always plays from the beginning; its saved position is left
+    /// intact so a later auto-resume can still use it. The remembered file resumes from
+    /// `lastPosition` only while persistence is on.
     private func resumePosition(for playlist: Playlist, start: PlaylistFile?, explicit: Bool) -> TimeInterval? {
-        guard let start else { return nil }
-        if explicit {
-            start.lastPosition = nil
-            return nil
-        }
-        guard persistsPosition(playlist) else { return nil }
+        guard let start, !explicit, persistsPosition(playlist) else { return nil }
         return start.lastPosition
     }
 
@@ -647,10 +643,19 @@ final class PlaybackCoordinator: PlaybackSource {
         file.lastPosition = time
     }
 
-    /// Starts the periodic position-write loop if it isn't already running. A timeline channel
-    /// (video or audio) drives it; the image channel never does.
+    /// Whether the periodic position-write loop would do useful work: some live timeline channel
+    /// (video or audio) has file-position persistence on. The image channel has no timeline, and a
+    /// channel whose persistence is off has nothing to write — in either case the loop is pointless.
+    private var shouldRunPositionPersistLoop: Bool {
+        if let visual = liveVisualPlaylist, visualKind == .video, persistsPosition(visual) { return true }
+        if let audio = liveAudioPlaylist, persistsPosition(audio) { return true }
+        return false
+    }
+
+    /// Starts the periodic position-write loop if it isn't already running and a live timeline
+    /// channel actually needs it.
     private func startPositionPersistLoop() {
-        guard positionPersistTask == nil else { return }
+        guard positionPersistTask == nil, shouldRunPositionPersistLoop else { return }
         positionPersistTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let interval = self?.positionPersistInterval else { break }
@@ -661,14 +666,16 @@ final class PlaybackCoordinator: PlaybackSource {
         }
     }
 
-    /// Cancels the persist loop once no timeline channel remains live (the image channel alone
-    /// has nothing to persist).
+    /// Cancels the persist loop once no live channel needs it — every timeline channel has gone or
+    /// has persistence off (the image channel alone has nothing to persist).
     private func stopPositionPersistLoopIfIdle() {
-        let videoLive = liveVisualPlaylist != nil && visualKind == .video
-        guard !videoLive, liveAudioPlaylist == nil else { return }
+        guard !shouldRunPositionPersistLoop else { return }
         positionPersistTask?.cancel()
         positionPersistTask = nil
     }
+
+    /// Whether the periodic position-write loop is currently running. A test seam.
+    var isPositionPersistLoopRunning: Bool { positionPersistTask != nil }
 
     // MARK: - Scoped folder access
 
