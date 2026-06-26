@@ -11,6 +11,15 @@ The video player plays files from the Visual Channel Playlist one after another 
 - **Top edge** — slides in the Compact Audio Overlay (auto-closes when the cursor leaves; see [Audio player](#audio-player) for details).
 - **Bottom-center** — the compact playback controls bar (reveal and dismissal behavior under Overlay interaction rules): previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Visual Overlay. Each control shows a hover highlight.
 
+### Content clicks
+
+Clicking the video itself drives playback directly, mirroring the bottom controls:
+
+- **Single click** toggles the Visual Channel Playlist's play/pause.
+- **Double click** stops and returns to Manager mode.
+
+The Visual Overlay insets its top edge below the audio hover zone, so its close button stays clear of the top-edge trigger.
+
 ### Visual Overlay
 
 Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playback controls. Slides up from the bottom of the screen.
@@ -57,7 +66,7 @@ Slideshow interval is configurable both globally (default 10s) and per playlist;
 - **Top edge** — slides in the Compact Audio Overlay (same behavior as video player).
 - **Bottom-center** — a compact playback controls bar (same hover-to-reveal behavior as the video player): previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Visual Overlay. A play/pause button appears only while a slideshow is running (a still image has nothing to pause).
 
-The Visual Overlay works identically to the video player's (see above).
+Clicking the image drives playback the same way the video player's content does: a single click toggles play/pause (where a slideshow is running), a double click stops. Pan and zoom claim a click only once it becomes a drag, so a stationary click still toggles. The Visual Overlay works identically to the video player's (see above).
 
 ## Audio player
 

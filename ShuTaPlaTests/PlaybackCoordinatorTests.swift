@@ -821,7 +821,50 @@ import SwiftData
         #expect(recorder.loadedPositions.last == .some(nil))
     }
 
-    @Test func explicitFilePickStartsFromBeginningButKeepsSavedPosition() throws {
+    @Test func lifecycleResumeRestoresPositionEvenWhenPersistenceOff() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // Persistence off (no preference, default off): the live channel still resumes mid-file
+        // across a relaunch — lifecycle resume is unconditional, gated only by the playlist not
+        // being Stopped.
+        audio.playbackState = .playing
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 42
+        audio.currentFileID = tracks[0].id
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        coordinator.reconstruct(audio)   // relaunch's analog: resumes the live channel
+        #expect(recorder.loadedPositions.last == 42)
+    }
+
+    @Test func lifecycleResumeRestoresPositionForPausedPlaylist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // A playlist paused at quit returns paused at its file and offset, with no setting needed.
+        audio.playbackState = .paused
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[0].lastPosition = 17
+        audio.currentFileID = tracks[0].id
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        coordinator.reconstruct(audio)
+        #expect(recorder.loadedPositions.last == 17)
+        #expect(audio.playbackState == .paused)
+    }
+
+    @Test func doubleClickResumesWhenPersistenceOn() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.mp3", "2.mp3"])
@@ -835,12 +878,47 @@ import SwiftData
         let coordinator = makeRecordingCoordinator(recorder)
         defer { coordinator.shutdown() }
 
-        // A double-click / [enter] picks a file explicitly: it plays from the start (no resume
-        // position), but the saved position is left intact so a later auto-resume can still use it
-        // — picking a file is not a destructive "forget where I was".
+        // A double-click starting a Stopped playlist is a fresh entry into the file: with the
+        // setting on, the file remembers its position and resumes from it.
+        coordinator.play(audio, startingAt: tracks[1])
+        #expect(recorder.loadedPositions.last == 30)
+    }
+
+    @Test func doubleClickStartsFromBeginningWhenPersistenceOff() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        // Persistence off (no preference, default off).
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[1].lastPosition = 30
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
         coordinator.play(audio, startingAt: tracks[1])
         #expect(recorder.loadedPositions.last == .some(nil))
-        #expect(tracks[1].lastPosition == 30)
+    }
+
+    @Test func jumpResumesWhenPersistenceOn() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = audio.playbackSequence
+        tracks[1].lastPosition = 45
+
+        let recorder = try RecordingLoadEngine()
+        let coordinator = makeRecordingCoordinator(recorder)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)                     // live on its channel, on tracks[0]
+        coordinator.jump(audio, to: tracks[1])      // a double-click within the running channel
+        #expect(recorder.loadedPositions.last == 45)
     }
 
     @Test func writesPositionOnStopWhenEnabled() throws {
@@ -863,7 +941,7 @@ import SwiftData
         #expect(tracks[0].lastPosition == 0)
     }
 
-    @Test func doesNotWritePositionWhenDisabled() throws {
+    @Test func writesPositionEvenWhenPersistenceOff() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.mp3", "2.mp3"])
@@ -871,14 +949,16 @@ import SwiftData
         // Persistence off (no preference, default off).
         try context.save()
         let tracks = audio.playbackSequence
-        tracks[0].lastPosition = 99   // a sentinel a write would overwrite
+        tracks[0].lastPosition = 99   // a sentinel the write replaces
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
         coordinator.stop(audio)
-        #expect(tracks[0].lastPosition == 99)   // untouched: nothing was persisted
+        // Position is persisted regardless of the setting, so lifecycle resume can restore the live
+        // channel on relaunch; stopping captures the live position (0 for the non-decoding file).
+        #expect(tracks[0].lastPosition == 0)
     }
 
     @Test func writesPositionBeforeJumpingAwayWhenEnabled() throws {
@@ -923,19 +1003,20 @@ import SwiftData
         #expect(tracks[0].lastPosition == 58)
     }
 
-    @Test func persistLoopDoesNotRunWhenPersistenceOff() throws {
+    @Test func persistLoopRunsForLiveTimelineChannelEvenWhenPersistenceOff() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.mp3", "2.mp3"])
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
-        // Persistence off (no preference, default off) → the periodic loop has nothing to write.
+        // Persistence off (no preference, default off): the loop still runs so the live channel's
+        // position is kept current for lifecycle resume.
         try context.save()
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
-        #expect(!coordinator.isPositionPersistLoopRunning)
+        #expect(coordinator.isPositionPersistLoopRunning)
     }
 
     @Test func persistLoopRunsWhenPersistenceOn() throws {

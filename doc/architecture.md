@@ -215,12 +215,12 @@ Results from background work are delivered back to `MainActor` to touch SwiftDat
 | Active playlist IDs, Manager scope | SwiftData (`AppStateModel`) | On activation/deactivation, scope change |
 | Per-playlist playback state | SwiftData (`Playlist`) | On Stopped/Playing/Paused transition (suppression is runtime-only) |
 | Last-played file (`currentFileID`) | SwiftData (`Playlist`) | On file advance |
-| File position within file | SwiftData (`PlaylistFile`) | Only when `filePositionPersistence` is on |
+| File position within file | SwiftData (`PlaylistFile`) | Always for the live Visual/Audio Channel Playlists (lifecycle resume, cleared on Stop); for any other entry into a file only when `filePositionPersistence` is on |
 | Window frame | SwiftData (`AppStateModel`) | On move/resize (debounced) |
 | Security-scoped bookmarks | SwiftData (`Playlist`) | On creation |
 | Thumbnail cache | File system (Caches dir) | On generation |
 
-Launch reconstructs the runtime objects from persisted state (Playing playlists resume, Paused stay paused — relaunch behaves like reopening the window). On a file mutation against a stale bookmark, `AppState.beginFolderAccess(to:)` prompts to relocate the folder and refreshes the bookmark. Global settings UI, file-position persistence, window-frame persistence, and the full lifecycle wiring are Task 16 in `tasks/index.md`; the lifecycle behavior they implement is specified in `features.md`.
+Launch reconstructs the runtime objects from persisted state (Playing playlists resume, Paused stay paused — relaunch behaves like reopening the window). On a file mutation against a stale bookmark, `AppState.beginFolderAccess(to:)` prompts to relocate the folder and refreshes the bookmark.
 
 ---
 

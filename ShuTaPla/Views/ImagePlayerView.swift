@@ -35,6 +35,9 @@ struct ImagePlayerView: View {
             .clipped()
             .contentShape(Rectangle())
             .gesture(panGesture.simultaneously(with: zoomGesture(in: proxy.size)))
+            // A click (no drag) toggles play/pause; a double click stops. Pan needs a 10pt
+            // drag to engage, so a stationary click falls through to the tap.
+            .playerContentClick()
         }
         .ignoresSafeArea()
     }

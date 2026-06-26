@@ -71,7 +71,7 @@ struct RootView: View {
                     onEnter: { overlayManager.revealCompactAudioOnHover() },
                     onExit: { overlayManager.hideCompactAudioOnHoverExit() }
                 )
-                .frame(height: 60)
+                .frame(height: AppConstants.audioHoverZoneHeight)
                 .frame(maxWidth: .infinity)
             }
 

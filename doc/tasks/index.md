@@ -1,39 +1,9 @@
 # Implementation Tasks
 
-Tasks 16, 18, 19, 20 are features described in features.md spec but not yet implemented.
+Tasks 18, 19, 20 are features described in features.md spec but not yet implemented.
 Task 17 - intermediate refactor for performance optimization.
 
 Status legend: ✅ = complete (built and tested). Unmarked tasks are not started.
-
----
-
-## Task 16 — Settings, persistence, lifecycle, and fullscreen/window management
-
-Global settings UI, full state persistence, app lifecycle, and the fullscreen/window-management handling that makes the player shell stable. After this task all main elements are built; later tasks are gradual improvements.
-
-**Deliverables:**
-- `SettingsView.swift` — global defaults: slideshow interval, file-position persistence, image fit mode
-- Per-playlist preference overrides surfaced in playlist header or context
-- File-position persistence: write position every 5s during playback and on file change/stop (when enabled)
-- App lifecycle:
-  - Launch: restore persisted state, reconstruct PlaybackCoordinator — Playing playlists resume, Paused stay paused (relaunch behaves like reopening the window), restore window frame
-  - Window close (not quit): persist state, activate suppression, hide window, keep app running; playlist states unchanged
-  - Window reopen (Dock click): lift suppression — Playing playlists continue, Paused stay paused
-  - App termination: final persist of all positions and state
-- Window frame persistence (debounced on move/resize)
-- Stale bookmark handling: inline error on playlist, option to re-select folder
-- `NSWindow+Fullscreen.swift` — fullscreen helpers and animated entry/exit transitions, synced with player-mode transitions (no flicker or stale state); builds on the Task 11 `FullscreenView` bridge
-- Single-window enforcement (`.commands { CommandGroup(replacing: .newItem) {} }`)
-
-**Testable:**
-- Change global default → new playlists use it
-- Per-playlist override → overrides global
-- File-position persistence: stop and restart → resumes at saved position
-- Quit and relaunch → active playlists and window frame restored; Playing playlists resume, Paused stay paused
-- Close window → app still running, playback halted (suppressed); reopen → Playing playlists continue
-- Stale bookmark → error shown, re-select folder works
-- Enter player → fullscreen, exit → windowed, no flicker or stale state
-- Cmd+N does nothing (new window removed)
 
 ---
 

@@ -31,6 +31,15 @@ struct PlayerView: View {
             default: EmptyView()
             }
 
+            // The video render surface is an AppKit view that doesn't see SwiftUI taps, so a
+            // transparent layer over it carries the content click. The image player attaches the
+            // same behavior to its own gesture stack, where pan/zoom must keep working.
+            if coordinator.visualKind == .video {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .playerContentClick()
+            }
+
             if visualHasNoFiles {
                 noFilesPlaceholder
             }
@@ -161,6 +170,9 @@ struct PlayerView: View {
         if overlays.active.contains(.filesTags), !coordinator.isSuppressed,
            let visual = coordinator.liveVisualPlaylist {
             FilesTagsOverlayView(playlist: visual)
+                // Leave the top-edge audio hover zone uncovered so the overlay's close button
+                // clears it instead of fighting it for the cursor.
+                .padding(.top, AppConstants.audioHoverZoneHeight)
                 .transition(.move(edge: .bottom))
         }
     }

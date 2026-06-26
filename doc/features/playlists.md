@@ -40,7 +40,7 @@ Each playlist stores:
 ### Global settings
 
 - Default slideshow interval (initially 10 s).
-- Default file-position persistence behavior (whether playlists resume mid-file by default; initially off).
+- Default file-position persistence — the fallback for the per-playlist setting when a playlist hasn't overridden it (initially off). See [File-position persistence](#file-position-persistence).
 - Default image fit mode (initially Fit).
 
 ### Reshuffle vs. Update
@@ -68,8 +68,8 @@ A playlist is always in one of three states:
 
 - **Selecting** a visual playlist in Manager mode (from the left playlists panel) puts it in **Stopped** state and shows it as the Managed Playlist. **Selecting an audio playlist** in Manager mode makes it the **Stopped** Audio Channel Playlist; because only one Audio Channel Playlist is ever live, this first stops whichever audio playlist was playing.
 - **Selecting** a playlist from the Visual Overlay's selector during Player mode immediately starts **Playing** the selected playlist on the Visual Channel. Likewise, selecting an audio playlist from the Audio Overlay starts it playing on the Audio Channel.
-- **Play** (the Manager toolbar's Play button, or the Audio Inlet's / Audio Overlay's Play control) transitions to **Playing**. Playback resumes from the playlist's last-played or first file. If file-position persistence is enabled for the playlist, playback also resumes from the last position within that file; otherwise it starts from the beginning of the file.
-- **Double-clicking a file** in a file list (whether in Manager mode or in the Visual Overlay during play) transitions to **Playing** starting from that file (always from the start).
+- **Play** (the Manager toolbar's Play button, or the Audio Inlet's / Audio Overlay's Play control) transitions to **Playing**, starting from the playlist's last-played or first file. The position within that file is honored only when file-position persistence is enabled for the playlist; otherwise it starts from the beginning of the file. See [File-position persistence](#file-position-persistence).
+- **Double-clicking a file** in a file list (whether in Manager mode or in the Visual Overlay during play) transitions to **Playing** starting from that file. As with Play, the position within that file is honored only when file-position persistence is enabled; otherwise it starts from the beginning.
 - **`[p]`** activates Suppression (see [Suppression vs per-playlist pause](playback-controls.md#suppression-vs-per-playlist-pause)); playlist states are unchanged.
 - **Stop button** (in the Pause Overlay, or in the playback controls) transitions back to **Stopped** — the playlist returns to its Manager view.
 - **`[esc]`** — context-dependent (see [Esc behavior](playback-controls.md#esc-behavior) under Playback controls).
@@ -82,7 +82,16 @@ At any time:
 - At most one audio playlist may be in **Playing** or **Paused** state in parallel with the above — this is the Audio Channel Playlist.
 - Any number of playlists may exist in **Stopped** state. Manager mode shows one **Scope** at a time — image, video, or audio — and binds to one Managed Playlist at a time.
 
-Switching to a different visual playlist (within or between video and image) cleanly stops the previous Visual Channel Playlist (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears as the Managed Playlist. In Player mode (via the Visual Overlay's playlist selector) the selected playlist starts playing immediately on the Visual Channel. Selecting a different **audio** playlist in Manager mode stops whichever Audio Channel Playlist was live and leaves the new one as the Stopped Audio Channel Playlist (selecting from the Audio Overlay starts it playing instead). Selecting a different **visual** playlist does not stop the Audio Channel Playlist, which can continue playing in parallel. Each playlist's last-played file and optional position-within-file are preserved, so returning to it later resumes where it was.
+Switching to a different visual playlist (within or between video and image) cleanly stops the previous Visual Channel Playlist (it returns to Stopped state) and brings the new one up. In Manager mode the new playlist does **not** auto-start; it appears as the Managed Playlist. In Player mode (via the Visual Overlay's playlist selector) the selected playlist starts playing immediately on the Visual Channel. Selecting a different **audio** playlist in Manager mode stops whichever Audio Channel Playlist was live and leaves the new one as the Stopped Audio Channel Playlist (selecting from the Audio Overlay starts it playing instead). Selecting a different **visual** playlist does not stop the Audio Channel Playlist, which can continue playing in parallel. Each playlist's last-played file is preserved, so returning to it later resumes at that file; whether it also resumes *within* the file follows the rules in [File-position persistence](#file-position-persistence).
+
+### File-position persistence
+
+Two independent mechanisms decide whether playback resumes from an offset inside a file rather than from its start.
+
+- **Lifecycle resume — always on.** The live Visual Channel Playlist and Audio Channel Playlist carry their current file *and the offset within it* as part of their state, persisted continuously regardless of the setting below. Closing and reopening the window, or quitting and relaunching, continues each from that offset, respecting its Playing/Paused state. Only non-Stopped playlists are restored this way, so a playlist you explicitly **Stop** is not lifecycle-resumed — its next start follows the setting below.
+- **The file-position-persistence setting — per-playlist preference, off by default, falling back to the global default.** It governs every *other* entry into a file: pressing **Play** on a Stopped playlist, playing a playlist after switching to it, or **double-clicking** a file. When enabled, these resume from the file's last position; when off, they start from the beginning.
+
+In short: relaunch always continues where it was left off; every other start resumes mid-file only when the setting is enabled.
 
 ## Playlist switching (Player mode)
 

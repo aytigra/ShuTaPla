@@ -111,19 +111,19 @@ final class PlaybackCoordinator: PlaybackSource {
     /// Starts `playlist` on its channel, beginning at `file` (or its remembered /
     /// first file). Starting a visual playlist stops whichever visual playlist was
     /// playing; audio is independent.
-    func play(_ playlist: Playlist, startingAt file: PlaylistFile? = nil) {
+    func play(_ playlist: Playlist, startingAt file: PlaylistFile? = nil, lifecycle: Bool = false) {
         switch playlist.mediaType {
-        case .video, .image: startVisual(playlist, startingAt: file)
-        case .audio: startAudio(playlist, startingAt: file)
+        case .video, .image: startVisual(playlist, startingAt: file, lifecycle: lifecycle)
+        case .audio: startAudio(playlist, startingAt: file, lifecycle: lifecycle)
         }
     }
 
-    private func startVisual(_ playlist: Playlist, startingAt file: PlaylistFile?) {
+    private func startVisual(_ playlist: Playlist, startingAt file: PlaylistFile?, lifecycle: Bool) {
         if let current = liveVisualPlaylist, current !== playlist { stopVisual() }
         guard let folder = beginFolderAccess(for: playlist) else { return }
 
         let start = startFile(for: playlist, requested: file)
-        let resumeAt = resumePosition(for: playlist, start: start, explicit: file != nil)
+        let resumeAt = resumePosition(for: playlist, start: start, lifecycle: lifecycle)
         liveVisualPlaylist = playlist
         visualKind = playlist.mediaType
         playlist.playbackState = .playing
@@ -146,13 +146,13 @@ final class PlaybackCoordinator: PlaybackSource {
         }
     }
 
-    private func startAudio(_ playlist: Playlist, startingAt file: PlaylistFile?) {
+    private func startAudio(_ playlist: Playlist, startingAt file: PlaylistFile?, lifecycle: Bool) {
         if let current = liveAudioPlaylist, current !== playlist { stopAudio() }
         guard let folder = beginFolderAccess(for: playlist),
               let engine = ensureAudioEngine() else { return }
 
         let start = startFile(for: playlist, requested: file)
-        let resumeAt = resumePosition(for: playlist, start: start, explicit: file != nil)
+        let resumeAt = resumePosition(for: playlist, start: start, lifecycle: lifecycle)
         liveAudioPlaylist = playlist
         playlist.playbackState = .playing
         if let start { playlist.currentFileID = start.id }
@@ -254,7 +254,7 @@ final class PlaybackCoordinator: PlaybackSource {
     func reconstruct(_ playlist: Playlist) {
         let persisted = playlist.playbackState
         guard persisted != .stopped else { return }
-        play(playlist)
+        play(playlist, lifecycle: true)
         if persisted == .paused { pause(playlist) }
     }
 
@@ -388,10 +388,13 @@ final class PlaybackCoordinator: PlaybackSource {
         persistPosition(on: playlist)   // save the outgoing file before loading the new one
         let url = folder.appending(path: file.relativePath)
         playlist.currentFileID = file.id
+        // A jump is a fresh entry into a file (a double-click, or a reconcile landing on a new
+        // file), so it resumes mid-file only when file-position persistence is on for the playlist.
+        let resumeAt = persistsPosition(playlist) ? file.lastPosition : nil
         switch channel(of: playlist) {
         case .visualImage: imageEngine.load(file, at: url)
-        case .visualVideo: videoEngine?.load(file, at: url)
-        case .audio: audioEngine?.load(file, at: url)
+        case .visualVideo: videoEngine?.load(file, at: url, startingAt: resumeAt)
+        case .audio: audioEngine?.load(file, at: url, startingAt: resumeAt)
         case nil: break
         }
         // `load` always starts the new file playing. Re-halt it if this playlist shouldn't be
@@ -604,18 +607,18 @@ final class PlaybackCoordinator: PlaybackSource {
         playlist.effectiveFilePositionPersistence(globalSettings)
     }
 
-    /// The position a freshly loaded file should resume from. An explicitly picked file (a
-    /// double-click / `[enter]`) always plays from the beginning; its saved position is left
-    /// intact so a later auto-resume can still use it. The remembered file resumes from
-    /// `lastPosition` only while persistence is on.
-    private func resumePosition(for playlist: Playlist, start: PlaylistFile?, explicit: Bool) -> TimeInterval? {
-        guard let start, !explicit, persistsPosition(playlist) else { return nil }
+    /// The position a freshly loaded file should resume from. Lifecycle reconstruction (a reopened
+    /// window or a relaunch) always resumes the live channel's file from its `lastPosition`. Every
+    /// other start — Play on a Stopped playlist, a switch, a double-click — resumes only while
+    /// file-position persistence is on for the playlist; otherwise it begins at the start of the file.
+    private func resumePosition(for playlist: Playlist, start: PlaylistFile?, lifecycle: Bool) -> TimeInterval? {
+        guard let start, lifecycle || persistsPosition(playlist) else { return nil }
         return start.lastPosition
     }
 
     /// Writes the live position of the file playing on `playlist`'s channel back to its model,
-    /// so a later launch can resume it. Routed to the right channel; a no-op when persistence
-    /// is off for the playlist, or for the timeline-less image channel.
+    /// so a later launch can resume it. Routed to the right channel; a no-op for the timeline-less
+    /// image channel.
     private func persistPosition(on playlist: Playlist) {
         switch channel(of: playlist) {
         case .visualVideo: persistVisualPosition()
@@ -632,30 +635,30 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     private func persistVisualPosition() {
-        guard visualKind == .video, let playlist = liveVisualPlaylist, persistsPosition(playlist),
+        guard visualKind == .video,
               let file = videoEngine?.currentFile, let time = videoEngine?.currentTime else { return }
         file.lastPosition = time
     }
 
     private func persistAudioPosition() {
-        guard let playlist = liveAudioPlaylist, persistsPosition(playlist),
-              let file = audioEngine?.currentFile, let time = audioEngine?.currentTime else { return }
+        guard let file = audioEngine?.currentFile, let time = audioEngine?.currentTime else { return }
         file.lastPosition = time
     }
 
-    /// Whether the periodic position-write loop would do useful work: some live timeline channel
-    /// (video or audio) has file-position persistence on. The image channel has no timeline, and a
-    /// channel whose persistence is off has nothing to write — in either case the loop is pointless.
-    private var shouldRunPositionPersistLoop: Bool {
-        if let visual = liveVisualPlaylist, visualKind == .video, persistsPosition(visual) { return true }
-        if let audio = liveAudioPlaylist, persistsPosition(audio) { return true }
+    /// Whether a live channel has a timeline whose position the periodic loop should keep writing —
+    /// any video visual channel, or the audio channel. The image channel has no timeline. The write
+    /// happens regardless of the file-position setting, because lifecycle resume (a reopened window
+    /// or a relaunch) restores the live channels' positions even when the setting is off.
+    private var hasLiveTimelineChannel: Bool {
+        if visualKind == .video { return true }
+        if liveAudioPlaylist != nil { return true }
         return false
     }
 
     /// Starts the periodic position-write loop if it isn't already running and a live timeline
     /// channel actually needs it.
     private func startPositionPersistLoop() {
-        guard positionPersistTask == nil, shouldRunPositionPersistLoop else { return }
+        guard positionPersistTask == nil, hasLiveTimelineChannel else { return }
         positionPersistTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let interval = self?.positionPersistInterval else { break }
@@ -666,10 +669,10 @@ final class PlaybackCoordinator: PlaybackSource {
         }
     }
 
-    /// Cancels the persist loop once no live channel needs it — every timeline channel has gone or
-    /// has persistence off (the image channel alone has nothing to persist).
+    /// Cancels the persist loop once no live channel needs it — every timeline channel has gone
+    /// (the image channel alone has nothing to persist).
     private func stopPositionPersistLoopIfIdle() {
-        guard !shouldRunPositionPersistLoop else { return }
+        guard !hasLiveTimelineChannel else { return }
         positionPersistTask?.cancel()
         positionPersistTask = nil
     }
