@@ -126,19 +126,25 @@ Behavior is identical to today's after this stage; only storage shape changes.
 
 ### Stage C — lazy identifier rendering in views
 
-- **`AppState`** — `managerFiles`/`visualChannelFiles`/`audioChannelFiles` become
-  `[PersistentIdentifier]`. Helpers that need a `PlaylistFile` (`currentVisualFile`,
-  `currentAudioFile`, delete/strip, `moveFileSelection`) resolve via
-  `modelContext.model(for:)`.
+- **`AppState`** — the file-list accessors are `[PersistentIdentifier]`: `managerFileIDs`,
+  `visualChannelFileIDs` (display sequence), `audioChannelFileIDs` (playback sequence). A
+  `file(for:)` resolver wraps `modelContext.model(for:)` for the one row a caller needs.
+  `currentVisualFile`/`currentAudioFile` resolve the playlist's `currentFileID` through a
+  single-row `identifier(of:)` fetch and confirm membership in the (cheap) identifier
+  sequence, rather than walking a materialized list. The selection-driven action paths
+  (`playSelectedFile`, `requestDeleteSelectedFiles`, `moveFileSelection`, the context-menu
+  targets) resolve only the small selection via `selectedManagerFiles()` and intersect it with
+  the identifier sequence — the whole sequence is never materialized; `manage`/`switchScope`
+  test the resume file's membership with `displaySequenceContains`.
 - **`FileCollectionView` + `LibrarySurface` + the player/audio overlays** —
-  `ForEach(ids, id: \.self)`; each realized row resolves
-  `modelContext.model(for: id) as? PlaylistFile` and skips `nil`. Selection and scroll stay
-  UUID-keyed (`.id(file.id)`, `proxy.scrollTo(file.id)`); `FileSelection` range/toggle ops
-  resolve identifiers → files at action time, not per frame.
+  `ForEach(ids, id: \.self)`; each realized row resolves `appState.file(for: id)` and skips
+  `nil`. Selection and scroll stay UUID-keyed (`.id(file.id)`, `proxy.scrollTo(file.id)`);
+  `FileSelection` keeps the anchor as a `PersistentIdentifier` and resolves only a shift-click's
+  spanned range to UUIDs (plain/cmd clicks resolve nothing).
 
-This stage is where the cold-start win is realized (the `LazyVStack`/`LazyVGrid` only realize
-visible rows, so only those resolve a model). It is also the most invasive — it touches
-selection and scroll across every file list — and can be a separate session after A+B.
+This stage is where the cold-start win is realized: the `LazyVStack`/`LazyVGrid` realize only
+visible rows, so only those resolve a model, and the action paths resolve only the selection or
+a single target.
 
 ## Documentation
 

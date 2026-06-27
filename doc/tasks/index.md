@@ -7,11 +7,9 @@ Status legend: ✅ = complete (built and tested). Unmarked tasks are not started
 
 ---
 
-## Task 17 — Performance: tag normalization and identifier-based display sequence
+## Task 17 — Performance: tag normalization and identifier-based display sequence ✅
 
 Replace the whole-set derivation of `displaySequence` with a store-side, identifier-only one that never materializes a large playlist at once. Implementation design: [tag_normalization_and_identifier_sequences.md](tag_normalization_and_identifier_sequences.md).
-
-**Status:** Stages A (`Tag` entity + scalar `taggingStatus`) and B (store-side `displaySequence`/`playbackSequence`/counts on `ModelContext`, computed properties retired, save-before-derive + reactivity signal) built and tested. Stage C (lazy identifier rendering in the views — deliverable 4 below) remaining; the `AppState` accessors still resolve all identifiers to models eagerly until then.
 
 **Why.** Deriving `displaySequence` walks every `PlaylistFile` and reads its SwiftData-backed properties (~0.8µs each, paid on every access); a full `fetch()` / relationship materialization of a large playlist costs ~500ms cold (measured at 20k files), and the Manager/overlay lists re-derive on each scope/playlist switch, so a large playlist hitches. The only approach that beats the per-object materialization floor is to not materialize the set: fetch just the ordered identifiers (`fetchIdentifiers`, ~8ms for 20k) and resolve only the visible rows. For tag filtering to move into the store predicate, tags must be a queryable relationship rather than an inline `[String]` blob. (The Task 15 in-memory memo + `fetchCount` is the interim that removed the recurring warm-switch lag; this task removes the cold floor and the memo.)
 

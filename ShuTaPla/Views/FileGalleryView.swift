@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The Manager center gallery: a `LazyVGrid` of thumbnail cells over the same
-//  filtered files as the list view (`AppState.managerFiles`). Selection, rename,
+//  filtered files as the list view (`AppState.managerFileIDs`). Selection, rename,
 //  scroll, and the context menu are handled by the shared `FileCollectionView`;
 //  this names the gallery presentation and supplies the cell. Each cell loads its
 //  thumbnail asynchronously and cancels the load when scrolled off-screen.

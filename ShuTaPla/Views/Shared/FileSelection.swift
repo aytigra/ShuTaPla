@@ -9,36 +9,43 @@
 //
 
 import AppKit
+import SwiftData
 
 enum FileSelection {
 
-    /// Applies a click on `id` with the current modifier flags, mutating the
-    /// selection set and anchor in place.
+    /// Applies a click on `file` with the current modifier flags, mutating the selection set
+    /// and anchor in place. The list is the ordered identifier sequence (`ids`); a shift-extend
+    /// resolves only the spanned range to UUIDs through `uuid`, so plain and cmd clicks resolve
+    /// nothing and a range click resolves just its span — the whole list is never materialized.
+    /// The anchor is an identifier so it survives re-derivation without holding a model.
     static func apply(
-        click id: UUID,
+        click file: PlaylistFile,
         modifiers: NSEvent.ModifierFlags,
-        in files: [PlaylistFile],
+        ids: [PersistentIdentifier],
+        uuid: (PersistentIdentifier) -> UUID?,
         selection: inout Set<UUID>,
-        anchor: inout UUID?
+        anchor: inout PersistentIdentifier?
     ) {
         let mods = modifiers.intersection(.deviceIndependentFlagsMask)
+        let id = file.id
+        let pid = file.persistentModelID
 
         if mods.contains(.command) {
             if selection.contains(id) {
                 selection.remove(id)
             } else {
                 selection.insert(id)
-                anchor = id
+                anchor = pid
             }
         } else if mods.contains(.shift),
-                  let anchorID = anchor,
-                  let lo = files.firstIndex(where: { $0.id == anchorID }),
-                  let hi = files.firstIndex(where: { $0.id == id }) {
+                  let anchorPID = anchor,
+                  let lo = ids.firstIndex(of: anchorPID),
+                  let hi = ids.firstIndex(of: pid) {
             let range = lo <= hi ? lo...hi : hi...lo
-            selection.formUnion(files[range].map(\.id))
+            selection.formUnion(ids[range].compactMap(uuid))
         } else {
             selection = [id]
-            anchor = id
+            anchor = pid
         }
     }
 

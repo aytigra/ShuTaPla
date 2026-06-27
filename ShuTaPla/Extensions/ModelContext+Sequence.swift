@@ -72,6 +72,16 @@ extension ModelContext {
         return (untagged, invalidTagging, skipped)
     }
 
+    /// The persistent identifier of the file with app id `fileID`, or nil if none exists — a
+    /// one-row fetch that lets a caller test a single file's membership in a sequence (via
+    /// `displaySequence(of:).contains(_:)`) without resolving the whole set.
+    func identifier(of fileID: UUID) -> PersistentIdentifier? {
+        var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.id == fileID })
+        descriptor.fetchLimit = 1
+        descriptor.includePendingChanges = false
+        return (try? fetchIdentifiers(descriptor))?.first
+    }
+
     // MARK: - Fetch primitives
 
     private func identifiers(matching predicate: Predicate<PlaylistFile>) -> [PersistentIdentifier] {

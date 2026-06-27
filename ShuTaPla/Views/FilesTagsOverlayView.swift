@@ -44,12 +44,11 @@ struct FilesTagsOverlayView: View {
     /// playlists, switches the visual channel on select, and routes file actions to the
     /// player's delete / strip-audio / rename-error paths.
     private var visualContext: LibraryContext {
-        let files = appState.visualChannelFiles
-        return LibraryContext(
+        LibraryContext(
             mediaType: playlist.mediaType,
             activePlaylist: playlist,
-            files: files,
-            currentFile: appState.currentVisualFile(in: files),
+            fileIDs: appState.visualChannelFileIDs,
+            currentFile: appState.currentVisualFile,
             scrollTrigger: appState.scrollSelectionToken,
             tagAutoFocus: true,
             onSelectPlaylist: { appState.playOnVisualChannel($0) },

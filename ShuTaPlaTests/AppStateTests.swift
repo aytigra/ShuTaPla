@@ -597,6 +597,26 @@ struct AppStateTests {
         #expect(try noStripSidecar(in: dir))
     }
 
+    // MARK: - Identifier-based file lists (Task 17 Stage C)
+
+    @Test func managerFileIDsAreTheOrderedStoreSequenceResolvedByFileFor() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        addFile("a.mp4", order: 0, to: playlist, in: context)
+        addFile("b.mp4", order: 1, to: playlist, in: context)
+        addFile("c.mp4", order: 2, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.managedPlaylist = playlist
+
+        // The accessor returns identifiers, not models — the same ordered sequence the store
+        // derives — and `file(for:)` resolves each on demand (the lazy render path).
+        let ids = appState.managerFileIDs
+        #expect(ids == context.displaySequence(of: playlist))
+        #expect(ids.compactMap { appState.file(for: $0)?.fileName } == ["a.mp4", "b.mp4", "c.mp4"])
+    }
+
     // MARK: - Filtering (Task 7)
 
     @Test func tagFilterAppliesAndOrCorrectly() async throws {

@@ -167,8 +167,8 @@ final class AppState {
     private(set) var audioScrollToken = 0
 
     /// Bumped after every persisted mutation that can change a file sequence's membership or
-    /// order. The store-side file accessors (`managerFiles`, `visualChannelFiles`,
-    /// `audioChannelFiles`) read it so SwiftUI re-derives them on the change: their fetches use
+    /// order. The store-side identifier accessors (`managerFileIDs`, `visualChannelFileIDs`,
+    /// `audioChannelFileIDs`) read it so SwiftUI re-derives them on the change: their fetches use
     /// `includePendingChanges: false` and aren't tracked by Observation on their own, unlike a
     /// walk over the `files` relationship would be.
     private(set) var sequenceVersion = 0
@@ -182,18 +182,42 @@ final class AppState {
         sequenceVersion &+= 1
     }
 
-    /// The files of `playlist` under its effective filter, derived store-side as ordered
-    /// identifiers and resolved to models. Reads `sequenceVersion` so a mutation re-runs it.
-    private func filteredFiles(of playlist: Playlist) -> [PlaylistFile] {
-        _ = sequenceVersion
-        return modelContext.displayFiles(of: playlist)
+    /// Resolves one identifier from a file sequence to its model, or nil if it no longer exists.
+    /// A view realizing a row resolves only that row through here, so a large sequence is never
+    /// materialized at once; one-shot action paths resolve just the rows they act on.
+    func file(for id: PersistentIdentifier) -> PlaylistFile? {
+        modelContext.model(for: id) as? PlaylistFile
     }
 
-    /// `playlist`'s playable files (skipped files dropped), derived store-side. Reads
-    /// `sequenceVersion` so a mutation re-runs it.
-    private func playableFiles(of playlist: Playlist) -> [PlaylistFile] {
-        _ = sequenceVersion
-        return modelContext.playbackFiles(of: playlist)
+    /// Whether `fileID` survives `playlist`'s effective filter — a store-side membership test
+    /// that resolves only that one file's identifier and checks the (cheap) identifier sequence,
+    /// rather than materializing the whole sequence to scan it.
+    private func displaySequenceContains(_ fileID: UUID, of playlist: Playlist) -> Bool {
+        guard let pid = modelContext.identifier(of: fileID) else { return false }
+        return modelContext.displaySequence(of: playlist).contains(pid)
+    }
+
+    /// The selected manager files (the small selection set), resolved from the store in
+    /// display order. Action paths that operate on the selection resolve only these rows, not
+    /// the whole managed sequence. Not restricted to the effective filter — callers that need
+    /// the *visible* selection intersect with `managerFileIDs`.
+    private func selectedManagerFiles() -> [PlaylistFile] {
+        guard let playlist = managedPlaylist, !managerSelection.isEmpty else { return [] }
+        let pid = playlist.persistentModelID
+        let ids = Array(managerSelection)
+        var descriptor = FetchDescriptor<PlaylistFile>(
+            predicate: #Predicate { $0.playlist?.persistentModelID == pid && ids.contains($0.id) },
+            sortBy: [SortDescriptor(\.sortOrder)]
+        )
+        descriptor.includePendingChanges = false
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    /// The visible, selected manager files in display order — context-menu / batch-action
+    /// targets. Resolves only the selection, then keeps those still in the effective filter.
+    func managerSelectionFiles() -> [PlaylistFile] {
+        let visible = Set(managerFileIDs)
+        return selectedManagerFiles().filter { visible.contains($0.persistentModelID) }
     }
 
     /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
@@ -276,44 +300,50 @@ final class AppState {
     var audioDeleteError: String?
     var audioRenameError: String?
 
-    /// The audio channel playlist's files under its effective filter — the audio overlay's list.
-    /// This is the *playback* sequence, so skipped tracks never appear: the audio overlay is a
-    /// transport list (no triage toggles), and a track the engine won't play has no place in it.
-    /// Under the Skipped filter the list is therefore empty. The service filter set in Manager
-    /// still applies (e.g. Untagged narrows the channel to its untagged playable tracks).
-    var audioChannelFiles: [PlaylistFile] { audioChannelPlaylist.map(playableFiles(of:)) ?? [] }
+    /// The audio channel playlist's file identifiers under its effective filter — the audio
+    /// overlay's list, resolved row-by-row as it scrolls. This is the *playback* sequence, so
+    /// skipped tracks never appear: the audio overlay is a transport list (no triage toggles),
+    /// and a track the engine won't play has no place in it. Under the Skipped filter the list
+    /// is therefore empty. The service filter set in Manager still applies (e.g. Untagged
+    /// narrows the channel to its untagged playable tracks).
+    var audioChannelFileIDs: [PersistentIdentifier] {
+        _ = sequenceVersion
+        return audioChannelPlaylist.map { modelContext.playbackSequence(of: $0) } ?? []
+    }
 
-    /// The visual channel playlist's display-ordered files — the Files & Tags overlay's list.
-    /// This is the *display* sequence (it keeps skipped files under the Skipped filter), because
-    /// the Files & Tags overlay is an editing surface where skipped rows are triaged and un-skipped.
-    var visualChannelFiles: [PlaylistFile] { coordinator.liveVisualPlaylist.map(filteredFiles(of:)) ?? [] }
+    /// The visual channel playlist's display-ordered file identifiers — the Files & Tags
+    /// overlay's list, resolved row-by-row. This is the *display* sequence (it keeps skipped
+    /// files under the Skipped filter), because the Files & Tags overlay is an editing surface
+    /// where skipped rows are triaged and un-skipped.
+    var visualChannelFileIDs: [PersistentIdentifier] {
+        _ = sequenceVersion
+        return coordinator.liveVisualPlaylist.map { modelContext.displaySequence(of: $0) } ?? []
+    }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
-    /// Resolved from the playlist's persisted `currentFileID` against its file list, not the
-    /// live engine, so it survives Stop: a stopped audio playlist still shows (and resumes from)
-    /// where it left off. `nil` when the remembered file is filtered out of view.
-    var currentAudioFile: PlaylistFile? { currentAudioFile(in: audioChannelFiles) }
-
-    /// Resolves the audio channel's current track within an already-derived file list. A view
-    /// that reads `audioChannelFiles` for its list passes that same list here instead of letting
-    /// the accessor re-walk the whole sequence to look one file up.
-    func currentAudioFile(in files: [PlaylistFile]) -> PlaylistFile? {
-        guard let id = audioChannelPlaylist?.currentFileID else { return nil }
-        return files.first { $0.id == id }
+    /// Resolved from the playlist's persisted `currentFileID`, not the live engine, so it
+    /// survives Stop: a stopped audio playlist still shows (and resumes from) where it left off.
+    /// `nil` when the remembered file is filtered out of the playback view (a single store fetch
+    /// for that one file, plus its membership in the playback sequence).
+    var currentAudioFile: PlaylistFile? {
+        _ = sequenceVersion
+        guard let playlist = audioChannelPlaylist, let id = playlist.currentFileID,
+              let pid = modelContext.identifier(of: id),
+              modelContext.playbackSequence(of: playlist).contains(pid) else { return nil }
+        return file(for: pid)
     }
 
     /// The visual channel's current file — the Files & Tags overlay's analog of
-    /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`
-    /// against its file list, not the live engine, so it's available synchronously when
-    /// the overlay's file list re-centers after a playlist switch (the video engine reports
-    /// its current file asynchronously). `nil` when the remembered file is filtered out of view.
-    var currentVisualFile: PlaylistFile? { currentVisualFile(in: visualChannelFiles) }
-
-    /// Resolves the visual channel's current file within an already-derived file list, so a view
-    /// holding `visualChannelFiles` need not re-walk the sequence to look one file up.
-    func currentVisualFile(in files: [PlaylistFile]) -> PlaylistFile? {
-        guard let id = coordinator.liveVisualPlaylist?.currentFileID else { return nil }
-        return files.first { $0.id == id }
+    /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`, not
+    /// the live engine, so it's available synchronously when the overlay's file list re-centers
+    /// after a playlist switch (the video engine reports its current file asynchronously).
+    /// `nil` when the remembered file is filtered out of the display view.
+    var currentVisualFile: PlaylistFile? {
+        _ = sequenceVersion
+        guard let playlist = coordinator.liveVisualPlaylist, let id = playlist.currentFileID,
+              let pid = modelContext.identifier(of: id),
+              modelContext.displaySequence(of: playlist).contains(pid) else { return nil }
+        return file(for: pid)
     }
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as
@@ -440,7 +470,7 @@ final class AppState {
         managedPlaylist = lastManagedPlaylist(for: scope)
         managerSelection = []
         if let playlist = managedPlaylist, let id = playlist.currentFileID,
-           filteredFiles(of: playlist).contains(where: { $0.id == id }) {
+           displaySequenceContains(id, of: playlist) {
             managerSelection = [id]
         }
         scrollSelectionToken += 1
@@ -493,8 +523,12 @@ final class AppState {
     // The Manager's center panel, filter bar, and tag inspector read these; all derive from
     // the single managed playlist, whatever its type.
 
-    /// The managed playlist's display-ordered files under its effective filter.
-    var managerFiles: [PlaylistFile] { managedPlaylist.map(filteredFiles(of:)) ?? [] }
+    /// The managed playlist's display-ordered file identifiers under its effective filter — the
+    /// Manager center list/gallery, resolved row-by-row as it scrolls.
+    var managerFileIDs: [PersistentIdentifier] {
+        _ = sequenceVersion
+        return managedPlaylist.map { modelContext.displaySequence(of: $0) } ?? []
+    }
 
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
     var managerScrollToken: Int { scrollSelectionToken }
@@ -678,7 +712,7 @@ final class AppState {
         // playlist snaps the highlight back to the playing file — the one way to do so without
         // leaving it. Skipped when the resume file is filtered out (or none has played yet).
         if let currentID = playlist.currentFileID,
-           filteredFiles(of: playlist).contains(where: { $0.id == currentID }) {
+           displaySequenceContains(currentID, of: playlist) {
             managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
@@ -1115,8 +1149,12 @@ final class AppState {
     /// selection to play, so the key only consumes when it acts.
     @discardableResult
     func playSelectedFile() -> Bool {
-        guard let playlist = managedPlaylist,
-              let file = managerFiles.first(where: { managerSelection.contains($0.id) }) else { return false }
+        guard let playlist = managedPlaylist else { return false }
+        // The earliest selected row in display order: intersect the (small) selection with the
+        // ordered identifier sequence, then resolve only that one file.
+        let selected = Set(selectedManagerFiles().map(\.persistentModelID))
+        guard let pid = managerFileIDs.first(where: { selected.contains($0) }),
+              let file = file(for: pid) else { return false }
         startPlayback(of: playlist, startingAt: file)
         return true
     }
@@ -1137,7 +1175,7 @@ final class AppState {
     /// `[delete]`). Returns whether there was anything selected to delete.
     @discardableResult
     func requestDeleteSelectedFiles() -> Bool {
-        let files = managerFiles.filter { managerSelection.contains($0.id) }
+        let files = managerSelectionFiles()
         guard !files.isEmpty else { return false }
         pendingManagerDelete = files
         return true
@@ -1256,8 +1294,8 @@ final class AppState {
     /// the key was consumed (so no system beep).
     @discardableResult
     func moveFileSelection(_ direction: MoveDirection) -> Bool {
-        let files = managerFiles
-        guard !files.isEmpty else { return false }
+        let ids = managerFileIDs
+        guard !ids.isEmpty else { return false }
 
         let gallery = managedPlaylist?.preferences.viewMode == .gallery
         let columns = gallery ? max(1, fileGridColumns) : 1
@@ -1273,16 +1311,22 @@ final class AppState {
         // it (so it never beeps) without disturbing the selection.
         guard step != 0 else { return true }
 
-        let selected = files.indices.filter { managerSelection.contains(files[$0].id) }
+        // Map the (small) selection to its positions in the identifier sequence; only the
+        // target row is resolved to a model.
+        let selectedPIDs = Set(selectedManagerFiles().map(\.persistentModelID))
+        let selected = ids.indices.filter { selectedPIDs.contains(ids[$0]) }
+        let targetIndex: Int
         if let edge = (step >= 0 ? selected.max() : selected.min()) {
-            let target = edge + step
+            let candidate = edge + step
             // Stay within bounds; ignore a move that would fall off the grid (still
             // consumed, so the key never beeps).
-            if target >= 0, target < files.count {
-                managerSelection = [files[target].id]
-            }
+            guard candidate >= 0, candidate < ids.count else { return true }
+            targetIndex = candidate
         } else {
-            managerSelection = [files[step >= 0 ? 0 : files.count - 1].id]
+            targetIndex = step >= 0 ? 0 : ids.count - 1
+        }
+        if let file = file(for: ids[targetIndex]) {
+            managerSelection = [file.id]
         }
         return true
     }

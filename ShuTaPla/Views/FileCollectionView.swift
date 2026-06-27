@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The Manager center file browser, shared by the list and gallery presentations.
-//  Both show the active scope's filtered files (`AppState.managerFiles`) with the same
+//  Both show the active scope's filtered files (`AppState.managerFileIDs`) with the same
 //  interactions — click / shift-click / cmd-click selection, double-click to play,
 //  inline rename, a per-item context menu, and keyboard-selection auto-scroll —
 //  differing only in layout (a divided `LazyVStack` of rows vs a `LazyVGrid` of
@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import AppKit
 
 /// Which presentation the shared browser draws.
@@ -72,7 +73,7 @@ struct FileCollectionView<Cell: View>: View {
     /// edge is stable under vertical scroll.
     private let gridSpace = "fileGrid"
 
-    @State private var anchor: UUID?
+    @State private var anchor: PersistentIdentifier?
     @State private var renamingID: UUID?
     @State private var draftName = ""
     // A mouse click already targets a visible item, so the auto-scroll that keeps the
@@ -93,30 +94,37 @@ struct FileCollectionView<Cell: View>: View {
                 switch layout {
                 case .list:
                     LazyVStack(spacing: 0) {
-                        ForEach(visibleFiles) { file in
-                            item(file)
-                            Divider()
+                        // The lazy container realizes only visible rows, so each `file(for:)`
+                        // resolves just an on-screen identifier — the whole sequence is never
+                        // materialized.
+                        ForEach(visibleFileIDs, id: \.self) { id in
+                            if let file = appState.file(for: id) {
+                                item(file)
+                                Divider()
+                            }
                         }
                     }
                 case .gallery:
                     LazyVGrid(columns: columns, spacing: FileCollectionLayout.gallerySpacing) {
-                        ForEach(visibleFiles) { file in
-                            item(file)
-                                // Pin each tile to the top of its grid row so cells with
-                                // one- and two-line captions line up at the thumbnail
-                                // rather than centering against each other.
-                                .frame(maxHeight: .infinity, alignment: .top)
-                                // Publish this cell's leading edge so the live column
-                                // count can be measured from the real layout. Vertical
-                                // scroll doesn't move it, so the set of edges is stable.
-                                .background {
-                                    GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: GalleryCellMinXKey.self,
-                                            value: [geo.frame(in: .named(gridSpace)).minX]
-                                        )
+                        ForEach(visibleFileIDs, id: \.self) { id in
+                            if let file = appState.file(for: id) {
+                                item(file)
+                                    // Pin each tile to the top of its grid row so cells with
+                                    // one- and two-line captions line up at the thumbnail
+                                    // rather than centering against each other.
+                                    .frame(maxHeight: .infinity, alignment: .top)
+                                    // Publish this cell's leading edge so the live column
+                                    // count can be measured from the real layout. Vertical
+                                    // scroll doesn't move it, so the set of edges is stable.
+                                    .background {
+                                        GeometryReader { geo in
+                                            Color.clear.preference(
+                                                key: GalleryCellMinXKey.self,
+                                                value: [geo.frame(in: .named(gridSpace)).minX]
+                                            )
+                                        }
                                     }
-                                }
+                            }
                         }
                     }
                     .padding(FileCollectionLayout.gallerySpacing)
@@ -124,7 +132,7 @@ struct FileCollectionView<Cell: View>: View {
             }
             .coordinateSpace(name: gridSpace)
             .overlay {
-                if visibleFiles.isEmpty {
+                if visibleFileIDs.isEmpty {
                     ContentUnavailableView("No Files", systemImage: "doc")
                 }
             }
@@ -190,16 +198,17 @@ struct FileCollectionView<Cell: View>: View {
 
     // MARK: - Data
 
-    /// The active scope's filtered, sorted files, cached on `AppState` and kept in sync
-    /// with the tag/service filter.
-    private var visibleFiles: [PlaylistFile] {
-        appState.managerFiles
+    /// The active scope's filtered, sorted file identifiers, derived store-side and resolved
+    /// row-by-row by the lazy containers above.
+    private var visibleFileIDs: [PersistentIdentifier] {
+        appState.managerFileIDs
     }
 
-    /// The files a context-menu action targets: the multi-selection when the clicked
-    /// item is part of it, otherwise just that item.
+    /// The files a context-menu action targets: the multi-selection when the clicked item is
+    /// part of it, otherwise just that item. `managerSelectionFiles()` is already the visible
+    /// selection, so passing it as `visible` resolves only the selection, not the whole list.
     private func targets(for file: PlaylistFile) -> [PlaylistFile] {
-        FileSelection.actionTargets(for: file, selection: appState.managerSelection, visible: visibleFiles)
+        FileSelection.actionTargets(for: file, selection: appState.managerSelection, visible: appState.managerSelectionFiles())
     }
 
     // MARK: - Selection
@@ -220,9 +229,10 @@ struct FileCollectionView<Cell: View>: View {
         // so a shift/cmd released a few milliseconds early would otherwise downgrade a
         // range/toggle click to a plain select and collapse the multi-selection.
         FileSelection.apply(
-            click: file.id,
+            click: file,
             modifiers: NSApp.currentEvent?.modifierFlags ?? [],
-            in: visibleFiles,
+            ids: visibleFileIDs,
+            uuid: { appState.file(for: $0)?.id },
             selection: &appState.managerSelection,
             anchor: &anchor
         )

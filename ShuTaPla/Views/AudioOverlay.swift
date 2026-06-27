@@ -28,12 +28,11 @@ struct AudioOverlay: View {
     /// The audio channel's wiring for the shared library surface: lists audio playlists,
     /// plays on select, and routes deletes/rename errors to the audio alerts the overlay hosts.
     private var audioContext: LibraryContext {
-        let files = appState.audioChannelFiles
-        return LibraryContext(
+        LibraryContext(
             mediaType: .audio,
             activePlaylist: activePlaylist,
-            files: files,
-            currentFile: appState.currentAudioFile(in: files),
+            fileIDs: appState.audioChannelFileIDs,
+            currentFile: appState.currentAudioFile,
             scrollTrigger: appState.audioScrollToken,
             tagAutoFocus: false,
             onSelectPlaylist: { appState.playOnAudioChannel($0) },

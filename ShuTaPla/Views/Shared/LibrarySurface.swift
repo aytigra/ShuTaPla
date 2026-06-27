@@ -22,8 +22,8 @@ struct LibraryContext {
     let mediaType: MediaType
     /// The playlist the surface acts on (highlighted in the selector, source of the file list).
     let activePlaylist: Playlist?
-    /// The active playlist's filtered, display-ordered files.
-    let files: [PlaylistFile]
+    /// The active playlist's filtered, display-ordered file identifiers, resolved row-by-row.
+    let fileIDs: [PersistentIdentifier]
     /// The current track, selected in the list and shown in the tag column.
     let currentFile: PlaylistFile?
     /// Bumped/changed when the file list should re-center on `currentFile` (a playlist switch).
@@ -140,7 +140,7 @@ struct LibrarySurface: View {
                     .zIndex(1)
             }
             Divider()
-            if context.files.isEmpty {
+            if context.fileIDs.isEmpty {
                 emptyFiles
             } else {
                 fileList
@@ -166,9 +166,13 @@ struct LibrarySurface: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(context.files) { file in
-                        fileRow(file).id(file.id)
-                        Divider()
+                    // The lazy container resolves only on-screen identifiers, so a large list
+                    // never materializes at once.
+                    ForEach(context.fileIDs, id: \.self) { id in
+                        if let file = appState.file(for: id) {
+                            fileRow(file).id(file.id)
+                            Divider()
+                        }
                     }
                 }
             }
