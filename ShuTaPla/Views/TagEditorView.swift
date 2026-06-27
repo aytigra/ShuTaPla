@@ -148,9 +148,9 @@ struct TagEditorView: View {
     /// from the first file.
     private var commonTags: [String] {
         guard let first = editableFiles.first else { return [] }
-        var common = first.tags
+        var common = first.tagNames
         for file in editableFiles.dropFirst() {
-            let lower = Set(file.tags.map { $0.lowercased() })
+            let lower = Set(file.tagNames.map { $0.lowercased() })
             common = common.filter { lower.contains($0.lowercased()) }
         }
         return common

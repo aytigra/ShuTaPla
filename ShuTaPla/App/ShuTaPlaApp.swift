@@ -23,6 +23,7 @@ struct ShuTaPlaApp: App {
         let schema = Schema([
             Playlist.self,
             PlaylistFile.self,
+            Tag.self,
             AppStateModel.self,
             GlobalSettings.self,
         ])

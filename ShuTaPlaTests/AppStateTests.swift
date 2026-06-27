@@ -17,7 +17,7 @@ import AVFoundation
 
 @MainActor
 private func makeContainer() throws -> ModelContainer {
-    let schema = Schema([Playlist.self, PlaylistFile.self, AppStateModel.self, GlobalSettings.self])
+    let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return try ModelContainer(for: schema, configurations: [config])
 }
@@ -49,11 +49,12 @@ private func addFile(
     in context: ModelContext
 ) -> PlaylistFile {
     let file = PlaylistFile(
-        relativePath: name, fileName: name, tags: tags,
+        relativePath: name, fileName: name,
         taggingStatus: status, isSkipped: skipped, sortOrder: order
     )
     file.playlist = playlist
     context.insert(file)
+    file.tags = context.tags(named: tags)
     return file
 }
 
@@ -489,7 +490,7 @@ struct AppStateTests {
         #expect(error == nil)
         #expect(file.fileName == "new [beach].mp4")
         #expect(file.relativePath == "new [beach].mp4")
-        #expect(file.tags == ["beach"])
+        #expect(file.tagNames == ["beach"])
         #expect(file.taggingStatus == .valid)
     }
 
@@ -695,7 +696,7 @@ struct AppStateTests {
         #expect(error == nil)
         #expect(a.fileName == "a [beach].mp4")
         #expect(b.fileName == "b [beach].mp4")
-        #expect(a.tags == ["beach"])
+        #expect(a.tagNames == ["beach"])
         #expect(playlist.tagFrequency["beach"] == 2)
     }
 
@@ -733,8 +734,8 @@ struct AppStateTests {
         let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
 
         #expect(error == nil)
-        #expect(a.tags == ["shore"])
-        #expect(b.tags == ["shore"])
+        #expect(a.tagNames == ["shore"])
+        #expect(b.tagNames == ["shore"])
         #expect(playlist.tagFrequency["shore"] == 2)
         #expect(playlist.tagFrequency["beach"] == nil)
     }
@@ -1763,8 +1764,8 @@ struct AppStateTests {
         let error = await appState.addTag("jazz", to: [t1, t2])
 
         #expect(error == nil)
-        #expect(t1.tags == ["jazz"])
-        #expect(t2.tags == ["jazz"])
+        #expect(t1.tagNames == ["jazz"])
+        #expect(t2.tagNames == ["jazz"])
         #expect(audio.tagFrequency["jazz"] == 2)
     }
 

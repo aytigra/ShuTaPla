@@ -589,7 +589,6 @@ final class AppState {
             let file = PlaylistFile(
                 relativePath: scanned.relativePath,
                 fileName: scanned.fileName,
-                tags: scanned.tags,
                 taggingStatus: scanned.taggingStatus,
                 isSkipped: scanned.mediaType != mediaType,
                 sortOrder: index
@@ -597,6 +596,7 @@ final class AppState {
             file.cloudStatus = scanned.cloudStatus
             file.playlist = playlist
             modelContext.insert(file)
+            file.tags = modelContext.tags(named: scanned.tags)
         }
         rebuildTagFrequency(playlist)
 
@@ -826,7 +826,6 @@ final class AppState {
             let file = PlaylistFile(
                 relativePath: scanned.relativePath,
                 fileName: scanned.fileName,
-                tags: scanned.tags,
                 taggingStatus: scanned.taggingStatus,
                 isSkipped: scanned.mediaType != playlist.mediaType,
                 sortOrder: nextOrder
@@ -834,6 +833,7 @@ final class AppState {
             file.cloudStatus = scanned.cloudStatus
             file.playlist = playlist
             modelContext.insert(file)
+            file.tags = modelContext.tags(named: scanned.tags)
             nextOrder += 1
         }
 
@@ -847,7 +847,7 @@ final class AppState {
     private func rebuildTagFrequency(_ playlist: Playlist) {
         var frequency: [String: Int] = [:]
         for file in playlist.files where !file.isSkipped {
-            for tag in file.tags { frequency[tag, default: 0] += 1 }
+            for tag in file.tags { frequency[tag.name, default: 0] += 1 }
         }
         playlist.tagFrequency = frequency
     }
@@ -894,7 +894,7 @@ final class AppState {
         file.fileName = finalName
         file.relativePath = parent.isEmpty ? finalName : "\(parent)/\(finalName)"
         let (tags, status) = TagParser.fields(for: finalName)
-        file.tags = tags
+        file.tags = modelContext.tags(named: tags)
         file.taggingStatus = status
         return nil
     }
@@ -1330,7 +1330,7 @@ final class AppState {
         // files) — a target tag carried solely by a skipped/invalid file is still a tag the
         // rename would silently merge onto.
         let collides = playlist.files.contains { file in
-            file.tags.contains { TagParser.sameTag($0, newTag) && !TagParser.sameTag($0, oldTag) }
+            file.tags.contains { TagParser.sameTag($0.name, newTag) && !TagParser.sameTag($0.name, oldTag) }
         }
         if collides { return "A tag named “\(newTag)” already exists." }
         let error = await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }

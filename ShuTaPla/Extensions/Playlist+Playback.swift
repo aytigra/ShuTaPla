@@ -46,7 +46,7 @@ extension Playlist {
             } else if skipped {
                 keep = false
             } else if let selected {
-                keep = Self.tagsMatch(Set(file.tags.map { $0.lowercased() }), selected: selected, mode: mode)
+                keep = Self.tagsMatch(Set(file.tags.map(\.normalizedName)), selected: selected, mode: mode)
             } else {
                 keep = true
             }
@@ -78,7 +78,7 @@ extension Playlist {
         let selected = Set(filterState.selectedTags.map { $0.lowercased() })
         let mode = filterState.filterMode
         return files.contains { file in
-            !file.isSkipped && Self.tagsMatch(Set(file.tags.map { $0.lowercased() }), selected: selected, mode: mode)
+            !file.isSkipped && Self.tagsMatch(Set(file.tags.map(\.normalizedName)), selected: selected, mode: mode)
         }
     }
 

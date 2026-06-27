@@ -17,7 +17,7 @@ import SwiftData
 struct PlaylistPlaybackTests {
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, AppStateModel.self, GlobalSettings.self])
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -28,11 +28,12 @@ struct PlaylistPlaybackTests {
         skipped: Bool = false, order: Int, to playlist: Playlist, in context: ModelContext
     ) -> PlaylistFile {
         let file = PlaylistFile(
-            relativePath: name, fileName: name, tags: tags,
+            relativePath: name, fileName: name,
             taggingStatus: status, isSkipped: skipped, sortOrder: order
         )
         file.playlist = playlist
         context.insert(file)
+        file.tags = context.tags(named: tags)
         return file
     }
 

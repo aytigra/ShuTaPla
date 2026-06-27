@@ -25,7 +25,7 @@ import SwiftData
     // MARK: - Fixtures
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, AppStateModel.self, GlobalSettings.self])
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -55,11 +55,12 @@ import SwiftData
         for (index, file) in files.enumerated() {
             let model = PlaylistFile(
                 relativePath: file.name, fileName: file.name,
-                tags: file.tags, taggingStatus: file.tags.isEmpty ? .untagged : .valid,
+                taggingStatus: file.tags.isEmpty ? .untagged : .valid,
                 sortOrder: index
             )
             model.playlist = playlist
             context.insert(model)
+            model.tags = context.tags(named: file.tags)
         }
         return playlist
     }

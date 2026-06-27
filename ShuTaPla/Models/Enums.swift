@@ -67,6 +67,25 @@ nonisolated enum TaggingStatus: String, Codable, Sendable {
     case valid
     case untagged
     case invalid
+
+    /// Stable integer discriminator stored on `PlaylistFile` so triage filters can be
+    /// expressed as a `#Predicate` — which can compare a scalar column but not capture the
+    /// enum itself ("Captured/constant values of type 'TaggingStatus' are not supported").
+    var code: Int {
+        switch self {
+        case .valid: return 0
+        case .untagged: return 1
+        case .invalid: return 2
+        }
+    }
+
+    init(code: Int) {
+        switch code {
+        case 0: self = .valid
+        case 2: self = .invalid
+        default: self = .untagged
+        }
+    }
 }
 
 /// Per-playlist persisted playback state.

@@ -19,6 +19,7 @@ struct ModelTests {
         let schema = Schema([
             Playlist.self,
             PlaylistFile.self,
+            ShuTaPla.Tag.self,
             AppStateModel.self,
             GlobalSettings.self,
         ])
@@ -42,13 +43,13 @@ struct ModelTests {
         let file = PlaylistFile(
             relativePath: "sunset [beach sunny].jpg",
             fileName: "sunset [beach sunny].jpg",
-            tags: ["beach", "sunny"],
             taggingStatus: .valid,
             sortOrder: 0
         )
         file.playlist = playlist
         playlist.files = [file]
         context.insert(playlist)
+        file.tags = context.tags(named: ["beach", "sunny"])
         try context.save()
 
         let fetched = try context.fetch(FetchDescriptor<Playlist>())
@@ -58,7 +59,7 @@ struct ModelTests {
         #expect(stored.mediaType == .image)
         #expect(stored.sortOrder == 3)
         #expect(stored.files.count == 1)
-        #expect(stored.files.first?.tags == ["beach", "sunny"])
+        #expect(Set(stored.files.first?.tags.map(\.normalizedName) ?? []) == ["beach", "sunny"])
         #expect(stored.files.first?.playlist?.id == stored.id)
     }
 

@@ -21,10 +21,23 @@ final class PlaylistFile {
     /// Just the filename component (with extension).
     var fileName: String = ""
 
-    /// Tags parsed from the filename, cached for filtering.
-    var tags: [String] = []
+    /// Tags carried by this file — a shared, normalized relationship so the tag filter is a
+    /// store-side `#Predicate`. Mirrors the filename's parsed tokens; populated on scan/rename.
+    @Relationship(inverse: \Tag.files) var tags: [Tag] = []
 
-    var taggingStatus: TaggingStatus = TaggingStatus.untagged
+    /// Predicate-queryable discriminator for `taggingStatus`. `taggingStatus` is the API.
+    var taggingStatusCode: Int = TaggingStatus.untagged.code
+
+    /// The parse result for this file's filename, backed by the scalar discriminator column.
+    var taggingStatus: TaggingStatus {
+        get { TaggingStatus(code: taggingStatusCode) }
+        set { taggingStatusCode = newValue.code }
+    }
+
+    /// The tag tokens' display names, in filename order — the source of truth for display.
+    /// The `tags` relationship is an unordered set holding the same tokens (for store-side
+    /// matching); the filename fixes their order, so chips render the same every time.
+    var tagNames: [String] { TagParser.fields(for: fileName).0 }
 
     /// Unsupported / other-media-type file. Kept for the skipped-files filter,
     /// never played or shuffled in.
@@ -46,10 +59,11 @@ final class PlaylistFile {
     /// Runtime-only iCloud availability — derived from disk, never persisted.
     @Transient var cloudStatus: CloudStatus = .local
 
+    /// Tags are a relationship resolved against a `ModelContext`, so they're assigned after
+    /// insert (via `ModelContext.tags(named:)`) rather than passed here.
     init(
         relativePath: String,
         fileName: String,
-        tags: [String] = [],
         taggingStatus: TaggingStatus = .untagged,
         isSkipped: Bool = false,
         sortOrder: Int = 0
@@ -57,7 +71,6 @@ final class PlaylistFile {
         self.id = UUID()
         self.relativePath = relativePath
         self.fileName = fileName
-        self.tags = tags
         self.taggingStatus = taggingStatus
         self.isSkipped = isSkipped
         self.sortOrder = sortOrder

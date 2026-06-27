@@ -62,8 +62,8 @@ struct FileRowView: View {
         HStack(spacing: 8) {
             fileName
             Spacer(minLength: 8)
-            if !file.tags.isEmpty {
-                TagChips(tags: file.tags)
+            if !file.tagNames.isEmpty {
+                TagChips(tags: file.tagNames)
             }
             if playlist.mediaType != .image {
                 durationColumn
@@ -82,9 +82,9 @@ struct FileRowView: View {
                     durationColumn
                 }
             }
-            if !file.tags.isEmpty {
+            if !file.tagNames.isEmpty {
                 FlowLayout(spacing: 4, lineSpacing: 4) {
-                    ForEach(file.tags, id: \.self) { TagChip(tag: $0) }
+                    ForEach(file.tagNames, id: \.self) { TagChip(tag: $0) }
                 }
             }
         }

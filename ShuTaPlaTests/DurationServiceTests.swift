@@ -37,7 +37,7 @@ import SwiftData
 
     /// A fresh in-memory container with the full app schema.
     @MainActor private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, AppStateModel.self, GlobalSettings.self])
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [configuration])
     }

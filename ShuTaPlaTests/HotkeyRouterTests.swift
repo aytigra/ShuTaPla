@@ -28,7 +28,7 @@ import AppKit
     // MARK: - Fixtures
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, AppStateModel.self, GlobalSettings.self])
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -53,7 +53,7 @@ import AppKit
         context.insert(playlist)
         for (index, name) in files.enumerated() {
             let file = PlaylistFile(
-                relativePath: name, fileName: name, tags: [],
+                relativePath: name, fileName: name,
                 taggingStatus: .untagged, sortOrder: index
             )
             file.playlist = playlist
