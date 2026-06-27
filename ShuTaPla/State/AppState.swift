@@ -166,6 +166,36 @@ final class AppState {
     /// into view when a playlist is (re-)selected while the overlay is already open.
     private(set) var audioScrollToken = 0
 
+    /// Bumped after every persisted mutation that can change a file sequence's membership or
+    /// order. The store-side file accessors (`managerFiles`, `visualChannelFiles`,
+    /// `audioChannelFiles`) read it so SwiftUI re-derives them on the change: their fetches use
+    /// `includePendingChanges: false` and aren't tracked by Observation on their own, unlike a
+    /// walk over the `files` relationship would be.
+    private(set) var sequenceVersion = 0
+
+    /// Saves pending changes and bumps `sequenceVersion`, so the store-side derivations (which
+    /// ignore pending changes) see the change and re-derive. Mutation paths call this once they
+    /// have reshaped file membership, order, tags, or triage/filter state — and before any
+    /// coordinator reconcile/advance that re-derives a sequence.
+    private func persistAndRefresh() {
+        try? modelContext.save()
+        sequenceVersion &+= 1
+    }
+
+    /// The files of `playlist` under its effective filter, derived store-side as ordered
+    /// identifiers and resolved to models. Reads `sequenceVersion` so a mutation re-runs it.
+    private func filteredFiles(of playlist: Playlist) -> [PlaylistFile] {
+        _ = sequenceVersion
+        return modelContext.displayFiles(of: playlist)
+    }
+
+    /// `playlist`'s playable files (skipped files dropped), derived store-side. Reads
+    /// `sequenceVersion` so a mutation re-runs it.
+    private func playableFiles(of playlist: Playlist) -> [PlaylistFile] {
+        _ = sequenceVersion
+        return modelContext.playbackFiles(of: playlist)
+    }
+
     /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
     /// a row's Delete command). While non-empty the center panel shows the confirmation
     /// alert, which owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
@@ -251,12 +281,12 @@ final class AppState {
     /// transport list (no triage toggles), and a track the engine won't play has no place in it.
     /// Under the Skipped filter the list is therefore empty. The service filter set in Manager
     /// still applies (e.g. Untagged narrows the channel to its untagged playable tracks).
-    var audioChannelFiles: [PlaylistFile] { audioChannelPlaylist?.playbackSequence ?? [] }
+    var audioChannelFiles: [PlaylistFile] { audioChannelPlaylist.map(playableFiles(of:)) ?? [] }
 
     /// The visual channel playlist's display-ordered files — the Files & Tags overlay's list.
     /// This is the *display* sequence (it keeps skipped files under the Skipped filter), because
     /// the Files & Tags overlay is an editing surface where skipped rows are triaged and un-skipped.
-    var visualChannelFiles: [PlaylistFile] { coordinator.liveVisualPlaylist?.displaySequence ?? [] }
+    var visualChannelFiles: [PlaylistFile] { coordinator.liveVisualPlaylist.map(filteredFiles(of:)) ?? [] }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
     /// Resolved from the playlist's persisted `currentFileID` against its file list, not the
@@ -410,7 +440,7 @@ final class AppState {
         managedPlaylist = lastManagedPlaylist(for: scope)
         managerSelection = []
         if let playlist = managedPlaylist, let id = playlist.currentFileID,
-           playlist.displaySequence.contains(where: { $0.id == id }) {
+           filteredFiles(of: playlist).contains(where: { $0.id == id }) {
             managerSelection = [id]
         }
         scrollSelectionToken += 1
@@ -464,7 +494,7 @@ final class AppState {
     // the single managed playlist, whatever its type.
 
     /// The managed playlist's display-ordered files under its effective filter.
-    var managerFiles: [PlaylistFile] { managedPlaylist?.displaySequence ?? [] }
+    var managerFiles: [PlaylistFile] { managedPlaylist.map(filteredFiles(of:)) ?? [] }
 
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
     var managerScrollToken: Int { scrollSelectionToken }
@@ -599,6 +629,9 @@ final class AppState {
             file.tags = modelContext.tags(named: scanned.tags)
         }
         rebuildTagFrequency(playlist)
+        // Persist the inserted files before anything derives a sequence from them: a
+        // player-mode creation starts playback (which reads the playback sequence) right below.
+        persistAndRefresh()
 
         // Player-mode creation comes from a playback overlay (the visual Files & Tags or the
         // audio overlay) and starts the new playlist playing; Manager-mode creation loads it
@@ -645,7 +678,7 @@ final class AppState {
         // playlist snaps the highlight back to the playing file — the one way to do so without
         // leaving it. Skipped when the resume file is filtered out (or none has played yet).
         if let currentID = playlist.currentFileID,
-           playlist.displaySequence.contains(where: { $0.id == currentID }) {
+           filteredFiles(of: playlist).contains(where: { $0.id == currentID }) {
             managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
@@ -750,6 +783,7 @@ final class AppState {
         modelContext.delete(playlist)
         deletingPlaylistIDs.remove(id)
         compactSortOrder(for: mediaType)
+        persistAndRefresh()
     }
 
     /// Reorders the playlists of one section. `ordered` is the section's current
@@ -838,6 +872,7 @@ final class AppState {
         }
 
         rebuildTagFrequency(playlist)
+        persistAndRefresh()
         // A re-scan can drop either channel's playing file; advance off it just like a delete
         // does, so neither engine holds a file that's no longer in the playlist.
         coordinator.reconcile(playlistThatChanged: playlist)
@@ -870,6 +905,7 @@ final class AppState {
 
         if let error = await applyRename(file, to: newName, in: folderURL) { return error }
         rebuildTagFrequency(playlist)
+        persistAndRefresh()
         return nil
     }
 
@@ -923,6 +959,7 @@ final class AppState {
             modelContext.delete(file)
         }
         rebuildTagFrequency(playlist)
+        persistAndRefresh()
         // Advance whichever channel was playing this playlist off a trashed track, so the
         // engine never holds a file that's no longer in the playlist. Covers every delete
         // entry point (Manager list, Files & Tags overlay, audio overlay) in one place.
@@ -1007,6 +1044,7 @@ final class AppState {
         let skipped = playlist.files.filter(\.isSkipped)
         for (index, file) in playable.enumerated() { file.sortOrder = index }
         for (offset, file) in skipped.enumerated() { file.sortOrder = playable.count + offset }
+        persistAndRefresh()
     }
 
     /// Reveals a file in the Finder.
@@ -1335,6 +1373,7 @@ final class AppState {
         if collides { return "A tag named “\(newTag)” already exists." }
         let error = await editTags(playlist.files) { TagParser.renameTag(from: oldTag, to: newTag, in: $0) }
         rewriteTagInFilters(playlist) { TagParser.sameTag($0, oldTag) ? newTag : $0 }
+        persistAndRefresh()   // the filter rewrite changes the effective filter
         return error
     }
 
@@ -1343,6 +1382,7 @@ final class AppState {
     func removeTagAcrossPlaylist(_ playlist: Playlist, tag: String) async -> String? {
         let error = await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
         removeTagFromFilters(playlist, tag: tag)
+        persistAndRefresh()   // the filter rewrite changes the effective filter
         return error
     }
 
@@ -1384,6 +1424,7 @@ final class AppState {
             }
         }
         rebuildTagFrequency(playlist)
+        persistAndRefresh()
         return firstError
     }
 
@@ -1458,6 +1499,7 @@ final class AppState {
     /// live channel and its playing file fell out of the new filter, advance the engine to a file
     /// that still matches. Every other surface re-derives from the model on its own.
     private func filterChanged(on playlist: Playlist) {
+        persistAndRefresh()   // the surfaces re-derive store-side; reconcile reads the sequence too
         coordinator.reconcile(playlistThatChanged: playlist)
     }
 

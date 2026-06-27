@@ -62,6 +62,9 @@ import SwiftData
             context.insert(model)
             model.tags = context.tags(named: file.tags)
         }
+        // The coordinator derives its sequences store-side (ignoring pending changes), so the
+        // seeded files must be persisted before it plays them.
+        try? context.save()
         return playlist
     }
 
@@ -205,7 +208,7 @@ import SwiftData
             files: [("1.mp4", []), ("2.mp4", []), ("3.mp4", [])], in: context
         )
         try context.save()
-        let files = playlist.playbackSequence
+        let files = context.playbackFiles(of: playlist)
         #expect(files.count == 3)
 
         let coordinator = makeCoordinator(BookmarkService())
@@ -226,7 +229,7 @@ import SwiftData
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
         try context.save()
 
-        let sequence = playlist.playbackSequence
+        let sequence = context.playbackFiles(of: playlist)
         #expect(sequence.map(\.fileName) == ["1.mp4", "3.mp4"])   // city file filtered out
 
         let coordinator = makeCoordinator(BookmarkService())
@@ -325,9 +328,10 @@ import SwiftData
         // Filter to "b" — the playing "1.jpg" (tagged "a") is excluded, so reconciling
         // jumps to the first file that still matches.
         image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: image)
 
-        let matching = image.playbackSequence
+        let matching = context.playbackFiles(of: image)
         #expect(matching.map(\.fileName) == ["2.jpg", "3.jpg"])
         #expect(coordinator.visualCurrentFile?.id == matching.first?.id)
         #expect(coordinator.visualCurrentFile?.id != firstID)
@@ -351,6 +355,7 @@ import SwiftData
 
         // The playing file still matches the new filter, so reconciling leaves it put.
         image.filterState = FilterState(selectedTags: ["a"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: image)
         #expect(coordinator.visualCurrentFile?.id == currentID)
     }
@@ -375,9 +380,10 @@ import SwiftData
         // player shows its "no files" placeholder), but the engine's current file is cleared
         // so a later advance/seek can't act on a file no longer in the playlist.
         image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: image)
 
-        #expect(image.playbackSequence.isEmpty)
+        #expect(context.playbackFiles(of: image).isEmpty)
         #expect(coordinator.liveVisualPlaylist === image)   // still in Player mode
         #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
     }
@@ -426,7 +432,7 @@ import SwiftData
         let folder = try makeFolder(["1.jpg", "2.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
         try context.save()
-        let frames = image.playbackSequence
+        let frames = context.playbackFiles(of: image)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -458,7 +464,7 @@ import SwiftData
             files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
         )
         try context.save()
-        let files = image.playbackSequence
+        let files = context.playbackFiles(of: image)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -479,7 +485,7 @@ import SwiftData
         let folder = try makeFolder(["1.jpg", "2.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
         try context.save()
-        let files = image.playbackSequence
+        let files = context.playbackFiles(of: image)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -538,7 +544,7 @@ import SwiftData
         let folder = try makeFolder(["a1.mp3", "a2.mp3"])
         let audio = makePlaylist(.audio, folder: folder, files: [("a1.mp3", []), ("a2.mp3", [])], in: context)
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -565,9 +571,10 @@ import SwiftData
         let firstID = coordinator.audioCurrentFile?.id
 
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: audio)
 
-        let matching = audio.playbackSequence
+        let matching = context.playbackFiles(of: audio)
         #expect(matching.map(\.fileName) == ["2.mp3", "3.mp3"])
         #expect(coordinator.audioCurrentFile?.id == matching.first?.id)
         #expect(coordinator.audioCurrentFile?.id != firstID)
@@ -587,13 +594,14 @@ import SwiftData
         #expect(coordinator.audioCurrentFile != nil)
 
         audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: audio)
 
         // Unlike the visual channel (which stays live and empty so the player can show a "no files"
         // placeholder and the user can lift the filter from there), the audio channel has no such
         // placeholder, so an emptied audio sequence stops the playlist outright — easy to restart
         // from the same overlay.
-        #expect(audio.playbackSequence.isEmpty)
+        #expect(context.playbackFiles(of: audio).isEmpty)
         #expect(coordinator.liveAudioPlaylist == nil)           // the channel stops
         #expect(audio.playbackState == .stopped)
         #expect(coordinator.audioCurrentFile == nil)
@@ -605,7 +613,7 @@ import SwiftData
         let folder = try makeFolder(["1.mp3", "2.mp3"])
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -674,6 +682,7 @@ import SwiftData
         // A filter drops the paused current track: reconcile jumps to the survivor, but the
         // channel must stay paused — loading the new file can't silently resume playback.
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        try context.save()
         coordinator.reconcile(playlistThatChanged: audio)
 
         #expect(coordinator.audioCurrentFile?.fileName == "2.mp3")   // jumped to the survivor
@@ -751,7 +760,7 @@ import SwiftData
             files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
         )
         try context.save()
-        let files = image.playbackSequence
+        let files = context.playbackFiles(of: image)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -791,7 +800,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 30
         audio.currentFileID = tracks[0].id
 
@@ -810,7 +819,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // No per-playlist preference and the global default is off → no resume.
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 30
         audio.currentFileID = tracks[0].id
 
@@ -832,7 +841,7 @@ import SwiftData
         // being Stopped.
         audio.playbackState = .playing
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 42
         audio.currentFileID = tracks[0].id
 
@@ -852,7 +861,7 @@ import SwiftData
         // A playlist paused at quit returns paused at its file and offset, with no setting needed.
         audio.playbackState = .paused
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 17
         audio.currentFileID = tracks[0].id
 
@@ -872,7 +881,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[1].lastPosition = 30
 
         let recorder = try RecordingLoadEngine()
@@ -892,7 +901,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // Persistence off (no preference, default off).
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[1].lastPosition = 30
 
         let recorder = try RecordingLoadEngine()
@@ -910,7 +919,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[1].lastPosition = 45
 
         let recorder = try RecordingLoadEngine()
@@ -929,7 +938,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -949,7 +958,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // Persistence off (no preference, default off).
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 99   // a sentinel the write replaces
 
         let coordinator = makeCoordinator(BookmarkService())
@@ -969,7 +978,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
 
         let coordinator = makeCoordinator(BookmarkService())
         defer { coordinator.shutdown() }
@@ -992,7 +1001,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = audio.playbackSequence
+        let tracks = context.playbackFiles(of: audio)
         tracks[0].lastPosition = 58
         audio.currentFileID = tracks[0].id
 

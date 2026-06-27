@@ -34,6 +34,20 @@ extension ModelContext {
         identifiers(matching: playbackPredicate(for: playlist))
     }
 
+    /// `displaySequence` resolved to models, in order — for callers that need the files
+    /// themselves (the Manager and overlay lists, a reconcile that inspects the current file).
+    /// This resolves every row, so a surface that shows only part of a large sequence should
+    /// hold the identifiers and resolve the visible rows lazily instead.
+    func displayFiles(of playlist: Playlist) -> [PlaylistFile] {
+        displaySequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
+    }
+
+    /// `playbackSequence` resolved to models, in order — what the coordinator walks to find the
+    /// next/previous file and what playback starts from.
+    func playbackFiles(of playlist: Playlist) -> [PlaylistFile] {
+        playbackSequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
+    }
+
     /// Whether `playbackSequence` would contain any file, answered with a `fetchCount` rather
     /// than building the sequence.
     func hasPlaybackFiles(in playlist: Playlist) -> Bool {

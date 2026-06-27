@@ -41,7 +41,7 @@ mpv is embedded as **libmpv** (`libmpv.dylib`), shipped inside the app bundle's 
 
 ## 3. Data model (SwiftData)
 
-Four `@Model` entities. `Playlist` owns its `PlaylistFile`s (`@Relationship`, cascade delete). `AppStateModel` and `GlobalSettings` are persisted singletons. Embedded preferences/filter/saved-search data are `Codable` value types stored inline, not separate entities.
+Five `@Model` entities. `Playlist` owns its `PlaylistFile`s (`@Relationship`, cascade delete). `Tag` is a normalized, shared entity each `PlaylistFile` references many-to-many. `AppStateModel` and `GlobalSettings` are persisted singletons. Embedded preferences/filter/saved-search data are `Codable` value types stored inline, not separate entities.
 
 ```
 GlobalSettings (singleton)   — default slideshow interval, file-position persistence, image fit mode
@@ -54,8 +54,11 @@ Playlist                     — name, folderBookmark (security-scoped), folderP
  ├── savedSearches: [SavedSearch]        — 10 most recent unique multi-tag searches
  ├── tagFrequency: [String: Int]         — per-playlist tag usage counts (drives dropdown order)
  └── files: [PlaylistFile]
-      └── relativePath, fileName, tags (parsed/cached), taggingStatus, isSkipped,
-          lastPosition?, duration?, sortOrder (shuffled order)
+      └── relativePath, fileName, tags: [Tag] (many-to-many), taggingStatusCode (scalar),
+          isSkipped, lastPosition?, duration?, sortOrder (shuffled order)
+
+Tag                          — normalizedName (lowercased, @Attribute(.unique)),
+                               name (first-seen casing), files: [PlaylistFile] (inverse)
 
 AppStateModel (singleton)    — lastManagedVideo/ImagePlaylistId, audioChannelPlaylistId,
                                managerScopeRaw, windowFrame
@@ -69,7 +72,8 @@ Singletons use a fetch-or-create pattern (fetch limit 1, insert defaults if abse
 - **Relative paths in `PlaylistFile`** — so moving the folder and refreshing the bookmark keeps file references valid.
 - **Security-scoped bookmarks** (`folderBookmark: Data`) — a plain path loses access after restart on sandboxed macOS. The app creates a bookmark on folder selection and starts/stops scoped access around use.
 - **Embedded value types** for preferences/filter/saved-searches — avoids a web of one-to-one relationships and makes cascade delete clean.
-- **Denormalized tags** — cached per-file (parsed arrays) and aggregated per-playlist (`tagFrequency`). Filenames remain the source of truth; the caches drive filtering and dropdown ordering. (Task 17 in `tasks/index.md` normalizes these into a queryable `Tag` model for large-playlist performance.)
+- **Normalized tags** — each `PlaylistFile` references shared `Tag` entities (deduped by lowercased `normalizedName`, with `name` keeping first-seen casing), so a tag filter is a store predicate over the relationship rather than a per-file Swift comparison. Filenames remain the source of truth: a scan/rename re-parses them through `TagParser` and resolves the strings to `Tag`s via `ModelContext.tags(named:)`, and `PlaylistFile.tagNames` (the chip display) derives from the filename so chip *order* is stable (the relationship is an unordered set). `tagFrequency` still aggregates per-playlist usage counts to drive dropdown ordering.
+- **`taggingStatus` as a stored scalar** (`taggingStatusCode: Int`, with a computed `taggingStatus` enum accessor) — a `#Predicate` can't capture the enum, so triage filters (untagged / invalid-tagging) compare the scalar instead.
 
 ---
 
@@ -82,7 +86,7 @@ Two layers: **persisted** SwiftData models (survive launches) and **runtime** `@
 `@MainActor @Observable`, holds the SwiftData model context and the playlist slots that drive the UI. Its defining design choices:
 
 - **Three independent slots, kept consistent by explicit load steps, never by deriving one from another:** the **managed slot** (`managedPlaylist`, what all of Manager binds to, any type), the **audio-channel slot** (`audioChannelPlaylist`, persistent), and the **visual channel** (owned by the coordinator). `lastManagedVideo/ImagePlaylist` let a scope switch pre-load each visual type's last-managed playlist; audio's memory *is* the audio-channel slot.
-- **Derives, never caches, filtered file lists.** The filter and current file are persisted per-playlist `@Model` state; the display-ordered list and current-file highlight are pure derivations (`Playlist.displaySequence` / `playbackSequence`, surfaced as `managerFiles` / `audioChannelFiles` / `visualChannelFiles`). Views re-derive on model change, so two slots pointing at the same `Playlist` stay consistent for free — no recompute-and-reconcile machinery.
+- **Derives filtered file lists store-side, never caches them.** The filter and current file are persisted per-playlist `@Model` state; the display/playback order is derived by the store from a `#Predicate` over the playlist's effective filter (`ModelContext.displaySequence(of:)` / `playbackSequence(of:)` in `Extensions/ModelContext+Sequence.swift`), returning ordered `[PersistentIdentifier]` via `fetchIdentifiers` (and counts via `fetchCount`) so a large playlist is never materialized whole. `AppState` surfaces these as `managerFiles` / `audioChannelFiles` / `visualChannelFiles` (resolving identifiers to models), and the coordinator walks `playbackFiles(of:)` for next/previous. Two slots pointing at the same `Playlist` stay consistent for free — no recompute-and-reconcile machinery. The fetches use `includePendingChanges: false`, so a mutation that reshapes membership/order saves before re-deriving (`AppState.persistAndRefresh()`), which also bumps an observed `sequenceVersion` the accessors read so SwiftUI re-derives (the store fetch isn't tracked by Observation the way a relationship walk was).
 - **Scope is only the sidebar's type filter**, not selection/filter/routing state (`managerScope: .image | .video | .audio`). `switchScope(to:)` sets the scope and pre-loads that scope's remembered playlist.
 - **One converged `select(_:)`** loads the picked playlist into the managed slot (and, for audio, into the audio channel, stopping whichever was live). Overlays keep play-on-select variants (`selectVisualPlaylistInPlayer`, `selectAudioPlaylist`).
 - **Filter edits write to the target playlist's persisted `filterState`**; surfaces re-derive. The one explicit side effect is the live-channel reconcile when an edit drops the file an engine is on.
@@ -246,7 +250,7 @@ Repo-root Xcode file-system-synchronized groups: `ShuTaPla/` (app source), `ShuT
 
 ```
 App/         ShuTaPlaApp (@main, scene, container), AppConstants (extension maps, thresholds)
-Models/      Playlist, PlaylistFile, AppStateModel, GlobalSettings (@Model);
+Models/      Playlist, PlaylistFile, Tag, AppStateModel, GlobalSettings (@Model);
              PlaylistPreferences, FilterState, SavedSearch (Codable); Enums
 State/       AppState, PlaybackCoordinator, OverlayManager, HotkeyRouter
 Services/    FileSystemService (actor), TagParser, BookmarkService,

@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 /// The audio transport, rendering only the controls actionable in the active audio
 /// playlist's current state — no dead buttons:
@@ -26,6 +27,7 @@ import SwiftUI
 struct AudioTransport: View {
     let playlist: Playlist
     @Environment(PlaybackCoordinator.self) private var coordinator
+    @Environment(AppState.self) private var appState
 
     @State private var showingVolume = false
 
@@ -34,6 +36,7 @@ struct AudioTransport: View {
     private var isLive: Bool { coordinator.liveAudioPlaylist === playlist }
 
     var body: some View {
+        let _ = appState.sequenceVersion   // re-derive the Play affordance when membership changes
         HStack(spacing: 4) {
             if isLive {
                 controlButton("backward.fill") { coordinator.previous(playlist) }
@@ -42,7 +45,7 @@ struct AudioTransport: View {
                 coordinator.playOrTogglePause(playlist)
             }
             // The skipped triage filter leaves no playable track, so starting playback is a no-op.
-            .disabled(playlist.playbackState != .playing && !playlist.hasPlaybackFiles)
+            .disabled(playlist.playbackState != .playing && !(playlist.modelContext?.hasPlaybackFiles(in: playlist) ?? false))
             if isLive {
                 controlButton("stop.fill") { coordinator.stop(playlist) }
                 controlButton("forward.fill") { coordinator.next(playlist) }

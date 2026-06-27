@@ -2,11 +2,10 @@
 //  SequenceStoreTests.swift
 //  ShuTaPlaTests
 //
-//  Task 17 (Stage B) — the store-side derivation on `ModelContext` returns the same order,
-//  membership, and counts as the in-memory `Playlist` computed properties, across no filter,
-//  each service filter, and tag AND/OR. Because the fetches use `includePendingChanges: false`,
-//  every scenario saves before deriving; a separate case pins that an unsaved insert is not
-//  yet visible.
+//  Task 17 (Stage B) — the store-side derivation on `ModelContext`: ordered display/playback
+//  identifiers and the triage counts, under no filter, each service filter, and tag AND/OR.
+//  The fetches use `includePendingChanges: false`, so every scenario saves before deriving; a
+//  separate case pins that an unsaved insert is not yet visible.
 //
 
 import Testing
@@ -58,41 +57,47 @@ struct SequenceStoreTests {
         return playlist
     }
 
-    /// Asserts the store-side derivation matches the in-memory computed properties for the
-    /// playlist's current filter.
-    private func expectParity(_ playlist: Playlist, in context: ModelContext) {
-        #expect(names(context.displaySequence(of: playlist), in: context)
-            == playlist.displaySequence.map(\.fileName))
-        #expect(names(context.playbackSequence(of: playlist), in: context)
-            == playlist.playbackSequence.map(\.fileName))
-        #expect(context.hasPlaybackFiles(in: playlist) == playlist.hasPlaybackFiles)
-
-        let stored = context.serviceFilterCounts(for: playlist)
-        let walked = playlist.serviceFilterCounts
-        #expect(stored.untagged == walked.untagged)
-        #expect(stored.invalidTagging == walked.invalidTagging)
-        #expect(stored.skipped == walked.skipped)
-    }
-
-    @Test func parityWithNoFilter() throws {
-        let container = try makeContainer()
-        let playlist = try seededPlaylist(in: container.mainContext)
-        expectParity(playlist, in: container.mainContext)
-    }
-
-    @Test func parityUnderEachServiceFilter() throws {
+    @Test func noFilterShowsNonSkippedInOrderWithCounts() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        for service in [ServiceFilter.untagged, .invalidTagging, .skipped] {
-            playlist.filterState.serviceFilter = service
-            try context.save()
-            expectParity(playlist, in: context)
-        }
+        let nonSkipped = ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg", "untagged.jpg", "invalid.jpg"]
+        #expect(names(context.displaySequence(of: playlist), in: context) == nonSkipped)
+        #expect(names(context.playbackSequence(of: playlist), in: context) == nonSkipped)
+        #expect(context.hasPlaybackFiles(in: playlist))
+
+        let counts = context.serviceFilterCounts(for: playlist)
+        #expect(counts.untagged == 1)
+        #expect(counts.invalidTagging == 1)
+        #expect(counts.skipped == 1)
     }
 
-    @Test func parityUnderTagOrFilter() throws {
+    @Test func eachServiceFilterDrivesTheSequence() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        playlist.filterState.serviceFilter = .untagged
+        try context.save()
+        #expect(names(context.displaySequence(of: playlist), in: context) == ["untagged.jpg"])
+        #expect(names(context.playbackSequence(of: playlist), in: context) == ["untagged.jpg"])
+        #expect(context.hasPlaybackFiles(in: playlist))
+
+        playlist.filterState.serviceFilter = .invalidTagging
+        try context.save()
+        #expect(names(context.displaySequence(of: playlist), in: context) == ["invalid.jpg"])
+        #expect(names(context.playbackSequence(of: playlist), in: context) == ["invalid.jpg"])
+        #expect(context.hasPlaybackFiles(in: playlist))
+
+        playlist.filterState.serviceFilter = .skipped
+        try context.save()
+        #expect(names(context.displaySequence(of: playlist), in: context) == ["skip.txt"])
+        #expect(context.playbackSequence(of: playlist).isEmpty)
+        #expect(!context.hasPlaybackFiles(in: playlist))
+    }
+
+    @Test func tagOrFilterMatchesAnySelectedTag() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
@@ -102,10 +107,9 @@ struct SequenceStoreTests {
         // OR matches any of beach/sunny: all three tagged files.
         #expect(names(context.displaySequence(of: playlist), in: context)
             == ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg"])
-        expectParity(playlist, in: context)
     }
 
-    @Test func parityUnderTagAndFilter() throws {
+    @Test func tagAndFilterRequiresEverySelectedTag() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
@@ -114,7 +118,6 @@ struct SequenceStoreTests {
         try context.save()
         // AND matches files carrying both tags: only the doubly-tagged file.
         #expect(names(context.displaySequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
-        expectParity(playlist, in: context)
     }
 
     @Test func unsavedInsertIsNotYetVisible() throws {

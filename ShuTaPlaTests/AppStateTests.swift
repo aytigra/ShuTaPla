@@ -55,6 +55,9 @@ private func addFile(
     file.playlist = playlist
     context.insert(file)
     file.tags = context.tags(named: tags)
+    // The Manager's file lists derive store-side (ignoring pending changes), so a seeded file
+    // must be persisted to appear in `managerFiles` and friends.
+    try? context.save()
     return file
 }
 

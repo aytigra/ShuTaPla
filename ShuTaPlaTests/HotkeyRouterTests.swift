@@ -59,6 +59,9 @@ import AppKit
             file.playlist = playlist
             context.insert(file)
         }
+        // The Manager's file lists derive store-side (ignoring pending changes), so the seeded
+        // files must be persisted to appear in `managerFiles`.
+        try? context.save()
         return playlist
     }
 

@@ -11,6 +11,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct PlayerView: View {
     @Environment(AppState.self) private var appState
@@ -132,8 +133,9 @@ struct PlayerView: View {
 
     /// Whether the visual playlist's filtered playback sequence is empty.
     private var visualHasNoFiles: Bool {
+        _ = appState.sequenceVersion   // re-derive when the playlist's membership changes
         guard let visual = coordinator.liveVisualPlaylist else { return false }
-        return !visual.hasPlaybackFiles
+        return !(visual.modelContext?.hasPlaybackFiles(in: visual) ?? false)
     }
 
     /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is

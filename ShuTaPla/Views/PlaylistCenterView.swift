@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct PlaylistCenterView: View {
     @Environment(AppState.self) private var appState
@@ -126,7 +127,8 @@ struct PlaylistCenterView: View {
     /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
-        let (untagged, invalid, skipped) = playlist.serviceFilterCounts
+        let _ = appState.sequenceVersion   // re-derive the counts when membership or triage changes
+        let (untagged, invalid, skipped) = playlist.modelContext?.serviceFilterCounts(for: playlist) ?? (0, 0, 0)
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {

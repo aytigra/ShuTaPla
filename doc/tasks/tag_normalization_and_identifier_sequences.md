@@ -87,13 +87,16 @@ Behavior is identical to today's after this stage; only storage shape changes.
 
 ### Stage B — store-side sequences via `fetchIdentifiers` / `fetchCount`
 
-- **`Extensions/ModelContext+Sequence.swift`** (new):
+- **`Extensions/ModelContext+Sequence.swift`**:
   - `displaySequence(of:) -> [PersistentIdentifier]` and `playbackSequence(of:)` via
-    `fetchIdentifiers(FetchDescriptor(predicate:, sortBy: [SortDescriptor(\.sortOrder)]),
-    includePendingChanges: false)`.
+    `fetchIdentifiers(FetchDescriptor(predicate:, sortBy: [SortDescriptor(\.sortOrder)]))` with
+    `includePendingChanges = false`.
   - `hasPlaybackFiles(in:) -> Bool` and `serviceFilterCounts(for:)` via `fetchCount`.
+  - `displayFiles(of:)` / `playbackFiles(of:)` resolve the identifiers to `[PlaylistFile]` for
+    callers that need the models (the coordinator, and the `AppState` accessors until Stage C
+    makes the views lazy).
   - One private `#Predicate<PlaylistFile>` builder from a playlist: scope by
-    `$0.playlist?.persistentModelID == pid`; triage via the `taggingStatusRaw` / `isSkipped`
+    `$0.playlist?.persistentModelID == pid`; triage via the `taggingStatusCode` / `isSkipped`
     scalars; tag filter over the relationship —
     - OR: `file.tags.contains { names.contains($0.normalizedName) }`
     - AND: `file.tags.filter { names.contains($0.normalizedName) }.count == required`,
@@ -103,14 +106,23 @@ Behavior is identical to today's after this stage; only storage shape changes.
       `allSatisfy` over a captured array whose body is itself a relationship subquery — so AND
       is one flat `SUBQUERY(tags, …).@count == required` instead.
 
-    where `names` is a captured `[String]` constant (which `#Predicate` allows).
-    `playbackSequence` is the display predicate AND `!isSkipped`.
-- **Retire `Playlist+Playback.swift`'s computed properties.** Call sites move from
-  `playlist.displaySequence` to `playlist.modelContext?.displaySequence(of: playlist) ?? []`
-  (`AppState` `managerFiles`/`visualChannelFiles`/`audioChannelFiles` and the
-  current-file/contains checks; `PlaybackCoordinator`).
-- **Save before derive.** Mutation paths (`filterChanged`, tag edits, `reshuffle`, scan)
-  `modelContext.save()` before re-derivation so `includePendingChanges: false` reflects them.
+    where `names` is a captured `[String]` constant (which `#Predicate` allows). The triage
+    `serviceFilter` (when set) overrides the tag filter; `playbackSequence` is the display
+    predicate with skipped files dropped, and is empty under the skipped triage filter.
+- **`Playlist+Playback.swift`'s computed properties are retired.** Call sites read store-side:
+  `AppState` `managerFiles`/`visualChannelFiles`/`audioChannelFiles` and the current-file/contains
+  checks resolve through `modelContext`; `PlaybackCoordinator` reaches the store via
+  `playlist.modelContext?.playbackFiles(of: playlist) ?? []`.
+- **Save before derive.** `AppState.persistAndRefresh()` saves and bumps a reactivity signal;
+  mutation paths (`filterChanged`, tag edits, `reshuffle`, scan delta, file delete, playlist
+  delete, playlist creation) call it once they reshape membership/order — and before any
+  coordinator reconcile/advance — so the `includePendingChanges: false` fetches see the change.
+  The effective filter itself is read live off the model into the predicate, so a filter edit
+  needs no save for the *predicate* to reflect it; only the file *rows* must be persisted.
+- **Reactivity signal.** The store-side fetches aren't tracked by Observation the way a walk over
+  the `files` relationship was, so the `AppState` accessors read an observed `sequenceVersion`
+  (bumped by `persistAndRefresh`) to re-derive in SwiftUI; the few views that read
+  `hasPlaybackFiles`/`serviceFilterCounts` directly off a playlist read it too.
 
 ### Stage C — lazy identifier rendering in views
 
