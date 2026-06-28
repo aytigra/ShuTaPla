@@ -152,6 +152,7 @@ final class HotkeyRouter {
             || appState.audioRenameError != nil
             || appState.pendingTypeChoice != nil
             || appState.addPlaylistError != nil
+            || appState.saveError != nil
     }
 
     // MARK: - Monitor lifecycle

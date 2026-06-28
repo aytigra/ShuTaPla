@@ -18,3 +18,29 @@ extension AppState {
     var audioChannelFiles: [PlaylistFile] { audioChannelFileIDs.compactMap(file(for:)) }
     var visualChannelFiles: [PlaylistFile] { visualChannelFileIDs.compactMap(file(for:)) }
 }
+
+/// Constructs a `PlaylistFile`, attaches it to `playlist`, inserts it, and assigns its tags —
+/// the build + insert + `tags(named:)` core the suites share. It does **not** save: the
+/// store-side derivations ignore pending changes, so a caller that then derives a sequence
+/// must save first. Suites differ in when (per file vs once after seeding a batch), so the
+/// save stays with the caller.
+@MainActor
+@discardableResult
+func insertFile(
+    _ name: String,
+    tags: [String] = [],
+    status: TaggingStatus = .untagged,
+    skipped: Bool = false,
+    order: Int,
+    to playlist: Playlist,
+    in context: ModelContext
+) -> PlaylistFile {
+    let file = PlaylistFile(
+        relativePath: name, fileName: name,
+        taggingStatus: status, isSkipped: skipped, sortOrder: order
+    )
+    file.playlist = playlist
+    context.insert(file)
+    file.tags = context.tags(named: tags)
+    return file
+}

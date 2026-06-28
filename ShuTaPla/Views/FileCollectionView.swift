@@ -96,34 +96,39 @@ struct FileCollectionView<Cell: View>: View {
                     LazyVStack(spacing: 0) {
                         // The lazy container realizes only visible rows, so each `file(for:)`
                         // resolves just an on-screen identifier — the whole sequence is never
-                        // materialized.
+                        // materialized. The `Group` keeps one view per `ForEach` element however
+                        // the resolve goes (a just-fetched identifier resolves in practice).
                         ForEach(visibleFileIDs, id: \.self) { id in
-                            if let file = appState.file(for: id) {
-                                item(file)
-                                Divider()
+                            Group {
+                                if let file = appState.file(for: id) {
+                                    item(file)
+                                    Divider()
+                                }
                             }
                         }
                     }
                 case .gallery:
                     LazyVGrid(columns: columns, spacing: FileCollectionLayout.gallerySpacing) {
                         ForEach(visibleFileIDs, id: \.self) { id in
-                            if let file = appState.file(for: id) {
-                                item(file)
-                                    // Pin each tile to the top of its grid row so cells with
-                                    // one- and two-line captions line up at the thumbnail
-                                    // rather than centering against each other.
-                                    .frame(maxHeight: .infinity, alignment: .top)
-                                    // Publish this cell's leading edge so the live column
-                                    // count can be measured from the real layout. Vertical
-                                    // scroll doesn't move it, so the set of edges is stable.
-                                    .background {
-                                        GeometryReader { geo in
-                                            Color.clear.preference(
-                                                key: GalleryCellMinXKey.self,
-                                                value: [geo.frame(in: .named(gridSpace)).minX]
-                                            )
+                            Group {
+                                if let file = appState.file(for: id) {
+                                    item(file)
+                                        // Pin each tile to the top of its grid row so cells with
+                                        // one- and two-line captions line up at the thumbnail
+                                        // rather than centering against each other.
+                                        .frame(maxHeight: .infinity, alignment: .top)
+                                        // Publish this cell's leading edge so the live column
+                                        // count can be measured from the real layout. Vertical
+                                        // scroll doesn't move it, so the set of edges is stable.
+                                        .background {
+                                            GeometryReader { geo in
+                                                Color.clear.preference(
+                                                    key: GalleryCellMinXKey.self,
+                                                    value: [geo.frame(in: .named(gridSpace)).minX]
+                                                )
+                                            }
                                         }
-                                    }
+                                }
                             }
                         }
                     }

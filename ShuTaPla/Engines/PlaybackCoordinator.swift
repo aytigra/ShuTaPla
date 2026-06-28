@@ -426,7 +426,7 @@ final class PlaybackCoordinator: PlaybackSource {
     func reconcile(playlistThatChanged playlist: Playlist) {
         guard let channel = channel(of: playlist) else { return }
         let current = channel == .audio ? audioCurrentFile : visualCurrentFile
-        let sequence = playlist.modelContext?.playbackFiles(of: playlist) ?? []
+        let sequence = playlist.playbackFiles
         if let current, sequence.contains(where: { $0.id == current.id }) { return }
         if let first = sequence.first {
             jump(playlist, to: first)
@@ -515,12 +515,12 @@ final class PlaybackCoordinator: PlaybackSource {
 
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
-        return (playlist.modelContext?.playbackFiles(of: playlist) ?? []).cyclicSuccessor { $0.id == current.id }
+        return playlist.playbackFiles.cyclicSuccessor { $0.id == current.id }
     }
 
     func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
-        return (playlist.modelContext?.playbackFiles(of: playlist) ?? []).cyclicPredecessor { $0.id == current.id }
+        return playlist.playbackFiles.cyclicPredecessor { $0.id == current.id }
     }
 
     func url(for file: PlaylistFile) -> URL? {
@@ -575,7 +575,7 @@ final class PlaybackCoordinator: PlaybackSource {
     /// file if it is still in the sequence, else the first file.
     private func startFile(for playlist: Playlist, requested: PlaylistFile?) -> PlaylistFile? {
         if let requested { return requested }
-        let sequence = playlist.modelContext?.playbackFiles(of: playlist) ?? []
+        let sequence = playlist.playbackFiles
         if let id = playlist.currentFileID, let remembered = sequence.first(where: { $0.id == id }) {
             return remembered
         }

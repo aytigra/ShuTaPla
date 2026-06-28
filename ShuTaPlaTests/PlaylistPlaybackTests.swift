@@ -28,14 +28,7 @@ struct PlaylistPlaybackTests {
         _ name: String, tags: [String] = [], status: TaggingStatus = .untagged,
         skipped: Bool = false, order: Int, to playlist: Playlist, in context: ModelContext
     ) -> PlaylistFile {
-        let file = PlaylistFile(
-            relativePath: name, fileName: name,
-            taggingStatus: status, isSkipped: skipped, sortOrder: order
-        )
-        file.playlist = playlist
-        context.insert(file)
-        file.tags = context.tags(named: tags)
-        return file
+        insertFile(name, tags: tags, status: status, skipped: skipped, order: order, to: playlist, in: context)
     }
 
     /// A playlist seeded with a tagged file, an untagged file, an invalid-tagging file, and a

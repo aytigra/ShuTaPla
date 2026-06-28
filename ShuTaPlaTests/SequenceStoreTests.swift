@@ -28,14 +28,7 @@ struct SequenceStoreTests {
         _ name: String, tags: [String] = [], status: TaggingStatus = .untagged,
         skipped: Bool = false, order: Int, to playlist: Playlist, in context: ModelContext
     ) -> PlaylistFile {
-        let file = PlaylistFile(
-            relativePath: name, fileName: name,
-            taggingStatus: status, isSkipped: skipped, sortOrder: order
-        )
-        file.playlist = playlist
-        context.insert(file)
-        file.tags = context.tags(named: tags)
-        return file
+        insertFile(name, tags: tags, status: status, skipped: skipped, order: order, to: playlist, in: context)
     }
 
     /// Resolves identifiers back to filenames in order, so a sequence can be compared by name.
@@ -118,6 +111,18 @@ struct SequenceStoreTests {
         try context.save()
         // AND matches files carrying both tags: only the doubly-tagged file.
         #expect(names(context.displaySequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
+    }
+
+    @Test func playlistForwardersMatchTheContextMethods() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // The thin `Playlist` members forward to the same context derivation, so they agree.
+        #expect(playlist.playbackFiles.map(\.fileName)
+            == context.playbackFiles(of: playlist).map(\.fileName))
+        #expect(playlist.hasPlaybackFiles == context.hasPlaybackFiles(in: playlist))
+        #expect(playlist.serviceFilterCounts == context.serviceFilterCounts(for: playlist))
     }
 
     @Test func unsavedInsertIsNotYetVisible() throws {

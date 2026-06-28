@@ -104,6 +104,11 @@ final class AppState {
     private let fileSystem: FileSystemProviding
     let bookmarkService: BookmarkService
 
+    /// The save `persistAndRefresh` performs — the model context's own `save` in production,
+    /// injectable so a test can exercise the save-failure path (which the in-memory store
+    /// otherwise never reaches).
+    private let persist: () throws -> Void
+
     /// Drives actual playback: owns the engines, enforces channel exclusivity, and
     /// resolves file URLs through `bookmarkService`. Injected into the player views.
     let coordinator: PlaybackCoordinator
@@ -173,12 +178,28 @@ final class AppState {
     /// walk over the `files` relationship would be.
     private(set) var sequenceVersion = 0
 
+    /// A user-facing message when persisting a mutation fails. Set by `persistAndRefresh` when the
+    /// save throws; the failed edit is rolled back so it can't be flushed by a later save, and the
+    /// store-side lists re-derive from the unchanged saved store. Presented by the app-root alert.
+    var saveError: String?
+
     /// Saves pending changes and bumps `sequenceVersion`, so the store-side derivations (which
     /// ignore pending changes) see the change and re-derive. Mutation paths call this once they
     /// have reshaped file membership, order, tags, or triage/filter state — and before any
     /// coordinator reconcile/advance that re-derives a sequence.
+    ///
+    /// On a save failure the store keeps its pre-edit state while the context still holds the
+    /// pending edit, so the store-side lists (`includePendingChanges: false`) would diverge from
+    /// the model. The failure is therefore not swallowed: the context is rolled back — discarding
+    /// the pending edit so a later successful save can't silently flush it — and the error is
+    /// surfaced. The version still bumps so the store-side surfaces re-derive from the saved store.
     private func persistAndRefresh() {
-        try? modelContext.save()
+        do {
+            try persist()
+        } catch {
+            modelContext.rollback()
+            saveError = "Couldn’t save your changes: \(error.localizedDescription)"
+        }
         sequenceVersion &+= 1
     }
 
@@ -189,12 +210,10 @@ final class AppState {
         modelContext.model(for: id) as? PlaylistFile
     }
 
-    /// Whether `fileID` survives `playlist`'s effective filter — a store-side membership test
-    /// that resolves only that one file's identifier and checks the (cheap) identifier sequence,
-    /// rather than materializing the whole sequence to scan it.
+    /// Whether `fileID` survives `playlist`'s effective display filter — a store-side membership
+    /// test that resolves only that one file, rather than materializing the whole sequence.
     private func displaySequenceContains(_ fileID: UUID, of playlist: Playlist) -> Bool {
-        guard let pid = modelContext.identifier(of: fileID) else { return false }
-        return modelContext.displaySequence(of: playlist).contains(pid)
+        modelContext.displayMember(fileID, of: playlist) != nil
     }
 
     /// The selected manager files (the small selection set), resolved from the store in
@@ -323,14 +342,10 @@ final class AppState {
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
     /// Resolved from the playlist's persisted `currentFileID`, not the live engine, so it
     /// survives Stop: a stopped audio playlist still shows (and resumes from) where it left off.
-    /// `nil` when the remembered file is filtered out of the playback view (a single store fetch
-    /// for that one file, plus its membership in the playback sequence).
+    /// `nil` when the remembered file is filtered out of the playback view.
     var currentAudioFile: PlaylistFile? {
         _ = sequenceVersion
-        guard let playlist = audioChannelPlaylist, let id = playlist.currentFileID,
-              let pid = modelContext.identifier(of: id),
-              modelContext.playbackSequence(of: playlist).contains(pid) else { return nil }
-        return file(for: pid)
+        return currentFile(of: audioChannelPlaylist, view: .playback)
     }
 
     /// The visual channel's current file — the Files & Tags overlay's analog of
@@ -340,10 +355,24 @@ final class AppState {
     /// `nil` when the remembered file is filtered out of the display view.
     var currentVisualFile: PlaylistFile? {
         _ = sequenceVersion
-        guard let playlist = coordinator.liveVisualPlaylist, let id = playlist.currentFileID,
-              let pid = modelContext.identifier(of: id),
-              modelContext.displaySequence(of: playlist).contains(pid) else { return nil }
-        return file(for: pid)
+        return currentFile(of: coordinator.liveVisualPlaylist, view: .display)
+    }
+
+    /// Which effective-filter view a channel's current file is tested against: the audio overlay
+    /// is a transport list (playback view, no skipped tracks); the Files & Tags overlay is an
+    /// editing surface (display view, keeps skipped rows under the Skipped filter).
+    private enum SequenceView { case display, playback }
+
+    /// A live channel's current/last file, resolved from its playlist's persisted `currentFileID`
+    /// and returned only if it survives the playlist's effective filter — the shared core of
+    /// `currentAudioFile`/`currentVisualFile`. Resolves only that one file (no whole-sequence
+    /// materialization).
+    private func currentFile(of playlist: Playlist?, view: SequenceView) -> PlaylistFile? {
+        guard let playlist, let id = playlist.currentFileID else { return nil }
+        switch view {
+        case .display: return modelContext.displayMember(id, of: playlist)
+        case .playback: return modelContext.playbackMember(id, of: playlist)
+        }
     }
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as
@@ -361,11 +390,13 @@ final class AppState {
     init(
         modelContext: ModelContext,
         fileSystem: FileSystemProviding = FileSystemService(),
-        bookmarkService: BookmarkService = BookmarkService()
+        bookmarkService: BookmarkService = BookmarkService(),
+        persist: (() throws -> Void)? = nil
     ) {
         self.modelContext = modelContext
         self.fileSystem = fileSystem
         self.bookmarkService = bookmarkService
+        self.persist = persist ?? { try modelContext.save() }
         self.appStateModel = AppStateModel.fetchOrCreate(in: modelContext)
         let settings = GlobalSettings.fetchOrCreate(in: modelContext)
         self.globalSettings = settings
@@ -650,17 +681,7 @@ final class AppState {
             .sorted { ($0.mediaType == mediaType ? 0 : 1) < ($1.mediaType == mediaType ? 0 : 1) }
 
         for (index, scanned) in ordered.enumerated() {
-            let file = PlaylistFile(
-                relativePath: scanned.relativePath,
-                fileName: scanned.fileName,
-                taggingStatus: scanned.taggingStatus,
-                isSkipped: scanned.mediaType != mediaType,
-                sortOrder: index
-            )
-            file.cloudStatus = scanned.cloudStatus
-            file.playlist = playlist
-            modelContext.insert(file)
-            file.tags = modelContext.tags(named: scanned.tags)
+            makeFile(from: scanned, in: playlist, sortOrder: index)
         }
         rebuildTagFrequency(playlist)
         // Persist the inserted files before anything derives a sequence from them: a
@@ -690,6 +711,25 @@ final class AppState {
     /// Next sort order within a media type's sidebar section (appended last).
     private func nextSortOrder(for mediaType: MediaType) -> Int {
         modelContext.playlists(ofType: mediaType).count
+    }
+
+    /// Builds, inserts, and tag-populates one `PlaylistFile` from a scanned file at `sortOrder`.
+    /// A file whose media type differs from the playlist's is marked skipped (kept for the
+    /// skipped-files filter, never played). Shared by initial creation and the incremental Update.
+    @discardableResult
+    private func makeFile(from scanned: ScannedFile, in playlist: Playlist, sortOrder: Int) -> PlaylistFile {
+        let file = PlaylistFile(
+            relativePath: scanned.relativePath,
+            fileName: scanned.fileName,
+            taggingStatus: scanned.taggingStatus,
+            isSkipped: scanned.mediaType != playlist.mediaType,
+            sortOrder: sortOrder
+        )
+        file.cloudStatus = scanned.cloudStatus
+        file.playlist = playlist
+        modelContext.insert(file)
+        file.tags = modelContext.tags(named: scanned.tags)
+        return file
     }
 
     // MARK: - Manager operations
@@ -891,17 +931,7 @@ final class AppState {
         }
 
         for scanned in delta.added {
-            let file = PlaylistFile(
-                relativePath: scanned.relativePath,
-                fileName: scanned.fileName,
-                taggingStatus: scanned.taggingStatus,
-                isSkipped: scanned.mediaType != playlist.mediaType,
-                sortOrder: nextOrder
-            )
-            file.cloudStatus = scanned.cloudStatus
-            file.playlist = playlist
-            modelContext.insert(file)
-            file.tags = modelContext.tags(named: scanned.tags)
+            makeFile(from: scanned, in: playlist, sortOrder: nextOrder)
             nextOrder += 1
         }
 

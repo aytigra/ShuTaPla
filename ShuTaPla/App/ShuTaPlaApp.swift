@@ -28,12 +28,7 @@ struct ShuTaPlaApp: App {
             GlobalSettings.self,
         ])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-        let container: ModelContainer
-        do {
-            container = try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
+        let container = PersistentStore.makeContainer(schema: schema, configuration: configuration)
         self.modelContainer = container
         self._appState = State(initialValue: AppState(modelContext: container.mainContext))
     }

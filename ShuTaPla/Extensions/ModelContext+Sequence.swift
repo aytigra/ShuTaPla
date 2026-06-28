@@ -58,23 +58,40 @@ extension ModelContext {
     /// bar, each a `fetchCount` over the scalar columns.
     func serviceFilterCounts(for playlist: Playlist) -> (untagged: Int, invalidTagging: Int, skipped: Int) {
         let pid = playlist.persistentModelID
-        let untaggedCode = TaggingStatus.untagged.code
-        let invalidCode = TaggingStatus.invalid.code
-        let untagged = count(#Predicate {
-            $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == untaggedCode
-        })
-        let invalidTagging = count(#Predicate {
-            $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == invalidCode
-        })
-        let skipped = count(#Predicate {
-            $0.playlist?.persistentModelID == pid && $0.isSkipped
-        })
+        let untagged = count(triagePredicate(pid: pid, code: TaggingStatus.untagged.code))
+        let invalidTagging = count(triagePredicate(pid: pid, code: TaggingStatus.invalid.code))
+        let skipped = count(#Predicate { $0.playlist?.persistentModelID == pid && $0.isSkipped })
         return (untagged, invalidTagging, skipped)
     }
 
+    /// The file with app id `fileID` if it survives `playlist`'s effective *display* filter,
+    /// else nil — the display-view membership test for one file (the Files & Tags overlay's
+    /// current file, a scope/selection re-seed). Resolves just that one file and evaluates the
+    /// effective filter on it, rather than building the whole sequence to scan for it.
+    func displayMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
+        member(fileID, matching: displayPredicate(for: playlist))
+    }
+
+    /// The file with app id `fileID` if it survives `playlist`'s effective *playback* filter,
+    /// else nil — the playback-view counterpart of `displayMember` (the audio overlay's current
+    /// track), so a skipped track is never current.
+    func playbackMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
+        member(fileID, matching: playbackPredicate(for: playlist))
+    }
+
+    /// Resolves the one file with app id `fileID` and returns it only if it satisfies
+    /// `predicate`. The predicate is evaluated in memory on the single resolved model — callers
+    /// read this right after a `persistAndRefresh`, so the live model equals the saved row the
+    /// sequence accessors (`includePendingChanges: false`) would return.
+    private func member(_ fileID: UUID, matching predicate: Predicate<PlaylistFile>) -> PlaylistFile? {
+        guard let pid = identifier(of: fileID), let file = model(for: pid) as? PlaylistFile,
+              (try? predicate.evaluate(file)) == true else { return nil }
+        return file
+    }
+
     /// The persistent identifier of the file with app id `fileID`, or nil if none exists — a
-    /// one-row fetch that lets a caller test a single file's membership in a sequence (via
-    /// `displaySequence(of:).contains(_:)`) without resolving the whole set.
+    /// one-row fetch used to resolve a single file (and back the `displayMember`/`playbackMember`
+    /// membership tests) without resolving the whole set.
     func identifier(of fileID: UUID) -> PersistentIdentifier? {
         var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.id == fileID })
         descriptor.fetchLimit = 1
@@ -107,15 +124,9 @@ extension ModelContext {
         if let service = filter.serviceFilter {
             switch service {
             case .untagged:
-                let code = TaggingStatus.untagged.code
-                return #Predicate {
-                    $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == code
-                }
+                return triagePredicate(pid: pid, code: TaggingStatus.untagged.code)
             case .invalidTagging:
-                let code = TaggingStatus.invalid.code
-                return #Predicate {
-                    $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == code
-                }
+                return triagePredicate(pid: pid, code: TaggingStatus.invalid.code)
             case .skipped:
                 return #Predicate { $0.playlist?.persistentModelID == pid && $0.isSkipped }
             }
@@ -142,6 +153,12 @@ extension ModelContext {
                     && file.tags.filter { names.contains($0.normalizedName) }.count == required
             }
         }
+    }
+
+    /// A triage-filter predicate: the playlist's non-skipped files with a given tagging-status
+    /// code. Shared by the untagged / invalid-tagging display arms and their notice-bar counts.
+    private func triagePredicate(pid: PersistentIdentifier, code: Int) -> Predicate<PlaylistFile> {
+        #Predicate { $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == code }
     }
 
     /// Playback drops skipped files. The skipped triage filter therefore plays nothing; every

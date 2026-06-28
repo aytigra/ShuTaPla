@@ -33,6 +33,19 @@ struct RootView: View {
             }
         }
         .environment(overlayManager)
+        // A persist failure is surfaced app-wide: any mutation surface could have raised it, and
+        // `persistAndRefresh` has already rolled the context back to keep the model consistent.
+        .alert(
+            "Couldn’t save your changes",
+            isPresented: Binding(
+                get: { appState.saveError != nil },
+                set: { if !$0 { appState.saveError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { appState.saveError = nil }
+        } message: {
+            Text(appState.saveError ?? "")
+        }
         .addPlaylistFlow()
         .background(WindowCloseBridge { appState.windowWasClosed() })
         .background(WindowFrameBridge(

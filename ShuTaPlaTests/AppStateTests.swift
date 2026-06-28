@@ -36,7 +36,9 @@ private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> 
     )
 }
 
-/// Inserts a `PlaylistFile` into a playlist for the filtering/tagging tests.
+/// Inserts a `PlaylistFile` into a playlist for the filtering/tagging tests, saving it so it
+/// appears in the store-side `managerFiles` and friends (which ignore pending changes). Shares
+/// the build/insert/tag core with the other suites via `insertFile`; this wrapper adds the save.
 @MainActor
 @discardableResult
 private func addFile(
@@ -48,15 +50,7 @@ private func addFile(
     to playlist: Playlist,
     in context: ModelContext
 ) -> PlaylistFile {
-    let file = PlaylistFile(
-        relativePath: name, fileName: name,
-        taggingStatus: status, isSkipped: skipped, sortOrder: order
-    )
-    file.playlist = playlist
-    context.insert(file)
-    file.tags = context.tags(named: tags)
-    // The Manager's file lists derive store-side (ignoring pending changes), so a seeded file
-    // must be persisted to appear in `managerFiles` and friends.
+    let file = insertFile(name, tags: tags, status: status, skipped: skipped, order: order, to: playlist, in: context)
     try? context.save()
     return file
 }
@@ -1790,6 +1784,31 @@ struct AppStateTests {
         #expect(t1.tagNames == ["jazz"])
         #expect(t2.tagNames == ["jazz"])
         #expect(audio.tagFrequency["jazz"] == 2)
+    }
+
+    /// A persist failure is not swallowed: `persistAndRefresh` surfaces it through `saveError` and
+    /// rolls the context back, so a mutation whose save fails leaves no stale in-memory edit
+    /// diverging from the (unchanged) saved store. Driven through the injectable `persist` seam,
+    /// since the in-memory store's own `save` never throws.
+    @Test func persistFailureSurfacesErrorAndRollsBackTheEdit() throws {
+        struct SaveFailed: Error {}
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult),
+            persist: { throw SaveFailed() }
+        )
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        try context.save()   // baseline the rollback reverts to (a direct save, not via the seam)
+
+        appState.toggleServiceFilter(.untagged, on: playlist)
+
+        #expect(appState.saveError != nil)
+        // The rollback discarded the pending edit at the store layer, so a later successful save
+        // can't silently flush this failed change.
+        #expect(context.hasChanges == false)
     }
 
     private var emptyResult: ScanResult {

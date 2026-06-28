@@ -135,7 +135,7 @@ struct PlayerView: View {
     private var visualHasNoFiles: Bool {
         _ = appState.sequenceVersion   // re-derive when the playlist's membership changes
         guard let visual = coordinator.liveVisualPlaylist else { return false }
-        return !(visual.modelContext?.hasPlaybackFiles(in: visual) ?? false)
+        return !visual.hasPlaybackFiles
     }
 
     /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is

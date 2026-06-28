@@ -169,9 +169,13 @@ struct LibrarySurface: View {
                     // The lazy container resolves only on-screen identifiers, so a large list
                     // never materializes at once.
                     ForEach(context.fileIDs, id: \.self) { id in
-                        if let file = appState.file(for: id) {
-                            fileRow(file).id(file.id)
-                            Divider()
+                        // The `Group` keeps one view per element however the resolve goes (a
+                        // just-fetched identifier resolves in practice).
+                        Group {
+                            if let file = appState.file(for: id) {
+                                fileRow(file).id(file.id)
+                                Divider()
+                            }
                         }
                     }
                 }

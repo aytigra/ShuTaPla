@@ -525,7 +525,7 @@ private struct CenterActionsBar: View {
             } label: {
                 Label("Play", systemImage: "play.fill")
             }
-            .disabled(!(playlist.modelContext?.hasPlaybackFiles(in: playlist) ?? false))
+            .disabled(!playlist.hasPlaybackFiles)
             .help("Play")
         }
 

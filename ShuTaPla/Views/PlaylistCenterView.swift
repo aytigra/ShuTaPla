@@ -128,7 +128,7 @@ struct PlaylistCenterView: View {
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
         let _ = appState.sequenceVersion   // re-derive the counts when membership or triage changes
-        let (untagged, invalid, skipped) = playlist.modelContext?.serviceFilterCounts(for: playlist) ?? (0, 0, 0)
+        let (untagged, invalid, skipped) = playlist.serviceFilterCounts
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {

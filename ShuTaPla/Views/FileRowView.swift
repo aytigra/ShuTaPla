@@ -26,11 +26,15 @@ struct FileRowView: View {
             if isRenaming {
                 RenameFileField(text: $draftName, onCommit: onCommitRename, onCancel: onCancelRename)
             } else {
+                // Parse the filename's tags once: `tagNames` reparses on each read and
+                // `ViewThatFits` evaluates both candidate layouts, so binding it here avoids
+                // four parses per row per render.
+                let tagNames = file.tagNames
                 // One line while it fits; once the name, chips, and length can't share
                 // a row, the chips wrap onto their own line beneath the name.
                 ViewThatFits(in: .horizontal) {
-                    singleLine
-                    stacked
+                    singleLine(tagNames: tagNames)
+                    stacked(tagNames: tagNames)
                 }
             }
         }
@@ -58,12 +62,12 @@ struct FileRowView: View {
     }
 
     /// Name, chips, and length all on one row.
-    private var singleLine: some View {
+    private func singleLine(tagNames: [String]) -> some View {
         HStack(spacing: 8) {
             fileName
             Spacer(minLength: 8)
-            if !file.tagNames.isEmpty {
-                TagChips(tags: file.tagNames)
+            if !tagNames.isEmpty {
+                TagChips(tags: tagNames)
             }
             if playlist.mediaType != .image {
                 durationColumn
@@ -73,7 +77,7 @@ struct FileRowView: View {
 
     /// Name (and length) on top, chips wrapped onto a flow beneath — the fallback
     /// when the row is too narrow for everything to sit on one line.
-    private var stacked: some View {
+    private func stacked(tagNames: [String]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 fileName
@@ -82,9 +86,9 @@ struct FileRowView: View {
                     durationColumn
                 }
             }
-            if !file.tagNames.isEmpty {
+            if !tagNames.isEmpty {
                 FlowLayout(spacing: 4, lineSpacing: 4) {
-                    ForEach(file.tagNames, id: \.self) { TagChip(tag: $0) }
+                    ForEach(tagNames, id: \.self) { TagChip(tag: $0) }
                 }
             }
         }

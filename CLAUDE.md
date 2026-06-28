@@ -2,6 +2,12 @@
 
 macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
+## These rules are always in force
+
+**IMPORTANT!!!**:
+
+**Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.** A command's, skill's, or tool's own prompt *adds to* these rules; it never overrides, narrows, or exempts them, however self-contained its procedure looks. A long, prescriptive command prompt (e.g. `/code-review`) is the most common trap: working straight down its numbered steps is not a license to skip the skill-loading, testing, and navigator-issue rules here. Re-read this file against the task before you start and again before you report it done — these rules are part of the definition of done, not optional background. If you ever catch yourself having skipped one because "the command didn't mention it," that is the failure this section exists to prevent.
+
 ## Key docs
 
 - `doc/features.md` — feature-spec entry point: overview, Terminology glossary, and a map of the per-topic chapters in `doc/features/` (load only the chapter you need)
@@ -31,11 +37,13 @@ This project uses `~/.claude-ios/` as the Claude Code configuration directory (n
 
 ## Skills
 
-Locally installed skills live in `/Users/aytm/.claude-ios/skills/`. Use them for implementation guidance and code review.
+Locally installed skills live in `/Users/aytm/.claude-ios/skills/`.
 
-| Skill | Path | Use for |
+**Loading the matching skill is mandatory, and it is the first step — before you start reading or changing the code, not after.** Whenever a task involves writing, reviewing, refactoring, or debugging code in one of the domains below, invoke that skill (`Skill` tool) and read its `SKILL.md` first. Skills do **not** auto-load — nothing fires them unless you choose to — so make "which skill covers this?" an explicit pre-flight check at the start of *every* code task, **code review included, and including work driven by a slash command**. If a diff spans several domains (e.g. a SwiftUI view backed by SwiftData with some concurrency), load each that applies. "I reasoned it through myself" is not a substitute: the whole point of the skill is to catch what unaided reasoning misses, so skipping it because the change looked straightforward is exactly the case it's meant to cover.
+
+| Skill | Path | Load when the work touches |
 |-------|------|---------|
-| **swiftui-expert-skill** | `skills/swiftui-expert-skill/` | State management (`@Observable`, `@MainActor`, `@Environment`), view composition, performance patterns, ForEach identity, LazyVStack, animations, accessibility, Liquid Glass (iOS 26+) |
+| **swiftui-expert-skill** | `skills/swiftui-expert-skill/` | State management (`@Observable`, `@MainActor`, `@Environment`), Observation tracking, view composition, performance patterns, ForEach identity, LazyVStack/LazyVGrid, animations, accessibility, Liquid Glass (iOS 26+) — and any SwiftData-backed view reactivity |
 | **swift-concurrency** | `skills/swift-concurrency/` | async/await, actors, Sendable, AsyncStream, Task groups, Swift 6 migration, data race safety, `Mutex` |
 | **swift-testing-expert** | `skills/swift-testing-expert/` | Swift Testing framework (`@Test`, `#expect`, `#require`), parameterized tests, traits/tags, async testing, XCTest migration |
 | **mobile-ios-design** | `skills/mobile-ios-design/` | HIG principles, SF Symbols, Dynamic Type, navigation patterns, layout, dark mode, accessibility |

@@ -45,7 +45,7 @@ struct AudioTransport: View {
                 coordinator.playOrTogglePause(playlist)
             }
             // The skipped triage filter leaves no playable track, so starting playback is a no-op.
-            .disabled(playlist.playbackState != .playing && !(playlist.modelContext?.hasPlaybackFiles(in: playlist) ?? false))
+            .disabled(playlist.playbackState != .playing && !playlist.hasPlaybackFiles)
             if isLive {
                 controlButton("stop.fill") { coordinator.stop(playlist) }
                 controlButton("forward.fill") { coordinator.next(playlist) }

@@ -53,14 +53,11 @@ import SwiftData
         )
         context.insert(playlist)
         for (index, file) in files.enumerated() {
-            let model = PlaylistFile(
-                relativePath: file.name, fileName: file.name,
-                taggingStatus: file.tags.isEmpty ? .untagged : .valid,
-                sortOrder: index
+            insertFile(
+                file.name, tags: file.tags,
+                status: file.tags.isEmpty ? .untagged : .valid,
+                order: index, to: playlist, in: context
             )
-            model.playlist = playlist
-            context.insert(model)
-            model.tags = context.tags(named: file.tags)
         }
         // The coordinator derives its sequences store-side (ignoring pending changes), so the
         // seeded files must be persisted before it plays them.
