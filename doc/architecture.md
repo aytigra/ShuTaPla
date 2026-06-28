@@ -74,7 +74,7 @@ Singletons use a fetch-or-create pattern (fetch limit 1, insert defaults if abse
 - **Embedded value types** for preferences/filter/saved-searches — avoids a web of one-to-one relationships and makes cascade delete clean.
 - **Normalized tags** — each `PlaylistFile` references shared `Tag` entities (deduped by lowercased `normalizedName`, with `name` keeping first-seen casing), so a tag filter is a store predicate over the relationship rather than a per-file Swift comparison. Filenames remain the source of truth: a scan/rename re-parses them through `TagParser` and resolves the strings to `Tag`s via `ModelContext.tags(named:)`, and `PlaylistFile.tagNames` (the chip display) derives from the filename so chip *order* is stable (the relationship is an unordered set). `tagFrequency` still aggregates per-playlist usage counts to drive dropdown ordering.
 - **`taggingStatus` as a stored scalar** (`taggingStatusCode: Int`, with a computed `taggingStatus` enum accessor) — a `#Predicate` can't capture the enum, so triage filters (untagged / invalid-tagging) compare the scalar instead.
-- **No schema migration; an unreadable store is recreated.** There is no `SchemaMigrationPlan` — since files on disk are the source of truth, a store left incompatible by a schema change is discarded and rebuilt from a re-scan rather than crashing the launch, at the cost of the non-derivable rows (playlists, bookmarks, preferences).
+- **Versioned schema migrations.** `AppMigrationPlan` (a `SchemaMigrationPlan`) declares each `VersionedSchema` and a stage between successive versions.
 
 ---
 

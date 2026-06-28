@@ -20,15 +20,18 @@ struct ShuTaPlaApp: App {
     @State private var durationService = DurationService()
 
     init() {
-        let schema = Schema([
-            Playlist.self,
-            PlaylistFile.self,
-            Tag.self,
-            AppStateModel.self,
-            GlobalSettings.self,
-        ])
+        let schema = Schema(versionedSchema: SchemaV2.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-        let container = PersistentStore.makeContainer(schema: schema, configuration: configuration)
+        let container: ModelContainer
+        do {
+            container = try ModelContainer(
+                for: schema,
+                migrationPlan: AppMigrationPlan.self,
+                configurations: [configuration]
+            )
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
         self.modelContainer = container
         self._appState = State(initialValue: AppState(modelContext: container.mainContext))
     }
