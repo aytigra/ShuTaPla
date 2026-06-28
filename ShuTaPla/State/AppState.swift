@@ -304,7 +304,7 @@ final class AppState {
     /// A user-facing message when a Player-mode trash fails, surfaced by the player's alert.
     var playerDeleteError: String?
 
-    /// A user-facing message when a rename from the Files & Tags overlay fails, surfaced by
+    /// A user-facing message when a rename from the Visual Overlay fails, surfaced by
     /// that overlay's alert. On `AppState` (not view-local) so the `HotkeyRouter` can register
     /// it as a blocking modal and stop bare keys leaking to playback behind it.
     var playerRenameError: String?
@@ -330,9 +330,9 @@ final class AppState {
         return audioChannelPlaylist.map { modelContext.playbackSequence(of: $0) } ?? []
     }
 
-    /// The visual channel playlist's display-ordered file identifiers — the Files & Tags
-    /// overlay's list, resolved row-by-row. This is the *display* sequence (it keeps skipped
-    /// files under the Skipped filter), because the Files & Tags overlay is an editing surface
+    /// The visual channel playlist's display-ordered file identifiers — the Visual
+    /// Overlay's list, resolved row-by-row. This is the *display* sequence (it keeps skipped
+    /// files under the Skipped filter), because the Visual Overlay is an editing surface
     /// where skipped rows are triaged and un-skipped.
     var visualChannelFileIDs: [PersistentIdentifier] {
         _ = sequenceVersion
@@ -348,7 +348,7 @@ final class AppState {
         return currentFile(of: audioChannelPlaylist, view: .playback)
     }
 
-    /// The visual channel's current file — the Files & Tags overlay's analog of
+    /// The visual channel's current file — the Visual Overlay's analog of
     /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`, not
     /// the live engine, so it's available synchronously when the overlay's file list re-centers
     /// after a playlist switch (the video engine reports its current file asynchronously).
@@ -359,7 +359,7 @@ final class AppState {
     }
 
     /// Which effective-filter view a channel's current file is tested against: the audio overlay
-    /// is a transport list (playback view, no skipped tracks); the Files & Tags overlay is an
+    /// is a transport list (playback view, no skipped tracks); the Visual Overlay is an
     /// editing surface (display view, keeps skipped rows under the Skipped filter).
     private enum SequenceView { case display, playback }
 
@@ -688,7 +688,7 @@ final class AppState {
         // player-mode creation starts playback (which reads the playback sequence) right below.
         persistAndRefresh()
 
-        // Player-mode creation comes from a playback overlay (the visual Files & Tags or the
+        // Player-mode creation comes from a playback overlay (the Visual Overlay or the
         // audio overlay) and starts the new playlist playing; Manager-mode creation loads it
         // stopped. A player-mode creation only *remembers* the playlist (so stopping back into
         // Manager returns to whatever was being managed), while a management creation loads it
@@ -771,7 +771,7 @@ final class AppState {
         updateTask = task
     }
 
-    /// The visual Files & Tags overlay's analog of `playOnAudioChannel(_:)`: switches the
+    /// The Visual Overlay's analog of `playOnAudioChannel(_:)`: switches the
     /// visual channel to `playlist` through `manage(_:)` — restoring its filter, re-reading its
     /// folder (every click, the automatic Update), and re-centering the file list — and starts a
     /// genuinely new selection playing. Re-selecting the playing playlist re-scans and re-centers
@@ -1026,7 +1026,7 @@ final class AppState {
         persistAndRefresh()
         // Advance whichever channel was playing this playlist off a trashed track, so the
         // engine never holds a file that's no longer in the playlist. Covers every delete
-        // entry point (Manager list, Files & Tags overlay, audio overlay) in one place.
+        // entry point (Manager list, Visual Overlay, audio overlay) in one place.
         coordinator.reconcile(playlistThatChanged: playlist)
 
         guard result.failed.isEmpty else {
@@ -1380,7 +1380,7 @@ final class AppState {
         return true
     }
 
-    /// Requests confirmation to trash a specific file from the Files & Tags overlay.
+    /// Requests confirmation to trash a specific file from the Visual Overlay.
     /// Routes through AppState so `playerDeleteCandidate` stays state it owns and
     /// prunes when a re-scan removes the file.
     func requestPlayerDelete(_ file: PlaylistFile) {

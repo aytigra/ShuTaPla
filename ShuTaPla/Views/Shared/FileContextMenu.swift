@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The per-file context menu shared by the Manager list/gallery and the player's
-//  Files & Tags overlay. Rename, Show in Finder, and the video-only Remove Audio
+//  Visual Overlay. Rename, Show in Finder, and the video-only Remove Audio
 //  item (with their ordering) are identical everywhere; the actions that differ by
 //  surface — what Rename/Remove Audio/Delete target and which confirmation they
 //  raise — are passed in as closures.

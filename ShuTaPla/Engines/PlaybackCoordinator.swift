@@ -331,7 +331,7 @@ final class PlaybackCoordinator: PlaybackSource {
     // MARK: - Player controls surface
 
     /// The file the active visual channel is showing (video or image). The player
-    /// controls and Files & Tags overlay anchor on it.
+    /// controls and Visual Overlay anchor on it.
     var visualCurrentFile: PlaylistFile? {
         visualKind == .image ? imageEngine.currentFile : videoEngine?.currentFile
     }
@@ -368,7 +368,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// Plays `file` on `playlist`'s channel right away: lifts a global pause, clears the
     /// playlist's own pause, then jumps to it. The "play this one now" intent behind a
-    /// double-click in the Files & Tags overlay.
+    /// double-click in the Visual Overlay.
     func playNow(_ playlist: Playlist, startingAt file: PlaylistFile) {
         if isSuppressed { unsuppress() }
         if playlist.playbackState == .paused { unpause(playlist) }

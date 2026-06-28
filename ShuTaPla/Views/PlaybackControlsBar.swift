@@ -51,7 +51,7 @@ struct PlaybackControlsBar: View {
 
             Spacer(minLength: 12)
 
-            Button { overlays.isFilesTagsOpen ? overlays.closeFilesTags() : overlays.openFilesTags() } label: {
+            Button { overlays.isVisualOverlayOpen ? overlays.closeVisualOverlay() : overlays.openVisualOverlay() } label: {
                 Label("Files & Tags", systemImage: "list.bullet.rectangle")
                     .font(.callout)
             }

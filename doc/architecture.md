@@ -266,7 +266,7 @@ Views/
              PlaylistTagsView, TagSidebar
   Player/    PlayerView, VideoPlayerView, ImagePlayerView, PauseOverlay, PlaybackControlsBar
   Audio/     AudioInlet, AudioOverlay
-  Shared/    TagEditorView, TagTokenField, FlowLayout, FilesTagsOverlayView, LibrarySurface,
+  Shared/    TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
              HoverZone, ControlButtonStyle, FileSelection, FileRowView
   Settings/  SettingsView
 Extensions/  URL+MediaType, Array+Move, NSWindow+Fullscreen

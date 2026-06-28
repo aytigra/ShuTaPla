@@ -14,7 +14,7 @@ import SwiftUI
 struct TagEditorView: View {
     let playlist: Playlist
     let files: [PlaylistFile]
-    /// Focuses the tag input as soon as the editor appears. The Files & Tags overlay
+    /// Focuses the tag input as soon as the editor appears. The Visual Overlay
     /// turns this on; the Manager tag panel leaves it off.
     var autoFocus: Bool = false
     @Environment(AppState.self) private var appState

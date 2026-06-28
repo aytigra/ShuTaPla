@@ -1,5 +1,5 @@
 //
-//  FilesTagsOverlayView.swift
+//  VisualOverlay.swift
 //  ShuTaPla
 //
 //  The visual player's library overlay: it slides up from the bottom and renders the shared
@@ -12,7 +12,7 @@
 import SwiftUI
 import AppKit
 
-struct FilesTagsOverlayView: View {
+struct VisualOverlay: View {
     let playlist: Playlist
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
@@ -53,7 +53,7 @@ struct FilesTagsOverlayView: View {
             tagAutoFocus: true,
             onSelectPlaylist: { appState.playOnVisualChannel($0) },
             onAddPlaylist: { appState.isImportingPlaylist = true },
-            onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeFilesTags() },
+            onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeVisualOverlay() },
             onDeleteFile: { appState.requestPlayerDelete($0) },
             onRemoveAudio: { appState.requestAudioStrip([$0]) },
             onRenameError: { appState.playerRenameError = $0 }
@@ -67,7 +67,7 @@ struct FilesTagsOverlayView: View {
             Label("Files & Tags", systemImage: "list.bullet.rectangle")
                 .font(.headline)
             Spacer()
-            Button { overlays.closeFilesTags() } label: {
+            Button { overlays.closeVisualOverlay() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title2)
                     .foregroundStyle(.secondary)

@@ -15,43 +15,43 @@ import Testing
 
     // MARK: - Exclusivity
 
-    @Test func audioExtendedClosesFilesTags() {
+    @Test func audioExtendedClosesVisualOverlay() {
         let m = OverlayManager()
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         m.show(.audioExtended)
-        #expect(!m.active.contains(.filesTags))
+        #expect(!m.active.contains(.visualOverlay))
         #expect(m.active.contains(.audioExtended))
     }
 
-    @Test func filesTagsClosesCompactAudioAndBottomControls() {
+    @Test func visualOverlayClosesCompactAudioAndBottomControls() {
         let m = OverlayManager()
         m.show(.audioCompact)
         m.show(.bottomControls)
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         #expect(!m.active.contains(.audioCompact))
         #expect(!m.active.contains(.bottomControls))
-        #expect(m.active.contains(.filesTags))
+        #expect(m.active.contains(.visualOverlay))
     }
 
     @Test func pauseOverlayClosesEverythingElse() {
         let m = OverlayManager()
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         m.show(.audioCompact)
         m.show(.pauseOverlay)
         #expect(m.active == [.pauseOverlay])
     }
 
-    @Test func compactAudioSitsOnTopOfFilesTags() {
+    @Test func compactAudioSitsOnTopOfVisualOverlay() {
         let m = OverlayManager()
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         m.show(.audioCompact)
-        #expect(m.active.contains(.filesTags))
+        #expect(m.active.contains(.visualOverlay))
         #expect(m.active.contains(.audioCompact))
     }
 
-    @Test func bottomControlsSuppressedWhileFilesTagsOpen() {
+    @Test func bottomControlsSuppressedWhileVisualOverlayOpen() {
         let m = OverlayManager()
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         m.show(.bottomControls)
         #expect(!m.active.contains(.bottomControls))
     }
@@ -70,16 +70,16 @@ import Testing
         #expect(!m.isAnyOverlayOpen)
         m.show(.bottomControls)          // passive hover chrome — not a closable overlay
         #expect(!m.isAnyOverlayOpen)
-        m.show(.filesTags)
+        m.show(.visualOverlay)
         #expect(m.isAnyOverlayOpen)
     }
 
     @Test func closeTopmostFollowsPriorityOrder() {
         let m = OverlayManager()
-        m.show(.filesTags)
-        m.show(.audioCompact)            // compact sits on top of files & tags
-        m.closeTopmostOverlay()          // filesTags outranks audioCompact
-        #expect(!m.active.contains(.filesTags))
+        m.show(.visualOverlay)
+        m.show(.audioCompact)            // compact sits on top of the visual overlay
+        m.closeTopmostOverlay()          // visualOverlay outranks audioCompact
+        #expect(!m.active.contains(.visualOverlay))
         #expect(m.active.contains(.audioCompact))
         m.closeTopmostOverlay()
         #expect(!m.active.contains(.audioCompact))
@@ -106,11 +106,11 @@ import Testing
         #expect(!m.active.contains(.audioExtended))
     }
 
-    @Test func audioKeyContextClearsWhenFilesTagsClosesCompactAudio() {
+    @Test func audioKeyContextClearsWhenVisualOverlayClosesCompactAudio() {
         let m = OverlayManager()
         m.revealCompactAudio()
         m.audioDidFullyReveal()
-        m.show(.filesTags)                        // exclusivity removes audioCompact
+        m.show(.visualOverlay)                        // exclusivity removes audioCompact
         #expect(m.keyContext == .visual)
     }
 

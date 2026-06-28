@@ -68,17 +68,17 @@ import AppKit
     /// A recording double for the overlay/key-context seam.
     private final class MockOverlay: HotkeyOverlayContext {
         var isAnyOverlayOpen = false
-        var isFilesTagsOpen = false
+        var isVisualOverlayOpen = false
         var keyContext: KeyContext = .visual
         var closeTopmostCalls = 0
-        var openFilesTagsCalls = 0
-        var closeFilesTagsCalls = 0
+        var openVisualOverlayCalls = 0
+        var closeVisualOverlayCalls = 0
         var revealCompactAudioCalls = 0
         var expandAudioCalls = 0
         var closeAudioCalls = 0
         func closeTopmostOverlay() { closeTopmostCalls += 1 }
-        func openFilesTags() { openFilesTagsCalls += 1 }
-        func closeFilesTags() { closeFilesTagsCalls += 1 }
+        func openVisualOverlay() { openVisualOverlayCalls += 1 }
+        func closeVisualOverlay() { closeVisualOverlayCalls += 1 }
         func revealCompactAudio() { revealCompactAudioCalls += 1 }
         func expandAudioToExtended() { expandAudioCalls += 1 }
         func closeAudioOverlay() { closeAudioCalls += 1 }
@@ -267,22 +267,22 @@ import AppKit
 
     // MARK: - Player: overlays, loop, seek
 
-    @Test func tabOpensFilesAndTags() throws {
+    @Test func tabOpensVisualOverlay() throws {
         let f = try playerFixture(.image, files: ["1.jpg"])
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.tab, rightOption: false))
-        #expect(f.overlay.openFilesTagsCalls == 1)
+        #expect(f.overlay.openVisualOverlayCalls == 1)
     }
 
-    @Test func tabClosesFilesAndTagsWhenOpen() throws {
+    @Test func tabClosesVisualOverlayWhenOpen() throws {
         let overlay = MockOverlay()
-        overlay.isFilesTagsOpen = true
+        overlay.isVisualOverlayOpen = true
         let f = try playerFixture(.image, files: ["1.jpg"], overlay: overlay)
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.tab, rightOption: false))
-        #expect(overlay.closeFilesTagsCalls == 1)
+        #expect(overlay.closeVisualOverlayCalls == 1)
     }
 
     @Test func sStopsAndExitsPlayer() throws {
@@ -404,25 +404,25 @@ import AppKit
 
     // MARK: - Arrows as overlay controls
 
-    @Test func visualArrowUpOpensFilesAndTags() throws {
+    @Test func visualArrowUpOpensVisualOverlay() throws {
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
         defer { f.appState.coordinator.shutdown() }
         let current = f.playlist.currentFileID
 
         #expect(f.router.route(.arrowUp, rightOption: false))
-        #expect(f.overlay.openFilesTagsCalls == 1)
+        #expect(f.overlay.openVisualOverlayCalls == 1)
         #expect(f.playlist.currentFileID == current)   // opens the overlay rather than advancing
     }
 
-    @Test func visualArrowUpIsANoOpWhenFilesTagsAlreadyOpen() throws {
+    @Test func visualArrowUpIsANoOpWhenVisualOverlayAlreadyOpen() throws {
         let overlay = MockOverlay()
-        overlay.isFilesTagsOpen = true
+        overlay.isVisualOverlayOpen = true
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"], overlay: overlay)
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.arrowUp, rightOption: false))   // consumed, but neither opens nor closes
-        #expect(overlay.openFilesTagsCalls == 0)
-        #expect(overlay.closeFilesTagsCalls == 0)
+        #expect(overlay.openVisualOverlayCalls == 0)
+        #expect(overlay.closeVisualOverlayCalls == 0)
     }
 
     @Test func visualArrowDownRevealsCompactAudio() throws {
@@ -433,14 +433,14 @@ import AppKit
         #expect(f.overlay.revealCompactAudioCalls == 1)
     }
 
-    @Test func visualArrowDownClosesFilesAndTagsWhenOpen() throws {
+    @Test func visualArrowDownClosesVisualOverlayWhenOpen() throws {
         let overlay = MockOverlay()
-        overlay.isFilesTagsOpen = true
+        overlay.isVisualOverlayOpen = true
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"], overlay: overlay)
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.arrowDown, rightOption: false))
-        #expect(overlay.closeFilesTagsCalls == 1)
+        #expect(overlay.closeVisualOverlayCalls == 1)
         #expect(overlay.revealCompactAudioCalls == 0)   // closes the overlay rather than revealing audio
     }
 

@@ -65,7 +65,7 @@ extension ModelContext {
     }
 
     /// The file with app id `fileID` if it survives `playlist`'s effective *display* filter,
-    /// else nil — the display-view membership test for one file (the Files & Tags overlay's
+    /// else nil — the display-view membership test for one file (the Visual Overlay's
     /// current file, a scope/selection re-seed). Resolves just that one file and evaluates the
     /// effective filter on it, rather than building the whole sequence to scan for it.
     func displayMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {

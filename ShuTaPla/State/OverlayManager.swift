@@ -20,7 +20,7 @@ import SwiftUI
 final class OverlayManager: HotkeyOverlayContext {
 
     enum Overlay: Hashable {
-        case filesTags
+        case visualOverlay
         case audioCompact
         case audioExtended
         case pauseOverlay
@@ -46,7 +46,7 @@ final class OverlayManager: HotkeyOverlayContext {
     /// `[esc]`/`closeTopmostOverlay()` and `isAnyOverlayOpen` consider exactly these.
     /// Bottom controls are passive hover chrome and aren't closed by `[esc]`.
     private static let closablePriority: [Overlay] =
-        [.audioExtended, .filesTags, .audioCompact]
+        [.audioExtended, .visualOverlay, .audioCompact]
 
     private static let closableSet = Set(closablePriority)
 
@@ -95,19 +95,19 @@ final class OverlayManager: HotkeyOverlayContext {
     private func applyShow(_ overlay: Overlay) {
         switch overlay {
         case .audioExtended:                 // exclusive — closes everything else
-            active.remove(.filesTags)
+            active.remove(.visualOverlay)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
-        case .filesTags:                     // hotkey overlay — closes compact audio + hover overlays
+        case .visualOverlay:                 // hotkey overlay — closes compact audio + hover overlays
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .audioCompact:
-            // Compact audio may sit on top of an open Files & Tags overlay (top-edge hover),
+            // Compact audio may sit on top of an open Visual Overlay (top-edge hover),
             // so it does NOT close it. It only yields to Extended audio (handled above).
             break
         case .bottomControls:
-            // Passive hover chrome is suppressed while Files & Tags or Extended audio is open.
-            if active.contains(.filesTags) || active.contains(.audioExtended) { return }
+            // Passive hover chrome is suppressed while the Visual Overlay or Extended audio is open.
+            if active.contains(.visualOverlay) || active.contains(.audioExtended) { return }
         case .pauseOverlay:                  // suppression UI — opaque, covers the whole screen
             active.removeAll()
         }
@@ -133,7 +133,7 @@ final class OverlayManager: HotkeyOverlayContext {
 
     var isAnyOverlayOpen: Bool { !active.isDisjoint(with: Self.closableSet) }
 
-    var isFilesTagsOpen: Bool { active.contains(.filesTags) }
+    var isVisualOverlayOpen: Bool { active.contains(.visualOverlay) }
 
     var keyContext: KeyContext {
         audioFullyRevealed && !active.isDisjoint(with: Self.audioSet) ? .audio : .visual
@@ -144,8 +144,8 @@ final class OverlayManager: HotkeyOverlayContext {
         hide(top)
     }
 
-    func openFilesTags() { show(.filesTags) }
-    func closeFilesTags() { hide(.filesTags) }
+    func openVisualOverlay() { show(.visualOverlay) }
+    func closeVisualOverlay() { hide(.visualOverlay) }
 
     /// Reveals compact audio from `[arrow down]`: pinned, so it stays open until
     /// explicitly closed (unlike a hover reveal).

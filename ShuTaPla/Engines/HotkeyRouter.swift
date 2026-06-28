@@ -30,20 +30,20 @@ enum KeyContext {
 /// supplies `NoOverlayContext`; Tasks 13–15 swap in the real `OverlayManager`.
 @MainActor
 protocol HotkeyOverlayContext: AnyObject {
-    /// A closable overlay is open (Files & Tags, Playlists, or a hotkey-opened audio
+    /// A closable overlay is open (Visual Overlay, Playlists, or a hotkey-opened audio
     /// overlay) — `[esc]` closes the topmost one before touching playback.
     var isAnyOverlayOpen: Bool { get }
-    /// The Files & Tags overlay is open, so `[arrow up]`/`[tab]` is a no-op and
+    /// The Visual Overlay is open, so `[arrow up]`/`[tab]` is a no-op and
     /// `[arrow down]` closes it rather than revealing audio.
-    var isFilesTagsOpen: Bool { get }
+    var isVisualOverlayOpen: Bool { get }
     /// Which surface owns key context. `.audio` once the audio overlay is fully revealed —
     /// arrows, `[space]`, `[l]`, seek, and `[delete]` then act on the audio playlist;
     /// otherwise `.visual`.
     var keyContext: KeyContext { get }
 
     func closeTopmostOverlay()
-    func openFilesTags()
-    func closeFilesTags()
+    func openVisualOverlay()
+    func closeVisualOverlay()
     func revealCompactAudio()
     func expandAudioToExtended()
     func closeAudioOverlay()
@@ -53,11 +53,11 @@ protocol HotkeyOverlayContext: AnyObject {
 @MainActor
 final class NoOverlayContext: HotkeyOverlayContext {
     var isAnyOverlayOpen: Bool { false }
-    var isFilesTagsOpen: Bool { false }
+    var isVisualOverlayOpen: Bool { false }
     var keyContext: KeyContext { .visual }
     func closeTopmostOverlay() {}
-    func openFilesTags() {}
-    func closeFilesTags() {}
+    func openVisualOverlay() {}
+    func closeVisualOverlay() {}
     func revealCompactAudio() {}
     func expandAudioToExtended() {}
     func closeAudioOverlay() {}
@@ -304,13 +304,13 @@ final class HotkeyRouter {
         case .arrowRight: coordinator.next(visual)
         case .arrowLeft: coordinator.previous(visual)
         case .tab:
-            // Toggle: opens Files & Tags, or closes it however it was opened.
-            overlayContext.isFilesTagsOpen ? overlayContext.closeFilesTags() : overlayContext.openFilesTags()
+            // Toggle: opens the Visual Overlay, or closes it however it was opened.
+            overlayContext.isVisualOverlayOpen ? overlayContext.closeVisualOverlay() : overlayContext.openVisualOverlay()
         case .arrowUp:
-            // Opens Files & Tags, but never closes it (that's Tab / Esc / Down).
-            if !overlayContext.isFilesTagsOpen { overlayContext.openFilesTags() }
+            // Opens the Visual Overlay, but never closes it (that's Tab / Esc / Down).
+            if !overlayContext.isVisualOverlayOpen { overlayContext.openVisualOverlay() }
         case .arrowDown:
-            if overlayContext.isFilesTagsOpen { overlayContext.closeFilesTags() }
+            if overlayContext.isVisualOverlayOpen { overlayContext.closeVisualOverlay() }
             else { overlayContext.revealCompactAudio() }
         case .l: coordinator.toggleLoop(visual)
         default: return false

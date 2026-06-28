@@ -6,7 +6,7 @@
 //  image), drives the window into fullscreen while it is on screen, and hosts the
 //  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
 //  zones drive the `OverlayManager`; this view composes its overlay content: the bottom
-//  controls bar, the left playlists selector, and the Files & Tags overlay. The independent
+//  controls bar, the left playlists selector, and the Visual Overlay. The independent
 //  audio overlay is layered above by `RootView`.
 //
 
@@ -56,15 +56,15 @@ struct PlayerView: View {
         .background(FullscreenView())
         .background(CursorAutoHider(isActive: cursorShouldAutoHide))
         .overlay(alignment: .bottom) { bottomControlsContainer }
-        .overlay { filesTagsContainer }
+        .overlay { visualOverlayContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
         .animation(.easeInOut(duration: 0.2), value: visualHasNoFiles)
         // Drop every overlay when the player exits, so re-entering starts clean instead
         // of flashing the overlay that was open at stop and then dismissing it.
         .onDisappear { overlays.hideAll() }
-        // Pause advancement while Files & Tags is open so it can't jump to the next
+        // Pause advancement while the Visual Overlay is open so it can't jump to the next
         // file mid-edit; resume when it closes.
-        .onChange(of: overlays.isFilesTagsOpen) { _, open in
+        .onChange(of: overlays.isVisualOverlayOpen) { _, open in
             open ? coordinator.haltVisualForOverlay() : coordinator.resumeVisualForOverlay()
         }
         .alert(
@@ -168,10 +168,10 @@ struct PlayerView: View {
     /// Opened by `[tab]`/`[arrow up]` or the bottom bar's button — not by hover — and
     /// slides up from the bottom over the player.
     @ViewBuilder
-    private var filesTagsContainer: some View {
-        if overlays.active.contains(.filesTags), !coordinator.isSuppressed,
+    private var visualOverlayContainer: some View {
+        if overlays.active.contains(.visualOverlay), !coordinator.isSuppressed,
            let visual = coordinator.liveVisualPlaylist {
-            FilesTagsOverlayView(playlist: visual)
+            VisualOverlay(playlist: visual)
                 // Leave the top-edge audio hover zone uncovered so the overlay's close button
                 // clears it instead of fighting it for the cursor.
                 .padding(.top, AppConstants.audioHoverZoneHeight)

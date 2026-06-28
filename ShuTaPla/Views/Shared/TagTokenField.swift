@@ -51,7 +51,7 @@ struct TagTokenField<ChipMenu: View>: View {
     let placeholder: String
     /// When true the field begins editing (and focuses its input) as soon as it
     /// appears, instead of waiting for a click. The filter bar leaves it off; the
-    /// Files & Tags overlay turns it on so the caret lands in the tag input.
+    /// Visual Overlay turns it on so the caret lands in the tag input.
     var autoFocus: Bool = false
     let onAdd: (String) -> Void
     let onRemove: (String) -> Void

@@ -5,8 +5,8 @@
 //  The player-mode library surface: three columns — a single-type playlist selector,
 //  the active playlist's filtered file list (topped by its `FilterBar`), and a tag editor
 //  for the current file. It drives one playback channel, wired through a `LibraryContext`
-//  that supplies the channel-specific slots and actions; the audio overlay and the visual
-//  Files & Tags overlay both render their lower body from it. Shared `AppState` / coordinator
+//  that supplies the channel-specific slots and actions; the audio overlay and the
+//  Visual Overlay both render their lower body from it. Shared `AppState` / coordinator
 //  come from the environment, so the context carries only what differs between channels.
 //
 

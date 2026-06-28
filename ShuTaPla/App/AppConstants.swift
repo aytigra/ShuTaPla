@@ -30,7 +30,7 @@ nonisolated enum AppConstants {
     static let selectionHighlightOpacity = 0.22
 
     /// Height of the Player-mode top-edge hover zone that reveals the audio overlay. The
-    /// Files & Tags overlay insets its top by this much so its close button sits clear of it.
+    /// Visual Overlay insets its top by this much so its close button sits clear of it.
     static let audioHoverZoneHeight: CGFloat = 60
 
     /// Classify a filename extension into a media type, or `nil` if unrecognized.

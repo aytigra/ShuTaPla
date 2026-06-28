@@ -1505,7 +1505,7 @@ struct AppStateTests {
 
         appState.coordinator.play(image)   // the image engine has no libmpv, so this is trap-safe
 
-        // The Files & Tags overlay resolves its highlighted/centered file from the live visual
+        // The Visual Overlay resolves its highlighted/centered file from the live visual
         // playlist's persisted current id against the displayed list.
         #expect(appState.currentVisualFile?.id == first.id)
         #expect(appState.currentVisualFile?.id == appState.visualChannelFiles.first?.id)
