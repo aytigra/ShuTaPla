@@ -152,12 +152,13 @@ seam between the two.
 
 ## Orphan GC (optional, independent)
 
-Whichever keying is used, the disk cache never shrinks on its own. A simple
-sweep closes that gap: on launch (or idle), enumerate `.heic` files in the cache
-directory whose access date is older than a threshold and remove them. With
-fingerprint keys this is safe and self-correcting — a removed entry that is still
-referenced regenerates on next view. This is independent of the re-key and can
-ship separately.
+Whichever keying is used, the disk cache never shrinks on its own. A UI in settings which shows current cache size and allows to clear cache, with options to remove all cache or remove only orphaned thumbnails. Can also have a background task that runs once in a while and removes orphaned thumbnails (for this it will be beneficial to store fingerprint on the file record).
+
+Having explicit cache management makes it beneficial to move thumbnail cache into app folder so that it is not purged haphazardly by "disk pressure" checks.
+
+## Duplicate search
+
+Having fingerprint stored on the file record will make it trivial to add a "has duplicates" service filter which will render all files within playlist that has duplicates (sorted by fingerprint so each duplicate is rendered alongside each other).
 
 ## Testable
 

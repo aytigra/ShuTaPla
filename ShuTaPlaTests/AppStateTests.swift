@@ -618,22 +618,49 @@ struct AppStateTests {
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
-        addFile("a.mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
-        addFile("b.mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         addFile("c.mp4", order: 2, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
-        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach sun].mp4", "b [beach].mp4"])
 
         appState.toggleFilterTag("sun", on: playlist)  // AND beach + sun
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach sun].mp4"])
 
         appState.setFilterMode(.or, on: playlist)       // beach OR sun
-        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a.mp4", "b.mp4"])
+        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach sun].mp4", "b [beach].mp4"])
 
         await appState.updateTask?.value
+    }
+
+    /// Regression: a store carried across the lightweight schema migration has files whose
+    /// `tags` relationship is empty even though their filenames still carry tags — the chips
+    /// render from the filename, so the tags look present, but the filter (a store predicate
+    /// over the relationship) finds nothing. The managed-playlist scan must re-mirror the
+    /// filename-derived tags and tagging status onto the columns the filter queries.
+    @Test func managedScanRemirrorsFilenameTagsOntoTheRelationship() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        // Tagged filenames but an empty `tags` relationship and default tagging status — the
+        // shape a lightweight migration leaves behind (the derived columns dropped, the names intact).
+        addFile("a [beach].jpg", tags: [], status: .untagged, order: 0, to: playlist, in: context)
+        addFile("b [beach sunny].jpg", tags: [], status: .untagged, order: 1, to: playlist, in: context)
+        addFile("c.jpg", tags: [], status: .untagged, order: 2, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        // Managing the playlist runs the background scan, which reconciles the relationship.
+        appState.manage(playlist)
+        await appState.updateTask?.value
+
+        // The filter dropdown's known tags come back, and filtering by a re-mirrored tag matches.
+        #expect(playlist.tagFrequency["beach"] == 2)
+        appState.toggleFilterTag("beach", on: playlist)
+        #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach].jpg", "b [beach sunny].jpg"])
     }
 
     @Test func serviceFilterOverridesAndRestoresTagFilter() async throws {
@@ -641,27 +668,27 @@ struct AppStateTests {
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
-        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
         addFile("b.mp4", status: .untagged, order: 1, to: playlist, in: context)
-        addFile("c.mp4", status: .invalid, order: 2, to: playlist, in: context)
+        addFile("c [ab].mp4", status: .invalid, order: 2, to: playlist, in: context)
         addFile("x.jpg", status: .untagged, skipped: true, order: 3, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])
 
         appState.toggleServiceFilter(.untagged, on: playlist)  // overrides the tag filter
         #expect(appState.managerFiles.map(\.fileName) == ["b.mp4"])
 
         appState.toggleServiceFilter(.invalidTagging, on: playlist)  // mutually exclusive: replaces
-        #expect(appState.managerFiles.map(\.fileName) == ["c.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["c [ab].mp4"])
 
         appState.toggleServiceFilter(.skipped, on: playlist)
         #expect(appState.managerFiles.map(\.fileName) == ["x.jpg"])
 
         appState.toggleServiceFilter(.skipped, on: playlist)  // off → tag filter restored
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])
 
         await appState.updateTask?.value
     }
@@ -674,7 +701,7 @@ struct AppStateTests {
         context.insert(p1)
         context.insert(p2)
         p1.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
-        addFile("a.mp4", tags: ["beach"], status: .valid, order: 0, to: p1, in: context)
+        addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: p1, in: context)
         addFile("b.mp4", order: 1, to: p1, in: context)
         addFile("c.mp4", order: 0, to: p2, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -683,7 +710,7 @@ struct AppStateTests {
         // no intermediate task is left running to touch a torn-down model after the body.
         appState.manage(p1)
         await appState.updateTask?.value
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored filter
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])  // restored filter
 
         appState.manage(p2)
         await appState.updateTask?.value
@@ -691,7 +718,7 @@ struct AppStateTests {
 
         appState.manage(p1)
         await appState.updateTask?.value
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])  // restored again
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])  // restored again
     }
 
     // MARK: - Tag editing (Task 7)

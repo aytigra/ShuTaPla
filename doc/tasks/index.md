@@ -10,7 +10,7 @@ iCloud/offline awareness: per-file status indicators, on-demand download, and pr
 - `CloudFileService.swift` — per-file status (local / in cloud / downloading) via `NSMetadataQuery` scoped to active playlist folders and URL resource values (`.ubiquitousItemDownloadingStatusKey`, `.ubiquitousItemIsDownloadingKey`)
 - On-demand download via `FileManager.startDownloadingUbiquitousItem(at:)`
 - Prefetch: while the current file plays, request downloads for the next N files in playback order (driven from `PlaybackCoordinator` on each file change)
-- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Visual Overlay
+- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Overlays
 - Playback integration: if the file playback reaches is still in the cloud, request its download immediately; if it cannot be made local in time, advance to the next available file (same rule as missing files)
 
 **Testable:**
