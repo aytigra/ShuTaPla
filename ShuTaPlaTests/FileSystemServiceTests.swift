@@ -88,7 +88,7 @@ struct FileSystemServiceTests {
         let byName = Dictionary(uniqueKeysWithValues: result.files.map { ($0.fileName, $0) })
 
         #expect(byName["sunset [beach sunny].mp4"]?.taggingStatus == .valid)
-        #expect(byName["sunset [beach sunny].mp4"]?.tags == ["beach", "sunny"])
+        #expect(byName["sunset [beach sunny].mp4"]?.tagNames == ["beach", "sunny"])
         #expect(byName["plain.mp4"]?.taggingStatus == .untagged)
         #expect(byName["broken [a].mp4"]?.taggingStatus == .invalid)
     }
@@ -168,9 +168,9 @@ struct FileSystemServiceTests {
         try TempFS.write("c.mp4", in: dir)
         TempFS.remove(dir.appendingPathComponent("b.mp4"))
 
-        let delta = try await service.updatePlaylist(bookmark: bookmark(for: dir), knownRelativePaths: known)
-        #expect(delta.added.map(\.relativePath) == ["c.mp4"])
-        #expect(delta.removedRelativePaths == ["b.mp4"])
+        let scan = try await service.updatePlaylist(bookmark: bookmark(for: dir), knownRelativePaths: known)
+        #expect(scan.current.map(\.relativePath) == ["a.mp4", "c.mp4"])  // everything on disk now
+        #expect(scan.removedRelativePaths == ["b.mp4"])
     }
 
     @Test func renameMovesFileOnDisk() async throws {
@@ -340,8 +340,8 @@ private struct MockFileSystem: FileSystemProviding {
     var scanResult: ScanResult
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { scanResult }
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta {
-        UpdateDelta(added: [], removedRelativePaths: [])
+    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
+        UpdateScan(current: [], removedRelativePaths: [])
     }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
@@ -357,7 +357,7 @@ struct FileSystemProvidingMockTests {
         let sample = ScanResult(
             files: [ScannedFile(
                 relativePath: "a.mp4", fileName: "a.mp4", mediaType: .video,
-                tags: [], taggingStatus: .untagged, cloudStatus: .local
+                cloudStatus: .local, tagNames: [], taggingStatus: .untagged
             )],
             counts: [.video: 1],
             dominantType: .video

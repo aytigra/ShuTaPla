@@ -4,7 +4,7 @@
 //
 //  The single serialization point for disk I/O. An `actor` so scans, renames,
 //  and trashing never interleave on the same folder without explicit locking.
-//  Returns Sendable value types (`ScanResult`, `UpdateDelta`, `TrashResult`)
+//  Returns Sendable value types (`ScanResult`, `UpdateScan`, `TrashResult`)
 //  that cross back to the main actor; it never touches SwiftData @Model objects.
 //
 
@@ -12,16 +12,27 @@ import Foundation
 
 // MARK: - Value types
 
-/// One recognized media file found on disk. Classification and tag parsing are
-/// done at scan time; the main actor turns these into `PlaylistFile` models,
-/// marking files whose `mediaType` differs from the playlist's as skipped.
+/// One recognized media file found on disk — the naked listing, before any tag
+/// derivation. `enumerateMedia(in:)` produces these; the higher-level scans derive
+/// each file's tags from its name to produce a `ScannedFile`.
+nonisolated struct MediaFile: Sendable, Equatable {
+    let relativePath: String
+    let fileName: String
+    let mediaType: MediaType
+    let cloudStatus: CloudStatus
+}
+
+/// A listed media file with its filename-derived tag fields — the unit the playlist layer
+/// turns into (or reconciles against) a `PlaylistFile`. Derivation runs on the file-system
+/// actor, off the main actor, so applying a scan never re-parses a filename on the main actor.
+/// The main actor marks files whose `mediaType` differs from the playlist's as skipped.
 nonisolated struct ScannedFile: Sendable, Equatable {
     let relativePath: String
     let fileName: String
     let mediaType: MediaType
-    let tags: [String]
-    let taggingStatus: TaggingStatus
     let cloudStatus: CloudStatus
+    let tagNames: [String]
+    let taggingStatus: TaggingStatus
 }
 
 /// The outcome of scanning a folder: every recognized media file, per-type
@@ -36,12 +47,16 @@ nonisolated struct ScanResult: Sendable, Equatable {
     var isMixed: Bool { !files.isEmpty && dominantType == nil }
 }
 
-/// Difference between a playlist's known files and what's now on disk.
-nonisolated struct UpdateDelta: Sendable, Equatable {
-    let added: [ScannedFile]
+/// What a playlist's folder holds now and what it has lost. `current` is every recognized
+/// file on disk, each with its derived tags; `removedRelativePaths` are the known paths no
+/// longer present. The main actor reconciles models against `current` — resolving each by
+/// relative path, creating the absent ones, writing only diverged tag fields — and deletes
+/// the removed paths.
+nonisolated struct UpdateScan: Sendable, Equatable {
+    let current: [ScannedFile]
     let removedRelativePaths: [String]
 
-    var isEmpty: Bool { added.isEmpty && removedRelativePaths.isEmpty }
+    var isEmpty: Bool { current.isEmpty && removedRelativePaths.isEmpty }
 }
 
 /// Result of a (best-effort) trash operation. Files that failed are left on
@@ -65,7 +80,7 @@ nonisolated enum FileSystemError: Error, Equatable {
 /// actor (production) and a plain struct/class (mocks) can both conform.
 protocol FileSystemProviding: Sendable {
     func scanFolder(bookmark: Data) async throws -> ScanResult
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta
+    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan
     func renameFile(at url: URL, to newName: String) async throws -> URL
     func trashFiles(_ urls: [URL]) async throws -> TrashResult
 }
@@ -82,15 +97,14 @@ actor FileSystemService {
         try Self.scan(bookmark: bookmark)
     }
 
-    /// Re-scans and reports new files (on disk, not yet known) and removed files
-    /// (known, no longer on disk). `knownRelativePaths` should include skipped
-    /// entries so they aren't re-reported as added.
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta {
+    /// Re-scans and returns every file now on disk (each with its derived tags) together with
+    /// the known paths that are gone. `knownRelativePaths` should include skipped entries so a
+    /// surviving skipped file isn't reported as removed.
+    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
         let result = try Self.scan(bookmark: bookmark)
         let currentPaths = Set(result.files.map(\.relativePath))
-        let added = result.files.filter { !knownRelativePaths.contains($0.relativePath) }
         let removed = knownRelativePaths.subtracting(currentPaths)
-        return UpdateDelta(added: added, removedRelativePaths: removed.sorted())
+        return UpdateScan(current: result.files, removedRelativePaths: removed.sorted())
     }
 
     /// Renames a file in place (same directory, new name component). Returns the
@@ -146,10 +160,10 @@ actor FileSystemService {
         try BookmarkService.withScopedAccess(to: bookmark) { try scan(directory: $0) }
     }
 
-    /// Recursively enumerates `root`, keeping only recognized media files and
-    /// recording each one's classification, parsed tags, and initial cloud
-    /// status. Output is sorted by relative path for deterministic results.
-    nonisolated static func scan(directory root: URL) throws -> ScanResult {
+    /// Recursively enumerates `root`, keeping only recognized media files and recording each
+    /// one's classification and initial cloud status — the naked listing, no tag derivation.
+    /// Output is sorted by relative path for deterministic results.
+    nonisolated static func enumerateMedia(in root: URL) throws -> [MediaFile] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
@@ -165,9 +179,7 @@ actor FileSystemService {
             throw FileSystemError.operationFailed("Could not enumerate \(root.path)")
         }
 
-        var files: [ScannedFile] = []
-        var counts: [MediaType: Int] = [:]
-
+        var files: [MediaFile] = []
         for case let fileURL as URL in enumerator {
             // One fetch for every key the loop needs (regular-file test and cloud status),
             // reusing the values the enumerator prefetched rather than re-statting per use.
@@ -175,21 +187,43 @@ actor FileSystemService {
             guard values?.isRegularFile == true else { continue }
             guard let type = AppConstants.mediaType(forExtension: fileURL.pathExtension) else { continue }
 
-            let fileName = fileURL.lastPathComponent
-            let (tags, status) = TagParser.fields(for: fileName)
-            files.append(ScannedFile(
+            files.append(MediaFile(
                 relativePath: relativePath(of: fileURL, under: root),
-                fileName: fileName,
+                fileName: fileURL.lastPathComponent,
                 mediaType: type,
-                tags: tags,
-                taggingStatus: status,
                 cloudStatus: cloudStatus(from: values)
             ))
-            counts[type, default: 0] += 1
         }
 
         files.sort { $0.relativePath < $1.relativePath }
-        return ScanResult(files: files, counts: counts, dominantType: dominantType(counts: counts))
+        return files
+    }
+
+    /// A full folder scan: the naked listing with each file's tags derived from its name, plus
+    /// the per-type counts and dominant type. Tag parsing (`TagParser.fields`) runs here, on the
+    /// file-system actor's executor.
+    nonisolated static func scan(directory root: URL) throws -> ScanResult {
+        let media = try enumerateMedia(in: root)
+        var counts: [MediaType: Int] = [:]
+        for file in media { counts[file.mediaType, default: 0] += 1 }
+        return ScanResult(
+            files: media.map(deriveTags(of:)),
+            counts: counts,
+            dominantType: dominantType(counts: counts)
+        )
+    }
+
+    /// Derives a listed file's tag fields from its name — the single tag-derivation site.
+    private nonisolated static func deriveTags(of media: MediaFile) -> ScannedFile {
+        let (tagNames, status) = TagParser.fields(for: media.fileName)
+        return ScannedFile(
+            relativePath: media.relativePath,
+            fileName: media.fileName,
+            mediaType: media.mediaType,
+            cloudStatus: media.cloudStatus,
+            tagNames: tagNames,
+            taggingStatus: status
+        )
     }
 
     // MARK: - Shuffle

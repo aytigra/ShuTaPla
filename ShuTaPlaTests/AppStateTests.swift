@@ -31,8 +31,8 @@ private func makeTempDir() throws -> URL {
 
 private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> ScannedFile {
     ScannedFile(
-        relativePath: name, fileName: name, mediaType: type,
-        tags: tags, taggingStatus: tags.isEmpty ? .untagged : .valid, cloudStatus: .local
+        relativePath: name, fileName: name, mediaType: type, cloudStatus: .local,
+        tagNames: tags, taggingStatus: tags.isEmpty ? .untagged : .valid
     )
 }
 
@@ -55,17 +55,17 @@ private func addFile(
     return file
 }
 
-/// Returns a canned scan result regardless of the bookmark it's handed, and a
-/// canned update delta for re-scans.
+/// Returns a canned scan result regardless of the bookmark it's handed, and a canned
+/// re-scan (the folder's current files plus removed paths) for re-scans.
 private struct StubFileSystem: FileSystemProviding {
     let result: ScanResult
-    var delta = UpdateDelta(added: [], removedRelativePaths: [])
+    var update = UpdateScan(current: [], removedRelativePaths: [])
     /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
     var trashFails = false
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { result }
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateDelta {
-        delta
+    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
+        update
     }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
@@ -427,8 +427,12 @@ struct AppStateTests {
             counts: [.video: 2],
             dominantType: .video
         )
-        let delta = UpdateDelta(added: [scanned("c.mp4", .video, tags: ["beach"])], removedRelativePaths: ["a.mp4"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, delta: delta))
+        // The folder now holds the survivor b.mp4 and the new c.mp4 (tagged), with a.mp4 gone.
+        let update = UpdateScan(
+            current: [scanned("b.mp4", .video), scanned("c.mp4", .video, tags: ["beach"])],
+            removedRelativePaths: ["a.mp4"]
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, update: update))
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -651,7 +655,14 @@ struct AppStateTests {
         addFile("a [beach].jpg", tags: [], status: .untagged, order: 0, to: playlist, in: context)
         addFile("b [beach sunny].jpg", tags: [], status: .untagged, order: 1, to: playlist, in: context)
         addFile("c.jpg", tags: [], status: .untagged, order: 2, to: playlist, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        // The folder on disk still holds the same tagged filenames; the scan derives their tags
+        // (off-main) and the apply re-mirrors them onto the empty relationship.
+        let update = UpdateScan(current: [
+            scanned("a [beach].jpg", .image, tags: ["beach"]),
+            scanned("b [beach sunny].jpg", .image, tags: ["beach", "sunny"]),
+            scanned("c.jpg", .image),
+        ], removedRelativePaths: [])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
 
         // Managing the playlist runs the background scan, which reconciles the relationship.
         appState.manage(playlist)
@@ -661,6 +672,37 @@ struct AppStateTests {
         #expect(playlist.tagFrequency["beach"] == 2)
         appState.toggleFilterTag("beach", on: playlist)
         #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach].jpg", "b [beach sunny].jpg"])
+    }
+
+    /// A scan that drops a tag from every filename it appeared in leaves its `Tag` row referencing
+    /// no files; the scan's cleanup deletes such orphans. But `Tag` is shared many-to-many across
+    /// playlists, so a tag another playlist's files still carry is kept — cleanup keys on the
+    /// global `files`, never per-playlist.
+    @Test func scanDeletesTagsOrphanedFromEveryFilenameButKeepsSharedOnes() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .image)
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .image)
+        context.insert(a)
+        context.insert(b)
+        // A's file carries "gone" and "shared" on the relationship, but its on-disk name dropped
+        // both. B's file still carries "shared" in its filename — the same shared `Tag` row.
+        addFile("x.jpg", tags: ["gone", "shared"], status: .valid, order: 0, to: a, in: context)
+        addFile("y [shared].jpg", tags: ["shared"], status: .valid, order: 0, to: b, in: context)
+
+        // Scanning A re-derives x.jpg to untagged, orphaning "gone" globally (only A had it) while
+        // "shared" stays on B's file.
+        let update = UpdateScan(current: [scanned("x.jpg", .image)], removedRelativePaths: [])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        await appState.update(a)
+
+        func tagExists(_ normalized: String) -> Bool {
+            var descriptor = FetchDescriptor<ShuTaPla.Tag>(predicate: #Predicate { $0.normalizedName == normalized })
+            descriptor.fetchLimit = 1
+            return ((try? context.fetch(descriptor))?.first) != nil
+        }
+        #expect(!tagExists("gone"))     // dropped from every filename → cleaned up
+        #expect(tagExists("shared"))    // still carried by B's file → kept
     }
 
     @Test func serviceFilterOverridesAndRestoresTagFilter() async throws {
@@ -955,9 +997,12 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
         addFile("a.mp4", order: 0, to: playlist, in: context)
-        // Each (re-)scan rediscovers the same extra file, so a re-read shows as another append.
-        let delta = UpdateDelta(added: [scanned("new.mp4", .video)], removedRelativePaths: [])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        // The folder holds the known a.mp4 plus one not-yet-known file; a scan reconciles to it.
+        let update = UpdateScan(
+            current: [scanned("a.mp4", .video), scanned("new.mp4", .video)],
+            removedRelativePaths: []
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
 
         appState.manage(playlist)
         let firstScan = appState.updateTask
@@ -966,10 +1011,12 @@ struct AppStateTests {
 
         // Re-clicking the already-selected row re-reads the folder — the automatic Update, the
         // reason there's no dedicated control — so it spawns a fresh scan rather than no-op'ing.
+        // The folder is unchanged, so the re-scan reconciles to the same set by relative path
+        // without duplicating the already-present files.
         appState.manage(playlist)
         #expect(appState.updateTask != firstScan)
         await appState.updateTask?.value
-        #expect(playlist.files.count == 3)
+        #expect(playlist.files.count == 2)
     }
 
     @Test func selectingADifferentPlaylistDoesNotCancelTheFirstScan() async throws {
@@ -1086,7 +1133,7 @@ struct AppStateTests {
         let a = addFile("a.mp4", order: 0, to: playlist, in: context)
         let stub = StubFileSystem(
             result: emptyResult,
-            delta: UpdateDelta(added: [], removedRelativePaths: ["a.mp4"])
+            update: UpdateScan(current: [], removedRelativePaths: ["a.mp4"])
         )
         let appState = AppState(modelContext: context, fileSystem: stub)
         appState.managedPlaylist = playlist
@@ -1254,9 +1301,9 @@ struct AppStateTests {
         let first = addFile("1.jpg", order: 0, to: image, in: context)
         let second = addFile("2.jpg", order: 1, to: image, in: context)
         let secondID = second.id
-        // The re-scan reports the on-screen file gone from disk.
-        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.jpg"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        // The re-scan reports the on-screen file gone from disk, leaving only "2.jpg".
+        let update = UpdateScan(current: [scanned("2.jpg", .image)], removedRelativePaths: ["1.jpg"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
         defer { appState.coordinator.shutdown() }
 
         // Play the image playlist on the visual channel (the image engine has no libmpv, so this
@@ -1283,8 +1330,12 @@ struct AppStateTests {
         let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
         context.insert(audio)
         addFile("a.mp3", order: 0, to: audio, in: context)
-        let delta = UpdateDelta(added: [scanned("new.mp3", .audio)], removedRelativePaths: [])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        // The folder holds the known a.mp3 plus a not-yet-known new.mp3 (the scan reconciles to it).
+        let update = UpdateScan(
+            current: [scanned("a.mp3", .audio), scanned("new.mp3", .audio)],
+            removedRelativePaths: []
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
         defer { appState.coordinator.shutdown() }
 
         let tokenBefore = appState.audioScrollToken
@@ -1296,12 +1347,13 @@ struct AppStateTests {
         #expect(audio.files.count == 2)                         // re-read the folder
 
         // Re-selecting the active audio playlist re-reads the folder again (no dedicated control)
-        // and re-centers the list once more.
+        // and re-centers the list once more. The folder is unchanged, so the re-scan reconciles to
+        // the same set by relative path without duplicating the already-present files.
         let tokenAfterFirst = appState.audioScrollToken
         appState.playOnAudioChannel(audio)
         #expect(appState.audioScrollToken > tokenAfterFirst)
         await appState.updateTask?.value
-        #expect(audio.files.count == 3)
+        #expect(audio.files.count == 2)
     }
 
     @Test func addingAudioPlaylistInPlayerModePlaysNewAndStopsOld() async throws {
@@ -1421,9 +1473,9 @@ struct AppStateTests {
         let first = addFile("1.mp3", order: 0, to: audio, in: context)
         let second = addFile("2.mp3", order: 1, to: audio, in: context)
         let secondID = second.id
-        // The re-scan prunes the track that's currently playing.
-        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.mp3"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        // The re-scan prunes the track that's currently playing, leaving only "2.mp3".
+        let update = UpdateScan(current: [scanned("2.mp3", .audio)], removedRelativePaths: ["1.mp3"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
         defer { appState.coordinator.shutdown() }
 
         appState.startPlayback(of: audio)
@@ -1441,8 +1493,8 @@ struct AppStateTests {
         context.insert(audio)
         let doomed = addFile("1.mp3", order: 0, to: audio, in: context)
         addFile("2.mp3", order: 1, to: audio, in: context)
-        let delta = UpdateDelta(added: [], removedRelativePaths: ["1.mp3"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, delta: delta))
+        let update = UpdateScan(current: [scanned("2.mp3", .audio)], removedRelativePaths: ["1.mp3"])
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
 
         // A trash confirmation pointing at a file the re-scan prunes must not survive to act
         // on a destroyed model.
