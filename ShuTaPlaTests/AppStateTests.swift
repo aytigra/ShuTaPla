@@ -36,6 +36,22 @@ private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> 
     )
 }
 
+/// A playlist's files as the store holds them, in sort order — a store-side fetch (ignoring
+/// pending changes), the way the UI reads them. The background scan writes on the scan actor's
+/// own context, so after an `update` the main playlist's `files` relationship is stale; post-scan
+/// assertions read this instead.
+@MainActor
+private func storedFiles(of playlist: Playlist) -> [PlaylistFile] {
+    guard let context = playlist.modelContext else { return [] }
+    let pid = playlist.persistentModelID
+    var descriptor = FetchDescriptor<PlaylistFile>(
+        predicate: #Predicate { $0.playlist?.persistentModelID == pid },
+        sortBy: [SortDescriptor(\.sortOrder)]
+    )
+    descriptor.includePendingChanges = false
+    return (try? context.fetch(descriptor)) ?? []
+}
+
 /// Inserts a `PlaylistFile` into a playlist for the filtering/tagging tests, saving it so it
 /// appears in the store-side `managerFiles` and friends (which ignore pending changes). Shares
 /// the build/insert/tag core with the other suites via `insertFile`; this wrapper adds the save.
@@ -55,17 +71,22 @@ private func addFile(
     return file
 }
 
-/// Returns a canned scan result regardless of the bookmark it's handed, and a canned
-/// re-scan (the folder's current files plus removed paths) for re-scans.
+/// Returns a canned scan result regardless of the bookmark it's handed, and a canned listing of
+/// the folder's current files for re-scans (the reconcile infers removals by diffing it against
+/// the playlist's own files).
 private struct StubFileSystem: FileSystemProviding {
     let result: ScanResult
-    var update = UpdateScan(current: [], removedRelativePaths: [])
+    var rescanResult: [ScannedFile] = []
     /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
     var trashFails = false
+    /// When set, `rescan` throws — the "folder unreadable, leave membership as it was" path, for
+    /// tests that exercise a re-scan's side effects without it reconciling files away.
+    var rescanFails = false
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { result }
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
-        update
+    func rescan(bookmark: Data) async throws -> [ScannedFile] {
+        if rescanFails { throw FileSystemError.operationFailed("folder unreadable") }
+        return rescanResult
     }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
@@ -427,12 +448,10 @@ struct AppStateTests {
             counts: [.video: 2],
             dominantType: .video
         )
-        // The folder now holds the survivor b.mp4 and the new c.mp4 (tagged), with a.mp4 gone.
-        let update = UpdateScan(
-            current: [scanned("b.mp4", .video), scanned("c.mp4", .video, tags: ["beach"])],
-            removedRelativePaths: ["a.mp4"]
-        )
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, update: update))
+        // The folder now holds the survivor b.mp4 and the new c.mp4 (tagged), with a.mp4 gone
+        // (absent from the listing, so the reconcile prunes it).
+        let rescanResult = [scanned("b.mp4", .video), scanned("c.mp4", .video, tags: ["beach"])]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, rescanResult: rescanResult))
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -444,8 +463,10 @@ struct AppStateTests {
 
         await appState.update(playlist)
 
-        let names = Set(playlist.files.map(\.fileName))
+        let names = Set(storedFiles(of: playlist).map(\.fileName))
         #expect(names == ["b.mp4", "c.mp4"])
+        // The scan rebuilds tag counts on the actor's context; `applyScanResult` refaults the held
+        // playlist, so its `tagFrequency` reflects the committed counts.
         #expect(playlist.tagFrequency["beach"] == 1)
     }
 
@@ -657,12 +678,12 @@ struct AppStateTests {
         addFile("c.jpg", tags: [], status: .untagged, order: 2, to: playlist, in: context)
         // The folder on disk still holds the same tagged filenames; the scan derives their tags
         // (off-main) and the apply re-mirrors them onto the empty relationship.
-        let update = UpdateScan(current: [
+        let rescanResult = [
             scanned("a [beach].jpg", .image, tags: ["beach"]),
             scanned("b [beach sunny].jpg", .image, tags: ["beach", "sunny"]),
             scanned("c.jpg", .image),
-        ], removedRelativePaths: [])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        ]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanResult: rescanResult))
 
         // Managing the playlist runs the background scan, which reconciles the relationship.
         appState.manage(playlist)
@@ -692,8 +713,10 @@ struct AppStateTests {
 
         // Scanning A re-derives x.jpg to untagged, orphaning "gone" globally (only A had it) while
         // "shared" stays on B's file.
-        let update = UpdateScan(current: [scanned("x.jpg", .image)], removedRelativePaths: [])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("x.jpg", .image)])
+        )
         await appState.update(a)
 
         func tagExists(_ normalized: String) -> Bool {
@@ -746,7 +769,9 @@ struct AppStateTests {
         addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: p1, in: context)
         addFile("b.mp4", order: 1, to: p1, in: context)
         addFile("c.mp4", order: 0, to: p2, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        // This test is about filter restoration on switch, not scanning; a failing rescan keeps each
+        // playlist's seeded files intact (an empty listing would otherwise prune them all).
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanFails: true))
 
         // Each `manage` launches its own background re-scan; await each before the next so
         // no intermediate task is left running to touch a torn-down model after the body.
@@ -998,16 +1023,13 @@ struct AppStateTests {
         context.insert(playlist)
         addFile("a.mp4", order: 0, to: playlist, in: context)
         // The folder holds the known a.mp4 plus one not-yet-known file; a scan reconciles to it.
-        let update = UpdateScan(
-            current: [scanned("a.mp4", .video), scanned("new.mp4", .video)],
-            removedRelativePaths: []
-        )
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let rescanResult = [scanned("a.mp4", .video), scanned("new.mp4", .video)]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanResult: rescanResult))
 
         appState.manage(playlist)
         let firstScan = appState.updateTask
         await appState.updateTask?.value
-        #expect(playlist.files.count == 2)        // a.mp4 + the discovered new.mp4
+        #expect(storedFiles(of: playlist).count == 2)        // a.mp4 + the discovered new.mp4
 
         // Re-clicking the already-selected row re-reads the folder — the automatic Update, the
         // reason there's no dedicated control — so it spawns a fresh scan rather than no-op'ing.
@@ -1016,7 +1038,7 @@ struct AppStateTests {
         appState.manage(playlist)
         #expect(appState.updateTask != firstScan)
         await appState.updateTask?.value
-        #expect(playlist.files.count == 2)
+        #expect(storedFiles(of: playlist).count == 2)
     }
 
     @Test func selectingADifferentPlaylistDoesNotCancelTheFirstScan() async throws {
@@ -1131,10 +1153,8 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
         context.insert(playlist)
         let a = addFile("a.mp4", order: 0, to: playlist, in: context)
-        let stub = StubFileSystem(
-            result: emptyResult,
-            update: UpdateScan(current: [], removedRelativePaths: ["a.mp4"])
-        )
+        // The folder is now empty, so the reconcile prunes a.mp4.
+        let stub = StubFileSystem(result: emptyResult, rescanResult: [])
         let appState = AppState(modelContext: context, fileSystem: stub)
         appState.managedPlaylist = playlist
         appState.pendingManagerDelete = [a]
@@ -1302,8 +1322,10 @@ struct AppStateTests {
         let second = addFile("2.jpg", order: 1, to: image, in: context)
         let secondID = second.id
         // The re-scan reports the on-screen file gone from disk, leaving only "2.jpg".
-        let update = UpdateScan(current: [scanned("2.jpg", .image)], removedRelativePaths: ["1.jpg"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("2.jpg", .image)])
+        )
         defer { appState.coordinator.shutdown() }
 
         // Play the image playlist on the visual channel (the image engine has no libmpv, so this
@@ -1316,7 +1338,7 @@ struct AppStateTests {
         // destroyed model.
         await appState.update(image)
 
-        #expect(image.files.map(\.fileName) == ["2.jpg"])
+        #expect(storedFiles(of: image).map(\.fileName) == ["2.jpg"])
         #expect(image.currentFileID == secondID)
     }
 
@@ -1331,11 +1353,8 @@ struct AppStateTests {
         context.insert(audio)
         addFile("a.mp3", order: 0, to: audio, in: context)
         // The folder holds the known a.mp3 plus a not-yet-known new.mp3 (the scan reconciles to it).
-        let update = UpdateScan(
-            current: [scanned("a.mp3", .audio), scanned("new.mp3", .audio)],
-            removedRelativePaths: []
-        )
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let rescanResult = [scanned("a.mp3", .audio), scanned("new.mp3", .audio)]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanResult: rescanResult))
         defer { appState.coordinator.shutdown() }
 
         let tokenBefore = appState.audioScrollToken
@@ -1344,7 +1363,7 @@ struct AppStateTests {
         #expect(appState.coordinator.liveAudioPlaylist === audio)   // a new selection starts playing
         #expect(appState.audioScrollToken > tokenBefore)        // asks the file list to re-center
         await appState.updateTask?.value
-        #expect(audio.files.count == 2)                         // re-read the folder
+        #expect(storedFiles(of: audio).count == 2)              // re-read the folder
 
         // Re-selecting the active audio playlist re-reads the folder again (no dedicated control)
         // and re-centers the list once more. The folder is unchanged, so the re-scan reconciles to
@@ -1353,7 +1372,7 @@ struct AppStateTests {
         appState.playOnAudioChannel(audio)
         #expect(appState.audioScrollToken > tokenAfterFirst)
         await appState.updateTask?.value
-        #expect(audio.files.count == 2)
+        #expect(storedFiles(of: audio).count == 2)
     }
 
     @Test func addingAudioPlaylistInPlayerModePlaysNewAndStopsOld() async throws {
@@ -1474,15 +1493,17 @@ struct AppStateTests {
         let second = addFile("2.mp3", order: 1, to: audio, in: context)
         let secondID = second.id
         // The re-scan prunes the track that's currently playing, leaving only "2.mp3".
-        let update = UpdateScan(current: [scanned("2.mp3", .audio)], removedRelativePaths: ["1.mp3"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("2.mp3", .audio)])
+        )
         defer { appState.coordinator.shutdown() }
 
         appState.startPlayback(of: audio)
         #expect(audio.currentFileID == first.id)
 
         await appState.update(audio)            // a re-scan that removes the playing track
-        #expect(audio.files.count == 1)
+        #expect(storedFiles(of: audio).count == 1)
         #expect(audio.currentFileID == secondID)   // reconciled off the pruned track
     }
 
@@ -1493,8 +1514,10 @@ struct AppStateTests {
         context.insert(audio)
         let doomed = addFile("1.mp3", order: 0, to: audio, in: context)
         addFile("2.mp3", order: 1, to: audio, in: context)
-        let update = UpdateScan(current: [scanned("2.mp3", .audio)], removedRelativePaths: ["1.mp3"])
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, update: update))
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("2.mp3", .audio)])
+        )
 
         // A trash confirmation pointing at a file the re-scan prunes must not survive to act
         // on a destroyed model.

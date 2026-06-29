@@ -115,7 +115,9 @@ The per-playlist state machine (Stopped/Playing/Paused) and suppression semantic
 
 Services hold UI-independent logic, are injected into state objects (not views), and are protocol-based for mock injection in tests (§16). Each is summarized by responsibility; signatures live in the source.
 
-- **FileSystemService** (`actor`) — resolves bookmarks and manages access sessions; recursively enumerates and classifies a folder by extension; determines the dominant media type or flags Mixed; detects new/removed files for Update. Disk I/O is serialized through the actor (a rename must not interleave with a scan). Classification uses static extension-to-type sets; a type is auto-assigned when ≥ 80% of recognized files are of it, otherwise the folder is **Mixed** and the user is prompted — there is no second threshold.
+- **FileSystemService** (`actor`) — resolves bookmarks and manages access sessions; recursively enumerates and classifies a folder by extension; determines the dominant media type or flags Mixed; detects new/removed files for Update. Disk I/O is serialized through the actor (a rename must not interleave with a scan). It also derives each listed file's filename tags (via `TagParser`) into the `ScannedFile` values it returns, so parsing happens off-main. Classification uses static extension-to-type sets; a type is auto-assigned when ≥ 80% of recognized files are of it, otherwise the folder is **Mixed** and the user is prompted — there is no second threshold.
+
+- **PlaylistScanActor** (`@ModelActor`) — runs the Update reconcile off the main actor on its **own** `ModelContext`: against the `FileSystemService` listing it prunes vanished files, appends new ones, writes each surviving file's diverged tag/status fields, rebuilds `tagFrequency`, saves, and batch-deletes globally-orphaned `Tag`s — the entire derived write, never on the main context. Models aren't `Sendable` across contexts, so the boundary is value types: the playlist's app `UUID` in, a `removedFileIDs`/`changed` summary out (it resolves the playlist by that `UUID`, since a still-temporary `PersistentIdentifier` would trap). This keeps the per-rescan derive/diff/write pass off the main actor so activating a large playlist stays instant.
 
 - **TagParser** — pure functions (filename ↔ tags), heavily unit-tested. Parses the single bracket group, detecting **invalid tagging** (more than one pair, nesting, or any token that isn't a valid tag: `[a-zA-Z0-9_]{3,}`); a single unmatched bracket in prose is ignored, not invalid. Tags are lowercased for matching with on-disk casing preserved. Builds new filenames for add/remove/rename, substituting a placeholder base when an edit would otherwise leave an empty name.
 
@@ -164,7 +166,7 @@ pick folder → create bookmark → recursive enumerate → classify by extensio
    → persist Playlist + PlaylistFiles → build tagFrequency cache
 ```
 
-Update and Reshuffle both re-read disk on a background `Task` with a "sync in progress" indicator; their differing semantics (append/prune/preserve vs. full reshuffle/reset) are in `features.md`. Update runs automatically when a playlist becomes active.
+Update and Reshuffle both re-read disk on a background `Task` with a "sync in progress" indicator; their differing semantics (append/prune/preserve vs. full reshuffle/reset) are in `features.md`. Update runs automatically when a playlist becomes active. Its reconcile runs and saves entirely on `PlaylistScanActor`'s own `ModelContext` (§5); because a sibling-context save isn't merged into the main context's registered objects, the main actor then **refaults the held playlist** (a fetch that updates the same instance in place) so the tag UI reading `playlist.tagFrequency` is current, and bumps `sequenceVersion` so the store-side file lists re-fetch.
 
 ### Tag editing
 
@@ -204,7 +206,7 @@ The routing priority itself — the esc chain, `[space]`, key-context, and the p
 
 ## 10. Concurrency model
 
-Swift 6 language mode with **default actor isolation set to `MainActor`** (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, Approachable Concurrency — the Xcode 26 defaults). Everything is `MainActor`-isolated unless declared otherwise; the explicit `@MainActor` annotations in this document are therefore redundant but kept for clarity. Off-main work is opted into explicitly: the `FileSystemService` actor, the `MPVClient` serial queue, and `@concurrent` functions.
+Swift 6 language mode with **default actor isolation set to `MainActor`** (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, Approachable Concurrency — the Xcode 26 defaults). Everything is `MainActor`-isolated unless declared otherwise; the explicit `@MainActor` annotations in this document are therefore redundant but kept for clarity. Off-main work is opted into explicitly: the `FileSystemService` actor, the `PlaylistScanActor` (a `@ModelActor` with its own `ModelContext`), the `MPVClient` serial queue, and `@concurrent` functions.
 
 The load-bearing subtlety: **under Approachable Concurrency a plain `nonisolated async` function runs on the caller's actor**, so a CPU-bound helper awaited from the main actor stays on the main thread unless marked `@concurrent` (as the thumbnail generation/decode workers are). `nonisolated` alone does not leave the main actor here.
 
@@ -254,8 +256,8 @@ App/         ShuTaPlaApp (@main, scene, container), AppConstants (extension maps
 Models/      Playlist, PlaylistFile, Tag, AppStateModel, GlobalSettings (@Model);
              PlaylistPreferences, FilterState, SavedSearch (Codable); Enums
 State/       AppState, PlaybackCoordinator, OverlayManager, HotkeyRouter
-Services/    FileSystemService (actor), TagParser, BookmarkService,
-             ThumbnailService, MPVThumbnailer, AudioStripper, DurationService
+Services/    FileSystemService (actor), PlaylistScanActor (@ModelActor), TagParser,
+             BookmarkService, ThumbnailService, MPVThumbnailer, AudioStripper, DurationService
 MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, Cmpv/ (Clang module)
 FFmpeg/      Cffmpeg/ (Clang module)
 Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine

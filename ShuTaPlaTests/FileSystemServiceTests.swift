@@ -155,22 +155,22 @@ struct FileSystemServiceTests {
         #expect(result.isMixed == false)
     }
 
-    @Test func updateDetectsAddedAndRemoved() async throws {
+    @Test func rescanListsEveryCurrentFile() async throws {
         let dir = try TempFS.makeDir()
         defer { TempFS.remove(dir) }
         try TempFS.write("a.mp4", in: dir)
         try TempFS.write("b.mp4", in: dir)
 
         let service = FileSystemService()
-        let known: Set<String> = ["a.mp4", "b.mp4"]
 
-        // Add one, remove one.
+        // Add one, remove one — the rescan reports exactly what's on disk now, sorted by path.
+        // Reconciling that against a playlist's files (prune the absent, add the new) is the scan
+        // actor's job, covered by the AppState reconcile tests.
         try TempFS.write("c.mp4", in: dir)
         TempFS.remove(dir.appendingPathComponent("b.mp4"))
 
-        let scan = try await service.updatePlaylist(bookmark: bookmark(for: dir), knownRelativePaths: known)
-        #expect(scan.current.map(\.relativePath) == ["a.mp4", "c.mp4"])  // everything on disk now
-        #expect(scan.removedRelativePaths == ["b.mp4"])
+        let current = try await service.rescan(bookmark: bookmark(for: dir))
+        #expect(current.map(\.relativePath) == ["a.mp4", "c.mp4"])
     }
 
     @Test func renameMovesFileOnDisk() async throws {
@@ -340,9 +340,7 @@ private struct MockFileSystem: FileSystemProviding {
     var scanResult: ScanResult
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { scanResult }
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
-        UpdateScan(current: [], removedRelativePaths: [])
-    }
+    func rescan(bookmark: Data) async throws -> [ScannedFile] { [] }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
         url.deletingLastPathComponent().appendingPathComponent(newName)
     }

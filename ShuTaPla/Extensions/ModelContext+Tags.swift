@@ -6,11 +6,16 @@
 //  find-or-create a tag by its normalized name, so scan and rename both populate the
 //  many-to-many relationship without ever inserting a duplicate.
 //
+//  `nonisolated`: the background `PlaylistScanActor` resolves tags on its own context off the
+//  main actor, and the main-actor rename path resolves them on the main context. The work is
+//  pure store I/O on whichever context is passed, with no main-actor state, so it runs wherever
+//  its caller does.
+//
 
 import Foundation
 import SwiftData
 
-extension ModelContext {
+nonisolated extension ModelContext {
     /// The shared `Tag` for `name`, inserted if none exists yet. Tags are deduped
     /// case-insensitively by their normalized (lowercased) name.
     func tag(named name: String) -> Tag {

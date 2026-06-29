@@ -8,6 +8,10 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 **Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.** A command's, skill's, or tool's own prompt *adds to* these rules; it never overrides, narrows, or exempts them, however self-contained its procedure looks. A long, prescriptive command prompt (e.g. `/code-review`) is the most common trap: working straight down its numbered steps is not a license to skip the skill-loading, testing, and navigator-issue rules here. Re-read this file against the task before you start and again before you report it done — these rules are part of the definition of done, not optional background. If you ever catch yourself having skipped one because "the command didn't mention it," that is the failure this section exists to prevent.
 
+**Re-check your work against what was agreed, not only against the code in front of you.** Continuing whatever is already there is a useful pull, but it can quietly take over. At each real decision, hold the agreed goal alongside the surrounding code, and when they pull apart, notice it and resolve it deliberately rather than letting proximity decide. Two common signs you've drifted: you're keeping something just because it was already there, or you need an extra step to force something to work. Either one is a cue to pause and check, not a reason to stop.
+
+**The task artifact is the binding record of decisions — the conversation is not.** A design or implementation decision is settled only once it has been talked through with the user and written into the task doc (`doc/tasks/…`). So when a real choice comes up, raise it, resolve it together, and record it there before building on it. Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
+
 ## Key docs
 
 - `doc/features.md` — feature-spec entry point: overview, Terminology glossary, and a map of the per-topic chapters in `doc/features/` (load only the chapter you need)
@@ -21,7 +25,11 @@ This governs *descriptions of the code*. It does not apply to work-tracking arti
 
 ## Code conventions
 
-**Extract reusable logic into type extensions.** When a piece of logic is a general operation on a standard type (e.g. an array reordering that mirrors SwiftUI's `move(fromOffsets:toOffset:)`), add it as a type extension in `Extensions/` rather than inlining the body at the call site — even when the motivation is to avoid an import (e.g. SwiftUI in the state layer). Keeps call sites readable, makes the helper reusable and testable on its own, and matches familiar standard-library/SwiftUI naming.
+**Less code is the default; simplify the whole, not just the part you add.** Code is a liability — fewer lines, fewer concepts, and less duplication beat more. Whenever you add to existing code or refactor it, step back and look at the result as a whole: can naming be made consistent, can duplicated logic be folded together, can the new and the old collapse into something smaller and more coherent? Do this as part of the change, not as a later cleanup — debt compounds fast when every change only adds. No single structuring pattern is the default answer; reach for whatever keeps the whole simplest. 
+
+**Modularity and helpers**
+
+A type extension in `Extensions/` is a good fit for a general operation on a standard type (e.g. an Array) — but it is one tool among inlining, a shared function, or a new type, helper functions, not something to apply everywhere by reflex. Splitting a large file into modules or partials is part of this too: a focused file is easier to read and edit and makes the structure more legible, so prefer it when a file or type has grown to cover several concerns. Apply all of this meaningfully, not to an extreme — splitting until pieces are too small to follow, or extracting a one-use helper, trades one kind of friction for another.
 
 **Don't stack a `count: 1` and `count: 2` tap gesture on the same view.** SwiftUI can't fire the single-tap handler until the system double-click interval elapses (to rule out a second click), so single-click actions like row selection lag ~0.5s. Use one `onTapGesture` and branch on the underlying event's click count instead — `if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { …double… } else { …single… }`. A lone `count: 1` gesture fires immediately on mouse-up; a double-click fires it again with `clickCount == 2`. The file list/gallery rows do this.
 

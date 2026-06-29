@@ -113,6 +113,10 @@ final class AppState {
     /// resolves file URLs through `bookmarkService`. Injected into the player views.
     let coordinator: PlaybackCoordinator
 
+    /// Runs the Update path's file reconciliation on its own `ModelContext` off the main actor,
+    /// so a re-scan's O(N) derive/diff/write never blocks the UI. Built from the shared container.
+    let scanActor: PlaylistScanActor
+
     let appStateModel: AppStateModel
     let globalSettings: GlobalSettings
 
@@ -404,6 +408,7 @@ final class AppState {
             bookmarkService: bookmarkService,
             globalSettings: settings
         )
+        self.scanActor = PlaylistScanActor(modelContainer: modelContext.container)
 
         // Welcome until at least one playlist exists, otherwise Manager — unless a
         // visual playlist was playing at quit, in which case `reconstructPlayback`
@@ -682,10 +687,10 @@ final class AppState {
 
         var tagCache: [String: Tag]?
         for (index, scanned) in ordered.enumerated() {
-            let file = makeFile(from: scanned, in: playlist, sortOrder: index)
-            writeDerivedFields(scanned, onto: file, tagCache: &tagCache)
+            let file = modelContext.makeFile(from: scanned, in: playlist, sortOrder: index)
+            modelContext.writeDerivedFields(scanned, onto: file, tagCache: &tagCache)
         }
-        rebuildTagFrequency(playlist)
+        modelContext.rebuildTagFrequency(of: playlist)
         // Persist the inserted files before anything derives a sequence from them: a
         // player-mode creation starts playback (which reads the playback sequence) right below.
         persistAndRefresh()
@@ -713,53 +718,6 @@ final class AppState {
     /// Next sort order within a media type's sidebar section (appended last).
     private func nextSortOrder(for mediaType: MediaType) -> Int {
         modelContext.playlists(ofType: mediaType).count
-    }
-
-    /// Builds and inserts one `PlaylistFile` from a scanned file at `sortOrder` — a naked row:
-    /// relative path, name, skip flag, sort order, cloud status. A file whose media type differs
-    /// from the playlist's is marked skipped (kept for the skipped-files filter, never played).
-    /// Its tags are written separately by `writeDerivedFields`, the single derivation-apply site,
-    /// so a freshly built row carries the default (untagged, no tags) until that runs.
-    @discardableResult
-    private func makeFile(from scanned: ScannedFile, in playlist: Playlist, sortOrder: Int) -> PlaylistFile {
-        let file = PlaylistFile(
-            relativePath: scanned.relativePath,
-            fileName: scanned.fileName,
-            isSkipped: scanned.mediaType != playlist.mediaType,
-            sortOrder: sortOrder
-        )
-        file.cloudStatus = scanned.cloudStatus
-        file.playlist = playlist
-        modelContext.insert(file)
-        return file
-    }
-
-    /// Writes a scanned file's filename-derived tag fields onto its model, but only where they
-    /// diverge from what's stored — the single site that projects a parsed filename onto the
-    /// `Tag` relationship and `taggingStatusCode` the tag and triage filters query store-side.
-    /// The filename is the source of truth; those columns are a denormalized index. Shared by
-    /// initial creation and the incremental Update, so a scan reconciles the index uniformly:
-    /// a file with no divergence is left untouched (a clean playlist writes nothing, and never
-    /// fetches), while a migration-emptied or renamed file gains its tags. The shared `Tag`s
-    /// resolve through one `tagCache`, primed lazily on the first divergence and reused across
-    /// the batch. Returns whether anything changed.
-    @discardableResult
-    private func writeDerivedFields(
-        _ scanned: ScannedFile, onto file: PlaylistFile, tagCache: inout [String: Tag]?
-    ) -> Bool {
-        var changed = false
-        if file.taggingStatusCode != scanned.taggingStatus.code {
-            file.taggingStatus = scanned.taggingStatus
-            changed = true
-        }
-        let desired = Set(TagParser.dedupe(scanned.tagNames).map { $0.lowercased() })
-        if desired != Set(file.tags.map(\.normalizedName)) {
-            var cache = tagCache ?? modelContext.tagsByNormalizedName()
-            file.tags = modelContext.tags(named: scanned.tagNames, cache: &cache)
-            tagCache = cache
-            changed = true
-        }
-        return changed
     }
 
     // MARK: - Manager operations
@@ -902,45 +860,55 @@ final class AppState {
 
     /// Re-scans a playlist's folder and reconciles its files against what's now on disk: prunes
     /// the missing ones, appends the new ones, and re-derives every current file's filename tags
-    /// onto the index the filters query. Failures (e.g. a stale bookmark) are ignored here; the
-    /// file list simply stays as it was.
+    /// onto the index the filters query. The reconcile — the O(N) derive/diff/write/orphan-sweep —
+    /// runs on the background `scanActor`; the main actor only finishes applying the result.
+    /// Failures (e.g. a stale bookmark) are ignored here; the file list simply stays as it was.
     func update(_ playlist: Playlist) async {
         guard !Task.isCancelled else { return }
         busyPlaylistIDs.insert(playlist.id)
         defer { busyPlaylistIDs.remove(playlist.id) }
 
-        refreshStaleBookmark(for: playlist)
+        // Commit a refreshed bookmark before handing off, so the main context holds no pending
+        // edit the background reconcile is unaware of and the actor's fetch sees the new bookmark.
+        if refreshStaleBookmark(for: playlist) { try? modelContext.save() }
 
-        let known = Set(playlist.files.map(\.relativePath))
-        let scan: UpdateScan
+        let current: [ScannedFile]
         do {
-            scan = try await fileSystem.updatePlaylist(
-                bookmark: playlist.folderBookmark,
-                knownRelativePaths: known
-            )
+            current = try await fileSystem.rescan(bookmark: playlist.folderBookmark)
         } catch {
             return
         }
         guard !Task.isCancelled else { return }
-        apply(scan, to: playlist)
+
+        let result = await scanActor.reconcile(current, playlistID: playlist.id)
+        guard !Task.isCancelled else { return }
+        guard result.changed else { return }
+        applyScanResult(result, to: playlist)
     }
 
     /// Re-creates and re-persists a playlist's folder bookmark when macOS reports it
     /// stale (the folder moved or was renamed), so scoped access survives the next
-    /// launch. A no-op when the bookmark resolves cleanly or can't be re-created.
-    private func refreshStaleBookmark(for playlist: Playlist) {
+    /// launch. Returns whether it refreshed; a no-op (and `false`) when the bookmark
+    /// resolves cleanly or can't be re-created.
+    @discardableResult
+    private func refreshStaleBookmark(for playlist: Playlist) -> Bool {
         guard let resolved = try? BookmarkService.resolve(playlist.folderBookmark), resolved.isStale,
-              let refreshed = try? BookmarkService.makeBookmark(for: resolved.url) else { return }
+              let refreshed = try? BookmarkService.makeBookmark(for: resolved.url) else { return false }
         playlist.folderBookmark = refreshed
+        return true
     }
 
-    private func apply(_ scan: UpdateScan, to playlist: Playlist) {
-        let removed = Set(scan.removedRelativePaths)
-        let toRemove = playlist.files.filter { removed.contains($0.relativePath) }
-        // Drop pending references to these files before deleting the models, so a
-        // delete confirmation raised over a file the re-scan just pruned can't act on
-        // (and dereference) a destroyed model when the user confirms.
-        let removedIDs = Set(toRemove.map(\.id))
+    /// Finishes a background reconcile on the main actor: the O(1) tail the actor can't do across
+    /// contexts. The background context already saved the files, `tagFrequency`, and swept orphan
+    /// tags (this context does no save — a main save would write its held pre-scan `files` back over
+    /// the store, dropping the actor's writes). Here we drop any pending UI reference to a pruned
+    /// file, refresh the held playlist so its attributes and `files` reflect the committed write,
+    /// bump the version so the store-side file lists re-fetch, and advance either channel off a
+    /// dropped playing file.
+    private func applyScanResult(_ result: ScanReconcileResult, to playlist: Playlist) {
+        let removedIDs = Set(result.removedFileIDs)
+        // Drop pending references to pruned files so a delete confirmation raised over one the
+        // re-scan removed can't act on (and dereference) a destroyed model when the user confirms.
         pendingManagerDelete.removeAll { removedIDs.contains($0.id) }
         pendingAudioStrip.removeAll { removedIDs.contains($0.id) }
         if let candidate = playerDeleteCandidate, removedIDs.contains(candidate.id) {
@@ -950,67 +918,15 @@ final class AppState {
             audioDeleteCandidate = nil
         }
         managerSelection.subtract(removedIDs)
-        // Derive the next sort order from the files that survive this scan, not from the
-        // post-detach `playlist.files` — so a still-counted to-be-removed file can't lend
-        // its `sortOrder` to a new file and collide, breaking stable playback ordering.
-        var nextOrder = (playlist.files.filter { !removedIDs.contains($0.id) }.map(\.sortOrder).max() ?? -1) + 1
-        for file in toRemove {
-            file.playlist = nil  // detach so playlist.files updates synchronously
-            modelContext.delete(file)
-        }
 
-        // Index the survivors by relative path so each scanned file maps to its model.
-        var byPath: [String: PlaylistFile] = [:]
-        for file in playlist.files { byPath[file.relativePath] = file }
-
-        // Reconcile every file now on disk in one pass: build a naked row for the absent ones
-        // (appended after the survivors), then derive each file's filename tags onto the index
-        // the filters query — only where it diverges, so an unchanged playlist writes nothing
-        // and never fetches. New rows and re-derivations share one lazily-primed `Tag` cache.
-        var changed = !toRemove.isEmpty
-        var tagCache: [String: Tag]?
-        for scanned in scan.current {
-            let file: PlaylistFile
-            if let existing = byPath[scanned.relativePath] {
-                file = existing
-            } else {
-                file = makeFile(from: scanned, in: playlist, sortOrder: nextOrder)
-                byPath[scanned.relativePath] = file
-                nextOrder += 1
-                changed = true
-            }
-            if writeDerivedFields(scanned, onto: file, tagCache: &tagCache) { changed = true }
-        }
-
-        guard changed else { return }
-
-        rebuildTagFrequency(playlist)
-        persistAndRefresh()
-        cleanupOrphanTags()
+        // The actor committed on its own context, which doesn't merge into this held playlist; a
+        // fetch refaults it in place so the tag UI (which reads `playlist.tagFrequency`) and any
+        // `files` walk see the new state. The version bump re-derives the store-side file lists.
+        modelContext.refreshFromStore(playlist)
+        sequenceVersion &+= 1
         // A re-scan can drop either channel's playing file; advance off it just like a delete
         // does, so neither engine holds a file that's no longer in the playlist.
         coordinator.reconcile(playlistThatChanged: playlist)
-    }
-
-    /// Deletes every `Tag` no file references any longer — a tag dropped from every filename it
-    /// once appeared in. Folded into the scan's persistence, where the full current tag set is
-    /// known, rather than run as a separate sweep. `Tag` is shared many-to-many across playlists,
-    /// so a tag is removed only when its `files` is globally empty; one another playlist's files
-    /// still carry is kept. Run *after* the save: `delete(model:where:)` is a batched store delete
-    /// that sees saved rows, not pending changes, so the `file.tags` reassignments above must
-    /// already be persisted for it to find the now-orphaned tags. It bypasses in-memory inverse
-    /// maintenance, which is harmless here because the targets reference no files.
-    private func cleanupOrphanTags() {
-        try? modelContext.delete(model: Tag.self, where: #Predicate { $0.files.isEmpty })
-    }
-
-    /// Recomputes the per-playlist tag usage counts from its playable files.
-    private func rebuildTagFrequency(_ playlist: Playlist) {
-        var frequency: [String: Int] = [:]
-        for file in playlist.files where !file.isSkipped {
-            for tag in file.tags { frequency[tag.name, default: 0] += 1 }
-        }
-        playlist.tagFrequency = frequency
     }
 
     /// Renumbers a section's `sortOrder` values to 0..<count after a deletion.
@@ -1030,7 +946,7 @@ final class AppState {
         defer { bookmarkService.stopAccess(to: playlist.folderBookmark) }
 
         if let error = await applyRename(file, to: newName, in: folderURL) { return error }
-        rebuildTagFrequency(playlist)
+        modelContext.rebuildTagFrequency(of: playlist)
         persistAndRefresh()
         return nil
     }
@@ -1084,7 +1000,7 @@ final class AppState {
             file.playlist = nil
             modelContext.delete(file)
         }
-        rebuildTagFrequency(playlist)
+        modelContext.rebuildTagFrequency(of: playlist)
         persistAndRefresh()
         // Advance whichever channel was playing this playlist off a trashed track, so the
         // engine never holds a file that's no longer in the playlist. Covers every delete
@@ -1559,7 +1475,7 @@ final class AppState {
                 firstError = firstError ?? error
             }
         }
-        rebuildTagFrequency(playlist)
+        modelContext.rebuildTagFrequency(of: playlist)
         persistAndRefresh()
         return firstError
     }

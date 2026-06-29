@@ -4,7 +4,7 @@
 //
 //  The single serialization point for disk I/O. An `actor` so scans, renames,
 //  and trashing never interleave on the same folder without explicit locking.
-//  Returns Sendable value types (`ScanResult`, `UpdateScan`, `TrashResult`)
+//  Returns Sendable value types (`ScanResult`, `[ScannedFile]`, `TrashResult`)
 //  that cross back to the main actor; it never touches SwiftData @Model objects.
 //
 
@@ -47,18 +47,6 @@ nonisolated struct ScanResult: Sendable, Equatable {
     var isMixed: Bool { !files.isEmpty && dominantType == nil }
 }
 
-/// What a playlist's folder holds now and what it has lost. `current` is every recognized
-/// file on disk, each with its derived tags; `removedRelativePaths` are the known paths no
-/// longer present. The main actor reconciles models against `current` — resolving each by
-/// relative path, creating the absent ones, writing only diverged tag fields — and deletes
-/// the removed paths.
-nonisolated struct UpdateScan: Sendable, Equatable {
-    let current: [ScannedFile]
-    let removedRelativePaths: [String]
-
-    var isEmpty: Bool { current.isEmpty && removedRelativePaths.isEmpty }
-}
-
 /// Result of a (best-effort) trash operation. Files that failed are left on
 /// disk and reported so the caller can surface a non-blocking notice and leave
 /// their model entries untouched.
@@ -80,7 +68,7 @@ nonisolated enum FileSystemError: Error, Equatable {
 /// actor (production) and a plain struct/class (mocks) can both conform.
 protocol FileSystemProviding: Sendable {
     func scanFolder(bookmark: Data) async throws -> ScanResult
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan
+    func rescan(bookmark: Data) async throws -> [ScannedFile]
     func renameFile(at url: URL, to newName: String) async throws -> URL
     func trashFiles(_ urls: [URL]) async throws -> TrashResult
 }
@@ -97,14 +85,12 @@ actor FileSystemService {
         try Self.scan(bookmark: bookmark)
     }
 
-    /// Re-scans and returns every file now on disk (each with its derived tags) together with
-    /// the known paths that are gone. `knownRelativePaths` should include skipped entries so a
-    /// surviving skipped file isn't reported as removed.
-    func updatePlaylist(bookmark: Data, knownRelativePaths: Set<String>) async throws -> UpdateScan {
-        let result = try Self.scan(bookmark: bookmark)
-        let currentPaths = Set(result.files.map(\.relativePath))
-        let removed = knownRelativePaths.subtracting(currentPaths)
-        return UpdateScan(current: result.files, removedRelativePaths: removed.sorted())
+    /// Re-lists every file now on disk, each with its derived tags — the Update path's input.
+    /// The reconcile diffs this against the playlist's current files in its own context, so no
+    /// caller-supplied "known" set is needed (and none would be reliable across the background
+    /// context anyway).
+    func rescan(bookmark: Data) async throws -> [ScannedFile] {
+        try Self.scan(bookmark: bookmark).files
     }
 
     /// Renames a file in place (same directory, new name component). Returns the

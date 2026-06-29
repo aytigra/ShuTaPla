@@ -39,7 +39,7 @@ And the duplication is threefold:
 2. makeFile copies those onto the model
 3. remirrorDerivedFields re-parses the same filename to populate the same two fields
 
-## Step 1 — derive in background, persist on the MainActor
+## Step 1 — derive in background, persist on the MainActor ✅
 
 The background scan returns per-file derived tags/status for **every current file**,
 not just the added delta.
@@ -65,19 +65,29 @@ This still leaves an O(N) MainActor *compare* (the divergence check faults the `
 relationship), because the compare needs the stored tags, which live in the MainActor
 context. Step 2 removes that.
 
-## Step 2 — persist in background too
+## Step 2 — persist in background too ✅
 
 Give the scan its own `ModelContext` so it derives, compares, **and** writes off-main;
-the MainActor is reduced to bumping `sequenceVersion` and re-fetching the ID sequence.
+the MainActor is reduced to refaulting the held playlist and bumping `sequenceVersion`.
 
-- A `@ModelActor` (e.g. `PlaylistScanActor`) constructed from the (Sendable)
-  `ModelContainer`. It owns enumerate → derive → fetch-current-tags → diff → write →
-  save, entirely on its own executor.
-- Cross-context rules: models are not `Sendable` across contexts — pass
-  `PersistentIdentifier`s, never `PlaylistFile`/`Tag`. After the actor saves, the main
-  context sees the writes on its next fetch; the UI already re-fetches `displaySequence`
-  on a `sequenceVersion` bump rather than holding model references, so the handoff is
-  "background writes → save → MainActor bumps version → views re-fetch."
+- A `@ModelActor` (`PlaylistScanActor`) constructed from the (Sendable)
+  `ModelContainer`. It owns the **entire** derived write — enumerate → derive →
+  fetch-current-tags → diff → write files/tags → rebuild `tagFrequency` → save → sweep
+  orphan tags — entirely on its own executor. The MainActor does **no save** on this
+  path (a main save would write its held pre-scan `files` back over the store, dropping
+  the actor's writes).
+- Cross-context rules: models are not `Sendable` across contexts — the boundary is value
+  types only (the playlist's app `UUID` in, a small `ScanReconcileResult` of
+  `removedFileIDs` + `changed` out). The actor resolves the playlist by that `UUID` with a
+  store-side fetch (a still-temporary `PersistentIdentifier` resolves to a backing-less
+  phantom that traps).
+- The handoff: a sibling-context save is **not** merged into the main context's
+  registered objects, so the held playlist's `tagFrequency`/`files` go stale. The
+  store-side file lists (`displaySequence`) re-fetch on the `sequenceVersion` bump and
+  see the commit; the held playlist the tag UI reads directly is brought up to date by
+  `modelContext.refreshFromStore(playlist)` — a fetch of the row that refaults the same
+  instance in place (no save, nothing discarded). So the tail is "actor writes + saves →
+  MainActor refaults the held playlist + bumps version → views re-read."
 - Removes the last O(N) MainActor pass, and also the large-folder **create** insert
   stall (today a 20k create inserts 20k models on the main context regardless of
   gating; only a background context moves that off-main).
