@@ -20,6 +20,13 @@ Clicking the video itself drives playback directly, mirroring the bottom control
 
 The Visual Overlay insets its top edge below the audio hover zone, so its close button stays clear of the top-edge trigger.
 
+### During playback
+
+While the Visual Channel is actively playing — its playlist is playing and the player is not paused — two things hold for both the video and image players:
+
+- **The cursor auto-hides.** After a short idle the pointer is hidden until the next mouse movement, so it doesn't sit over the picture. Any movement brings it back, as does opening an overlay or pausing.
+- **The display stays awake.** The idle screen dim/sleep is held off so a long video or slideshow plays uninterrupted. Pausing, or leaving Player mode, releases the hold and the display sleeps normally again.
+
 ### Visual Overlay
 
 Triggered by `[arrow up]`, `[tab]`, or the file list button in the bottom playback controls. Slides up from the bottom of the screen.

@@ -39,6 +39,13 @@ final class PlaybackCoordinator: PlaybackSource {
     /// The playlist on the independent audio channel, or `nil`.
     private(set) var liveAudioPlaylist: Playlist?
 
+    /// Whether the visual channel is effectively playing right now — its playlist is `.playing`
+    /// and nothing is suppressing it. Drives the player's display-sleep block and cursor
+    /// auto-hide, which both arm only while the picture is actually moving.
+    var isVisuallyPlaying: Bool {
+        liveVisualPlaylist?.playbackState == .playing && !isSuppressed
+    }
+
     /// The image engine — cheap (no libmpv), so it always exists. Player views read
     /// its `currentImage`/`transform` directly.
     let imageEngine: ImagePlaybackEngine

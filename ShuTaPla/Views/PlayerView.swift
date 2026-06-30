@@ -22,6 +22,9 @@ struct PlayerView: View {
     /// the bar never pulls the cursor off the strip that triggered it.
     private let bottomControlsWidth: CGFloat = 640
 
+    /// Holds the display-sleep assertion alive across body re-evaluations.
+    @State private var sleepBlocker = DisplaySleepBlocker()
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -59,9 +62,17 @@ struct PlayerView: View {
         .overlay { visualOverlayContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
         .animation(.easeInOut(duration: 0.2), value: visualHasNoFiles)
+        // Keep the display awake while the picture is moving; release it on pause and on exit
+        // so a paused or torn-down player lets the screen sleep normally again.
+        .onChange(of: coordinator.isVisuallyPlaying, initial: true) { _, playing in
+            sleepBlocker.isActive = playing
+        }
         // Drop every overlay when the player exits, so re-entering starts clean instead
         // of flashing the overlay that was open at stop and then dismissing it.
-        .onDisappear { overlays.hideAll() }
+        .onDisappear {
+            overlays.hideAll()
+            sleepBlocker.isActive = false
+        }
         // Pause advancement while the Visual Overlay is open so it can't jump to the next
         // file mid-edit; resume when it closes.
         .onChange(of: overlays.isVisualOverlayOpen) { _, open in
@@ -138,11 +149,10 @@ struct PlayerView: View {
         return !visual.hasPlaybackFiles
     }
 
-    /// Auto-hide the cursor only during uninterrupted playback: a visual playlist is
-    /// playing, nothing is suppressing it, and no overlay is on screen to interact with.
+    /// Auto-hide the cursor only during uninterrupted playback with no overlay on screen
+    /// to interact with.
     private var cursorShouldAutoHide: Bool {
-        guard let visual = coordinator.liveVisualPlaylist else { return false }
-        return visual.playbackState == .playing && !coordinator.isSuppressed && overlays.active.isEmpty
+        coordinator.isVisuallyPlaying && overlays.active.isEmpty
     }
 
     // MARK: - Hover containers
