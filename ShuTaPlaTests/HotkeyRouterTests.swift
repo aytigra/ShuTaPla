@@ -99,8 +99,10 @@ import AppKit
         return router
     }
 
+    /// Substitutes the window-free audio engine for the video slot so a `.video` playlist can
+    /// go live in the test host without spinning up a GL surface (CLAUDE.md trap class 3).
     private func makeAppState(_ context: ModelContext) -> AppState {
-        AppState(modelContext: context)
+        AppState(modelContext: context, makeVideoEngine: { try AudioPlaybackEngine() })
     }
 
     /// Everything a routing test drives. The container is held here so its in-memory
@@ -182,6 +184,8 @@ import AppKit
     @Test func decodesLettersByCharacter() {
         #expect(Hotkey(event: keyEvent(keyCode: 35, characters: "p")) == .p)
         #expect(Hotkey(event: keyEvent(keyCode: 37, characters: "l")) == .l)
+        #expect(Hotkey(event: keyEvent(keyCode: 1, characters: "s")) == .s)
+        #expect(Hotkey(event: keyEvent(keyCode: 15, characters: "r")) == .r)
         #expect(Hotkey(event: keyEvent(keyCode: 0, characters: "a")) == nil)
     }
 
@@ -324,6 +328,34 @@ import AppKit
         #expect(f.router.route(.delete, rightOption: false))
         #expect(f.appState.audioDeleteCandidate != nil)
         #expect(f.appState.playerDeleteCandidate == nil)
+    }
+
+    @Test func rRaisesRemoveAudioConfirmationForThePlayingVideo() throws {
+        let f = try playerFixture(.video, files: ["1.mp4", "2.mp4"])
+        defer { f.appState.coordinator.shutdown() }
+        let playing = f.appState.coordinator.visualCurrentFile
+
+        #expect(f.router.route(.r, rightOption: false))
+        #expect(f.appState.pendingAudioStrip.map(\.id) == [playing?.id])
+    }
+
+    @Test func rTargetsTheVideoEvenWhenAudioHoldsKeyContext() throws {
+        // The strip is video-only, so `[r]` always acts on the visual channel — unlike the
+        // contextual keys, the audio overlay holding key context doesn't divert it.
+        let f = try playerFixture(.video, files: ["1.mp4", "2.mp4"], overlay: audioOverlay())
+        defer { f.appState.coordinator.shutdown() }
+        let playing = f.appState.coordinator.visualCurrentFile
+
+        #expect(f.router.route(.r, rightOption: false))
+        #expect(f.appState.pendingAudioStrip.map(\.id) == [playing?.id])
+    }
+
+    @Test func rIsANoOpWhenAnImageIsOnTheVisualChannel() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+
+        #expect(!f.router.route(.r, rightOption: false))   // images have no audio track to strip
+        #expect(f.appState.pendingAudioStrip.isEmpty)
     }
 
     @Test func spaceRestartsAStoppedAudioChannel() throws {

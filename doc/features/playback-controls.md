@@ -38,6 +38,7 @@ While the Visual Channel holds Key Context:
 | `[s]` | Stop the Visual Channel Playlist and return to Manager mode |
 | `[esc]` | Close overlay → suppress (if playing) → close window (if suppressed). See Esc behavior above. |
 | `[delete]` | Ask to move the current file to the system Trash (a confirmation dialog appears; see below) |
+| `[r]` | Ask to remove the audio track from the current video (a confirmation dialog appears). Video only — ignored for image or audio files. Always targets the Visual Channel, even when the Audio Overlay holds Key Context. |
 | `[shift]` | Cycle image fit modes: Fit → Cover → Original (image playlists only) |
 | `[l]` | Toggle loop on the current file (video only here) |
 | `[right option] + [arrow left]` | Seek −3 s (video only here) |

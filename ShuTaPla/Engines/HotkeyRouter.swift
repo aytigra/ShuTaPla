@@ -66,7 +66,7 @@ final class NoOverlayContext: HotkeyOverlayContext {
 /// The keys the router acts on, decoded from an `NSEvent` once so the routing logic
 /// is a pure function of key + right-option and is unit-testable without AppKit.
 enum Hotkey: Equatable {
-    case space, escape, tab, enter, p, l, s, delete
+    case space, escape, tab, enter, p, l, s, r, delete
     case arrowUp, arrowDown, arrowLeft, arrowRight
 
     /// Decodes a key-down event, or `nil` if it isn't a key the router handles.
@@ -81,6 +81,7 @@ enum Hotkey: Equatable {
         case "p": self = .p
         case "l": self = .l
         case "s": self = .s
+        case "r": self = .r
         default: return nil
         }
     }
@@ -277,6 +278,13 @@ final class HotkeyRouter {
         if key == .s {
             appState.stopAndExitPlayer()
             return true
+        }
+
+        // `[r]` raises the remove-audio confirmation for the playing video. The strip is
+        // video-only, so — unlike the contextual keys — it always targets the visual channel:
+        // an audio track has nothing to strip. A no-op when an image or audio file is on it.
+        if key == .r {
+            return appState.requestStripPlayingFile()
         }
 
         // `[delete]` raises the trash confirmation for the playing file — the focused track when

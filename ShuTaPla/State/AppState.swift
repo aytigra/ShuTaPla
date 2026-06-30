@@ -402,7 +402,8 @@ final class AppState {
         modelContext: ModelContext,
         fileSystem: FileSystemProviding = FileSystemService(),
         bookmarkService: BookmarkService = BookmarkService(),
-        persist: (() throws -> Void)? = nil
+        persist: (() throws -> Void)? = nil,
+        makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() }
     ) {
         self.modelContext = modelContext
         self.fileSystem = fileSystem
@@ -413,7 +414,8 @@ final class AppState {
         self.globalSettings = settings
         self.coordinator = PlaybackCoordinator(
             bookmarkService: bookmarkService,
-            globalSettings: settings
+            globalSettings: settings,
+            makeVideoEngine: makeVideoEngine
         )
         self.scanActor = PlaylistScanActor(modelContainer: modelContext.container)
 
@@ -1384,6 +1386,18 @@ final class AppState {
     func requestDeletePlayingFile() -> Bool {
         guard let file = coordinator.visualCurrentFile else { return false }
         playerDeleteCandidate = file
+        return true
+    }
+
+    /// Requests confirmation to remove the audio from the video currently playing on the
+    /// visual channel (Player `[r]`). Video-only — an image or audio file has no audio track
+    /// to strip. Returns whether there was a video to act on. The trash analog is
+    /// `requestDeletePlayingFile`; the per-file overlay/menu analog is `requestAudioStrip`.
+    @discardableResult
+    func requestStripPlayingFile() -> Bool {
+        guard coordinator.liveVisualPlaylist?.mediaType == .video,
+              let file = coordinator.visualCurrentFile else { return false }
+        requestAudioStrip([file])
         return true
     }
 
