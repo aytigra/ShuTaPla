@@ -20,9 +20,19 @@ import SwiftData
 /// value types). `removedFileIDs` are the app ids of the pruned files, so the main actor can
 /// drop any pending UI reference to them. Everything derived — files, tags, and `tagFrequency` —
 /// is written and saved on the reconciling context, so nothing else needs to cross the boundary.
+/// `saveErrorMessage` carries the failure's description when the actor's save threw (a `String`
+/// because `Error` is not `Sendable`); it is set only with `changed == false`, since a failed
+/// save rolls back and commits nothing for the main actor to apply.
 nonisolated struct ScanReconcileResult: Sendable, Equatable {
     let removedFileIDs: [UUID]
     let changed: Bool
+    let saveErrorMessage: String?
+
+    init(removedFileIDs: [UUID], changed: Bool, saveErrorMessage: String? = nil) {
+        self.removedFileIDs = removedFileIDs
+        self.changed = changed
+        self.saveErrorMessage = saveErrorMessage
+    }
 
     static let unchanged = ScanReconcileResult(removedFileIDs: [], changed: false)
 }

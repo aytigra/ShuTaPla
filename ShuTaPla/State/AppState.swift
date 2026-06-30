@@ -202,9 +202,16 @@ final class AppState {
             try persist()
         } catch {
             modelContext.rollback()
-            saveError = "Couldn’t save your changes: \(error.localizedDescription)"
+            saveError = Self.saveErrorText(error.localizedDescription)
         }
         sequenceVersion &+= 1
+    }
+
+    /// The user-facing message the app-root alert presents for a save failure, wrapping the
+    /// underlying error's description. Shared by the main-actor save path (`persistAndRefresh`)
+    /// and the background reconcile path (`update`), which hands its failure back as a `String`.
+    static func saveErrorText(_ detail: String) -> String {
+        "Couldn’t save your changes: \(detail)"
     }
 
     /// Resolves one identifier from a file sequence to its model, or nil if it no longer exists.
@@ -685,14 +692,15 @@ final class AppState {
         let ordered = FileSystemService.fisherYatesShuffle(scan.files)
             .sorted { ($0.mediaType == mediaType ? 0 : 1) < ($1.mediaType == mediaType ? 0 : 1) }
 
-        var tagCache: [String: Tag]?
+        // Insert naked rows only — no filename-tag derivation on the main actor; that runs in the
+        // background below, the same actor path Update uses. Skip status is set here (a row whose
+        // type differs from the playlist's is skipped), so playback ordering is correct at once.
         for (index, scanned) in ordered.enumerated() {
-            let file = modelContext.makeFile(from: scanned, in: playlist, sortOrder: index)
-            modelContext.writeDerivedFields(scanned, onto: file, tagCache: &tagCache)
+            modelContext.makeFile(from: scanned, in: playlist, sortOrder: index)
         }
-        modelContext.rebuildTagFrequency(of: playlist)
-        // Persist the inserted files before anything derives a sequence from them: a
-        // player-mode creation starts playback (which reads the playback sequence) right below.
+        // Persist the inserted rows before anything derives a sequence from them: a player-mode
+        // creation starts playback (which reads the playback sequence) right below, and the
+        // background derivation resolves the playlist by id from the committed store.
         persistAndRefresh()
 
         // Player-mode creation comes from a playback overlay (the Visual Overlay or the
@@ -712,6 +720,12 @@ final class AppState {
             managerSelection = []
         }
         if mode == .welcome { mode = .manager }
+
+        // Derive filename tags / `tagFrequency` off the main actor, reusing the scan in hand (no
+        // disk re-read), through the same actor + apply path Update uses. On this freshly-created
+        // playlist every row is present (matched by relative path), so the reconcile only derives
+        // tags. Tracked so a delete can cancel it and tests can await it.
+        trackBackgroundTask(for: playlist.id) { await self.deriveInBackground(playlist, from: scan.files) }
         return playlist
     }
 
@@ -753,9 +767,16 @@ final class AppState {
     /// while leaving a different playlist's scan running. The spawned task is also remembered as
     /// `updateTask` so a delete can cancel it and tests can await it.
     private func rescan(_ playlist: Playlist) {
-        updateTasks[playlist.id]?.cancel()
-        let task = Task { await update(playlist) }
-        updateTasks[playlist.id] = task
+        trackBackgroundTask(for: playlist.id) { await self.update(playlist) }
+    }
+
+    /// Launches `work` as the playlist's tracked background task: cancels any in-flight one for the
+    /// same playlist (so rapid re-selection, or a create followed by a rescan, doesn't pile up),
+    /// records it per-playlist so a delete can cancel it, and as `updateTask` so tests can await it.
+    private func trackBackgroundTask(for playlistID: UUID, _ work: @escaping () async -> Void) {
+        updateTasks[playlistID]?.cancel()
+        let task = Task { await work() }
+        updateTasks[playlistID] = task
         updateTask = task
     }
 
@@ -862,7 +883,8 @@ final class AppState {
     /// the missing ones, appends the new ones, and re-derives every current file's filename tags
     /// onto the index the filters query. The reconcile — the O(N) derive/diff/write/orphan-sweep —
     /// runs on the background `scanActor`; the main actor only finishes applying the result.
-    /// Failures (e.g. a stale bookmark) are ignored here; the file list simply stays as it was.
+    /// A rescan failure (e.g. a stale bookmark) is silent — the file list stays as it was — but a
+    /// failed background save surfaces through `saveError`, like the main-actor save path.
     func update(_ playlist: Playlist) async {
         guard !Task.isCancelled else { return }
         busyPlaylistIDs.insert(playlist.id)
@@ -879,9 +901,26 @@ final class AppState {
             return
         }
         guard !Task.isCancelled else { return }
+        await deriveInBackground(playlist, from: current)
+    }
 
+    /// Reconciles `playlist` against `current` on the background `scanActor` and applies a committed
+    /// result on the main actor — the derivation half shared by Update (which re-reads the folder
+    /// first) and creation (which already holds the scanned files). A failed background save
+    /// surfaces through `saveError`; a no-op or cancelled/rolled-back reconcile leaves the store and
+    /// UI untouched.
+    private func deriveInBackground(_ playlist: Playlist, from current: [ScannedFile]) async {
+        // No pre-apply cancellation guard: the actor makes the commit decision before its save
+        // (rolling back and reporting `.unchanged` if cancelled there), so a committed result is
+        // always applied here. Gating the apply on cancellation could strand a commit — store
+        // changed, but the version never bumped and pruned-file references left dangling.
         let result = await scanActor.reconcile(current, playlistID: playlist.id)
-        guard !Task.isCancelled else { return }
+        if let message = result.saveErrorMessage {
+            // The background save threw and rolled back — nothing committed. Surface it through the
+            // same app-root alert the main-actor save path uses; do not apply (the store is intact).
+            saveError = Self.saveErrorText(message)
+            return
+        }
         guard result.changed else { return }
         applyScanResult(result, to: playlist)
     }

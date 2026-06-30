@@ -11,6 +11,7 @@ import Testing
 import Foundation
 import SwiftData
 import AVFoundation
+import Synchronization
 @testable import ShuTaPla
 
 // MARK: - Helpers
@@ -240,6 +241,7 @@ struct AppStateTests {
             Issue.record("expected .created, got \(outcome)")
             return
         }
+        await appState.updateTask?.value   // drain the background tag derivation
         #expect(playlist.mediaType == .video)
         #expect(playlist.name == dir.lastPathComponent)
         #expect(playlist.files.count == 2)
@@ -272,6 +274,7 @@ struct AppStateTests {
         #expect(appState.mode == .welcome)  // not created yet
 
         let playlist = appState.confirmPlaylist(pending, mediaType: .image)
+        await appState.updateTask?.value   // drain the background tag derivation
         #expect(playlist.mediaType == .image)
         #expect(appState.mode == .manager)
 
@@ -330,6 +333,7 @@ struct AppStateTests {
         #expect(appState.mode == .welcome)           // nothing created yet
 
         appState.confirmPendingTypeChoice(.image)
+        await appState.updateTask?.value   // drain the background tag derivation
 
         #expect(appState.pendingTypeChoice == nil)   // dialog dismissed
         #expect(appState.mode == .manager)
@@ -369,8 +373,67 @@ struct AppStateTests {
             Issue.record("expected .created")
             return
         }
+        await appState.updateTask?.value   // drain the background tag derivation
         let skipped = playlist.files.filter(\.isSkipped)
         #expect(skipped.map(\.fileName) == ["c.jpg"])
+    }
+
+    /// Creation inserts naked `PlaylistFile` rows on the main actor for an instant UI, then derives
+    /// filename tags / `tagFrequency` in the background through the same actor path Update uses.
+    /// Right after `addPlaylist` the rows are present but carry no tags and no `Tag` rows exist;
+    /// draining the derivation populates them, and a tag filter then matches.
+    @Test func creatingPlaylistInsertsNakedRowsThenDerivesTagsInBackground() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video), scanned("b [beach].mp4", .video, tags: ["beach"])],
+            counts: [.video: 2],
+            dominantType: .video
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard case .created(let playlist) = await appState.addPlaylist(from: dir) else {
+            Issue.record("expected .created")
+            return
+        }
+        // Naked: the rows exist immediately, but no tags have been derived yet.
+        #expect(playlist.files.count == 2)
+        #expect(playlist.files.allSatisfy { $0.tags.isEmpty })
+        #expect(playlist.tagFrequency.isEmpty)
+        #expect(try context.fetchCount(FetchDescriptor<ShuTaPla.Tag>()) == 0)
+
+        await appState.updateTask?.value   // drain the background derivation
+
+        // Derived: tags and frequency now reflect the filenames, and a tag filter matches.
+        #expect(playlist.tagFrequency["beach"] == 1)
+        appState.toggleFilterTag("beach", on: playlist)
+        #expect(appState.managerFiles.map(\.fileName) == ["b [beach].mp4"])
+    }
+
+    /// A create from an all-untagged folder derives to untagged and writes no `Tag` rows.
+    @Test func creatingUntaggedPlaylistDerivesUntaggedAndWritesNoTags() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video), scanned("b.mp4", .video)],
+            counts: [.video: 2],
+            dominantType: .video
+        )
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard case .created(let playlist) = await appState.addPlaylist(from: dir) else {
+            Issue.record("expected .created")
+            return
+        }
+        await appState.updateTask?.value
+
+        #expect(playlist.tagFrequency.isEmpty)
+        #expect(playlist.files.allSatisfy { $0.tags.isEmpty })
+        #expect(try context.fetchCount(FetchDescriptor<ShuTaPla.Tag>()) == 0)
     }
 
     // MARK: - Manager operations (Task 5)
@@ -459,7 +522,9 @@ struct AppStateTests {
             Issue.record("expected .created")
             return
         }
+        await appState.updateTask?.value   // drain the create derivation before the explicit update
         #expect(playlist.files.count == 2)
+        let versionBefore = appState.sequenceVersion
 
         await appState.update(playlist)
 
@@ -468,6 +533,84 @@ struct AppStateTests {
         // The scan rebuilds tag counts on the actor's context; `applyScanResult` refaults the held
         // playlist, so its `tagFrequency` reflects the committed counts.
         #expect(playlist.tagFrequency["beach"] == 1)
+        // A committed reconcile bumps the version so the store-side file lists re-derive.
+        #expect(appState.sequenceVersion != versionBefore)
+    }
+
+    /// A cancellation landing in the actor's post-diff/pre-save window must not strand a commit:
+    /// the store and the UI version stay consistent (both reflect the prune, or neither does).
+    /// The actor rolls back when it sees the cancellation before its save, so neither moves.
+    @Test func cancelInPreSaveWindowLeavesStoreAndVersionConsistent() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video), scanned("b.mp4", .video)],
+            counts: [.video: 2],
+            dominantType: .video
+        )
+        // The folder now holds only b.mp4, so an applied reconcile would prune a.mp4.
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: result, rescanResult: [scanned("b.mp4", .video)])
+        )
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard case .created(let playlist) = await appState.addPlaylist(from: dir) else {
+            Issue.record("expected .created")
+            return
+        }
+        await appState.updateTask?.value   // drain the create derivation before the cancellation test
+        let namesBefore = Set(storedFiles(of: playlist).map(\.fileName))
+        let versionBefore = appState.sequenceVersion
+
+        // Run the update on its own task and cancel that task from the pre-save hook — landing the
+        // cancellation in exactly the post-diff/pre-save window. The hook is installed synchronously
+        // (Mutex, no actor hop) before the task body can run, so it is in place when the scan fires.
+        let task = Task { await appState.update(playlist) }
+        appState.scanActor.preSaveHook.withLock { $0 = { task.cancel() } }
+        await task.value
+
+        let storeChanged = Set(storedFiles(of: playlist).map(\.fileName)) != namesBefore
+        let versionBumped = appState.sequenceVersion != versionBefore
+        #expect(storeChanged == versionBumped)   // consistent: both moved, or neither did
+        #expect(!storeChanged)                    // rolled back: the prune never committed
+    }
+
+    /// A failed background save surfaces like the main-actor save path: `saveError` is set, the
+    /// reconcile rolls back so the prune never lands, and `sequenceVersion` stays put (nothing
+    /// committed to re-derive from). Forced through the actor's save-override seam.
+    @Test func updateSurfacesBackgroundSaveFailure() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let result = ScanResult(
+            files: [scanned("a.mp4", .video), scanned("b.mp4", .video)],
+            counts: [.video: 2],
+            dominantType: .video
+        )
+        // The folder now holds only b.mp4, so an applied reconcile would prune a.mp4 — but the save fails.
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: result, rescanResult: [scanned("b.mp4", .video)])
+        )
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard case .created(let playlist) = await appState.addPlaylist(from: dir) else {
+            Issue.record("expected .created")
+            return
+        }
+        await appState.updateTask?.value   // drain the create derivation before forcing a save failure
+        let namesBefore = Set(storedFiles(of: playlist).map(\.fileName))
+        let versionBefore = appState.sequenceVersion
+
+        struct SaveFailure: Error {}
+        appState.scanActor.saveOverride.withLock { $0 = { throw SaveFailure() } }
+        await appState.update(playlist)
+
+        #expect(appState.saveError != nil)                                      // surfaced, not swallowed
+        #expect(Set(storedFiles(of: playlist).map(\.fileName)) == namesBefore)  // rolled back: prune never landed
+        #expect(appState.sequenceVersion == versionBefore)                      // nothing committed to re-derive
     }
 
     // MARK: - File operations (Task 6)
@@ -646,7 +789,10 @@ struct AppStateTests {
         addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
         addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         addFile("c.mp4", order: 2, to: playlist, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        // This test exercises filtering, not scanning; a failing rescan keeps the seeded files intact
+        // (the default empty listing would otherwise prune them all, making the assertions depend on
+        // running before the trailing drain).
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanFails: true))
         appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
@@ -737,7 +883,10 @@ struct AppStateTests {
         addFile("b.mp4", status: .untagged, order: 1, to: playlist, in: context)
         addFile("c [ab].mp4", status: .invalid, order: 2, to: playlist, in: context)
         addFile("x.jpg", status: .untagged, skipped: true, order: 3, to: playlist, in: context)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        // This test exercises filtering, not scanning; a failing rescan keeps the seeded files intact
+        // (the default empty listing would otherwise prune them all, making the assertions depend on
+        // running before the trailing drain).
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanFails: true))
         appState.manage(playlist)
 
         appState.toggleFilterTag("beach", on: playlist)
@@ -1401,6 +1550,7 @@ struct AppStateTests {
         let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+        await appState.updateTask?.value   // drain the background tag derivation
 
         #expect(appState.audioChannelPlaylist === b)
         #expect(appState.coordinator.liveAudioPlaylist === b)   // the new playlist is what's playing
@@ -1433,6 +1583,7 @@ struct AppStateTests {
         let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
         let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+        await appState.updateTask?.value   // drain the background tag derivation
 
         #expect(appState.audioChannelPlaylist === b)
         #expect(appState.managedPlaylist === b)              // managed in Manager-mode create
@@ -1725,6 +1876,7 @@ struct AppStateTests {
             Issue.record("expected .created, got \(outcome)")
             return
         }
+        await appState.updateTask?.value   // drain the background tag derivation
         #expect(appState.managerScope == .video)
         #expect(appState.managedPlaylist === playlist)
     }
@@ -1745,6 +1897,7 @@ struct AppStateTests {
             Issue.record("expected .created, got \(outcome)")
             return
         }
+        await appState.updateTask?.value   // drain the background tag derivation
         #expect(appState.managerScope == .audio)
         #expect(appState.managedPlaylist === playlist)
         #expect(appState.audioChannelPlaylist === playlist)

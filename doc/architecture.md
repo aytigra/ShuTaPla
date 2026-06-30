@@ -115,7 +115,7 @@ The per-playlist state machine (Stopped/Playing/Paused) and suppression semantic
 
 Services hold UI-independent logic, are injected into state objects (not views), and are protocol-based for mock injection in tests (§16). Each is summarized by responsibility; signatures live in the source.
 
-- **FileSystemService** (`actor`) — resolves bookmarks and manages access sessions; recursively enumerates and classifies a folder by extension; determines the dominant media type or flags Mixed; detects new/removed files for Update. Disk I/O is serialized through the actor (a rename must not interleave with a scan). It also derives each listed file's filename tags (via `TagParser`) into the `ScannedFile` values it returns, so parsing happens off-main. Classification uses static extension-to-type sets; a type is auto-assigned when ≥ 80% of recognized files are of it, otherwise the folder is **Mixed** and the user is prompted — there is no second threshold.
+- **FileSystemService** (`actor`) — resolves bookmarks and manages access sessions; recursively enumerates and classifies a folder by extension; determines the dominant media type or flags Mixed. Disk I/O is serialized through the actor (a rename must not interleave with a scan). It also derives each listed file's filename tags (via `TagParser`) into the `ScannedFile` values it returns, so parsing happens off-main. Classification uses static extension-to-type sets; a type is auto-assigned when ≥ 80% of recognized files are of it, otherwise the folder is **Mixed** and the user is prompted — there is no second threshold.
 
 - **PlaylistScanActor** (`@ModelActor`) — runs the Update reconcile off the main actor on its **own** `ModelContext`: against the `FileSystemService` listing it prunes vanished files, appends new ones, writes each surviving file's diverged tag/status fields, rebuilds `tagFrequency`, saves, and batch-deletes globally-orphaned `Tag`s — the entire derived write, never on the main context. Models aren't `Sendable` across contexts, so the boundary is value types: the playlist's app `UUID` in, a `removedFileIDs`/`changed` summary out (it resolves the playlist by that `UUID`, since a still-temporary `PersistentIdentifier` would trap). This keeps the per-rescan derive/diff/write pass off the main actor so activating a large playlist stays instant.
 
@@ -162,9 +162,11 @@ Overlays are SwiftUI views composed via `.overlay()` / `.transition()` on `Playe
 ```
 pick folder → create bookmark → recursive enumerate → classify by extension
    → count by type (≥80% one type auto-assign, else prompt) → keep chosen type
-   (others retained as isSkipped entries) → parse tags → Fisher-Yates shuffle
-   → persist Playlist + PlaylistFiles → build tagFrequency cache
+   (others retained as isSkipped entries) → Fisher-Yates shuffle
+   → persist Playlist + naked PlaylistFiles → derive tags + tagFrequency in background
 ```
+
+Creation inserts **naked** `PlaylistFile` rows on the main actor (relative path, name, skip flag, sort order — the instant sidebar/grid), then derives each file's filename tags and the playlist's `tagFrequency` in the background through `PlaylistScanActor`, reusing the scan already in hand (no disk re-read). This is the same reconcile/apply path Update uses, so the only main-actor work at create is the cheap row inserts; the O(N) parse never blocks the UI.
 
 Update and Reshuffle both re-read disk on a background `Task` with a "sync in progress" indicator; their differing semantics (append/prune/preserve vs. full reshuffle/reset) are in `features.md`. Update runs automatically when a playlist becomes active. Its reconcile runs and saves entirely on `PlaylistScanActor`'s own `ModelContext` (§5); because a sibling-context save isn't merged into the main context's registered objects, the main actor then **refaults the held playlist** (a fetch that updates the same instance in place) so the tag UI reading `playlist.tagFrequency` is current, and bumps `sequenceVersion` so the store-side file lists re-fetch.
 
