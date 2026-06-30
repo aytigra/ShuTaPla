@@ -1,16 +1,27 @@
 # ShuTaPla
 
-macOS media player. SwiftUI + SwiftData + mpv (libmpv).
+macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
-## These rules are always in force
+## **IMPORTANT!!!**: These rules are always in force during planning and implementation process
 
-**IMPORTANT!!!**:
+**Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.**
 
-**Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.** A command's, skill's, or tool's own prompt *adds to* these rules; it never overrides, narrows, or exempts them, however self-contained its procedure looks. A long, prescriptive command prompt (e.g. `/code-review`) is the most common trap: working straight down its numbered steps is not a license to skip the skill-loading, testing, and navigator-issue rules here. Re-read this file against the task before you start and again before you report it done — these rules are part of the definition of done, not optional background. If you ever catch yourself having skipped one because "the command didn't mention it," that is the failure this section exists to prevent.
+**The work is organized through plan files in doc/tasks folder. A design or implementation decision is settled only once it has been talked through with the user and written into the task doc file. Task steps are established in such file and always implemented only one step at a time.** Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
 
-**Re-check your work against what was agreed, not only against the code in front of you.** Continuing whatever is already there is a useful pull, but it can quietly take over. At each real decision, hold the agreed goal alongside the surrounding code, and when they pull apart, notice it and resolve it deliberately rather than letting proximity decide. Two common signs you've drifted: you're keeping something just because it was already there, or you need an extra step to force something to work. Either one is a cue to pause and check, not a reason to stop.
+**Load relevant skills before implementation**
 
-**The task artifact is the binding record of decisions — the conversation is not.** A design or implementation decision is settled only once it has been talked through with the user and written into the task doc (`doc/tasks/…`). So when a real choice comes up, raise it, resolve it together, and record it there before building on it. Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
+**Ensure test coverage and confirmation/refutal tests before changing code. Always review freshly written tests to prevent traps that interrupt work**
+
+**During the whole implementation process re-check your work against the task doc, not only against the code in front of you.** If agreed goal and surrounding code pull apart, or any uncertainty arises, notice it and resolve it deliberately rather than letting proximity decide, stop and ask if resolution is not obvious.
+
+**When inferred implementation does not work after several tries - stop guessing, do documentation and web search!**
+
+**Before concluding task/step as done run a checklist**
+
+- does issue navigator has standing issues?
+- does it follow code conventions?
+- can code be simplified and deduplicated?
+- does it adhere to writing rules?
 
 ## Key docs
 
@@ -19,21 +30,23 @@ macOS media player. SwiftUI + SwiftData + mpv (libmpv).
 
 ## Writing rules
 
-**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. This is about meaning, not a banned-word list — phrasings like "no longer", "anymore", "unlike before", "now uses", "still uses", "previously", "was X, is Y" are just symptoms. The test: a reader with no knowledge of the code's history must not be able to tell from a comment that anything ever changed, was added, or was kept. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice.
+**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice.
 
-This governs *descriptions of the code*. It does not apply to work-tracking artifacts whose subject is progress rather than the code — a task index, or a review document whose findings carry status. There, marking an item done (e.g. a ✅ on a `doc/tasks/code_review.md` finding) is the point; it's cheaper to read than reconstructing it from commit history.
+This governs *descriptions of the code* and main documentation. It does not apply to work-tracking artifacts in `doc/tasks/`.
 
 ## Code conventions
 
-**Less code is the default; simplify the whole, not just the part you add.** Code is a liability — fewer lines, fewer concepts, and less duplication beat more. Whenever you add to existing code or refactor it, step back and look at the result as a whole: can naming be made consistent, can duplicated logic be folded together, can the new and the old collapse into something smaller and more coherent? Do this as part of the change, not as a later cleanup — debt compounds fast when every change only adds. No single structuring pattern is the default answer; reach for whatever keeps the whole simplest. 
+Should be applied meaningfully without overdoing.
+
+**Less code is the default; simplify the whole, not just the part you add.** Code is a liability — fewer lines, fewer concepts, and less duplication is very important! Whenever you add to existing code or refactor it, step back and look at the result as a whole: can naming be made consistent, can duplicated logic be folded together, can the new and the old collapse into something smaller and more coherent? Strive to do this as part of the change, not only as a later cleanup — debt compounds fast when every change only adds. 
 
 **Modularity and helpers**
 
-A type extension in `Extensions/` is a good fit for a general operation on a standard type (e.g. an Array) — but it is one tool among inlining, a shared function, or a new type, helper functions, not something to apply everywhere by reflex. Splitting a large file into modules or partials is part of this too: a focused file is easier to read and edit and makes the structure more legible, so prefer it when a file or type has grown to cover several concerns. Apply all of this meaningfully, not to an extreme — splitting until pieces are too small to follow, or extracting a one-use helper, trades one kind of friction for another.
+A type extension in `Extensions/` is a good fit for a general operation on a standard type (e.g. an Array) — but it is one tool among other (inlining, a shared function, or a new type, helper functions), not something to apply everywhere by reflex. Splitting a large file into modules or partials is important!
 
-**Don't stack a `count: 1` and `count: 2` tap gesture on the same view.** SwiftUI can't fire the single-tap handler until the system double-click interval elapses (to rule out a second click), so single-click actions like row selection lag ~0.5s. Use one `onTapGesture` and branch on the underlying event's click count instead — `if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { …double… } else { …single… }`. A lone `count: 1` gesture fires immediately on mouse-up; a double-click fires it again with `clickCount == 2`. The file list/gallery rows do this.
+**Don't stack a `count: 1` and `count: 2` tap gesture on the same view.** SwiftUI can't fire the single-tap handler until the system double-click interval elapses. Use one `onTapGesture` and branch on the underlying event's click count instead.
 
-**`HotkeyRouter` owns bare keyboard input, not the responder chain.** Its app-wide `NSEvent` monitor intercepts keys before any SwiftUI `.alert`, so a modal's own button shortcuts never fire and bare keys leak to whatever the router routes them to. Present confirmations as `.alert` (with `.defaultAction`/`.cancelAction` buttons that handle `[enter]`/`[esc]` natively) and register the modal's `AppState` flag in the router's `hasBlockingConfirmation`, which **passes `[enter]`/`[esc]` through** to the alert and swallows the rest. Don't route those keys to the flag's confirm/cancel methods instead: dismissing a system modal from the monitor lags behind the dialog's event-tracking loop. Focused text fields are already exempt via the router's text-input guard.
+**`HotkeyRouter` owns bare keyboard input, not the responder chain.** Its app-wide `NSEvent` monitor intercepts keys before any SwiftUI `.alert`, so a modal's own button shortcuts never fire and bare keys leak to whatever the router routes them to. Present confirmations as `.alert` (with `.defaultAction`/`.cancelAction` buttons that handle `[enter]`/`[esc]` natively) and register the modal's `AppState` flag in the router's `hasBlockingConfirmation`.
 
 ## Claude Code configuration
 
@@ -47,7 +60,7 @@ This project uses `~/.claude-ios/` as the Claude Code configuration directory (n
 
 Locally installed skills live in `/Users/aytm/.claude-ios/skills/`.
 
-**Loading the matching skill is mandatory, and it is the first step — before you start reading or changing the code, not after.** Whenever a task involves writing, reviewing, refactoring, or debugging code in one of the domains below, invoke that skill (`Skill` tool) and read its `SKILL.md` first. Skills do **not** auto-load — nothing fires them unless you choose to — so make "which skill covers this?" an explicit pre-flight check at the start of *every* code task, **code review included, and including work driven by a slash command**. If a diff spans several domains (e.g. a SwiftUI view backed by SwiftData with some concurrency), load each that applies. "I reasoned it through myself" is not a substitute: the whole point of the skill is to catch what unaided reasoning misses, so skipping it because the change looked straightforward is exactly the case it's meant to cover.
+**Loading the matching skill is mandatory, and it is the first step — before you start reading or changing the code, not after.**
 
 | Skill | Path | Load when the work touches |
 |-------|------|---------|
@@ -71,7 +84,7 @@ Treat "where is the test?" as part of the definition of done — don't report a 
 
 **Check the issue navigator before reporting done.** A build can succeed while the compiler still flags warnings (deprecations, unused values, concurrency issues) that won't surface unless you look. After the work builds, list navigator issues (`mcp__xcode__XcodeListNavigatorIssues`) and address — or surface to the user — any warnings the change introduced. This is part of the definition of done alongside tests.
 
-**Avoid test traps — they hang the run, not just the test.** A test that hits `EXC_BREAKPOINT` (code=1) or `EXC_BAD_ACCESS` doesn't fail cleanly: it crashes the test host mid-run, so the run never returns a result and the build/test tool (and the agent driving it) stalls. Treat "could this trap?" as a first-class concern when writing tests. The three trap classes seen so far, and how to write around each:
+**Avoid test traps — they hang the run, not just the test.** A test that hits `EXC_BREAKPOINT` (code=1) or `EXC_BAD_ACCESS` doesn't fail cleanly: it crashes the test host mid-run, so the run never returns a result and the build/test tool (and the agent driving it) stalls. Treat "could this trap?" as a first-class concern when writing tests. The trap classes seen so far, and how to write around each:
 
 1. **Orphaned `ModelContext` → `EXC_BREAKPOINT` on the next `fetch`.** Hold the `ModelContainer` for the whole test body, pulling `container.mainContext` locally — as `ModelTests.swift` does. A helper that builds a container internally and returns only `container.mainContext` lets the container deallocate when the helper returns; the orphaned context traps on its next `fetch` — surfacing at the fetch site, e.g. `AppStateModel.fetchOrCreate` (which `AppState.init` calls, so even constructing `AppState` traps). Plain `init`-and-assert tests trap most reliably; tests with intervening `insert(...)` or `await` may survive by chance because they stretch the autorelease pool, so the failure can look intermittent.
 
