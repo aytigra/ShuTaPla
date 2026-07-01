@@ -1,6 +1,6 @@
 # Architecture
 
-IMPORTANT!!!: This document covers system design — structure, non-obvious decisions, and rationale. It does not restate behavior (see `features.md`) or mirror the code (see the source). KEEP IT THIS WAY!!! Features not yet built are tracked in `doc/tasks/index.md`; this document describes the design they slot into, not their implementation plans.
+IMPORTANT!!!: This document covers system design — structure, non-obvious decisions, and rationale. It does not restate behavior (see `features.md`) or mirror the code (see the source). KEEP IT THIS WAY!!! Features described in the main docs but not yet built are tracked in `doc/tasks/feature_roadmap.md`; this document describes the design they slot into, not their implementation plans.
 
 ## 1. Overview
 
@@ -134,7 +134,7 @@ Services hold UI-independent logic, are injected into state objects (not views),
 
 - **BookmarkService** — creates/resolves security-scoped bookmarks, reference-counts concurrent users of the same folder (e.g. an audio and a video playlist over one folder), and throws on stale/denied bookmarks so `AppState.beginFolderAccess(to:)` can re-prompt and refresh.
 
-Cloud/offline file handling (`CloudFileService`, status badges, prefetch) is a planned service — see Task 18 in `tasks/index.md`.
+Cloud/offline file handling (`CloudFileService`, status badges, prefetch) is a planned service — see Task 18 in `tasks/feature_roadmap.md`.
 
 ---
 
@@ -246,7 +246,7 @@ The unifying rules (behavior detailed in `features.md`):
 
 ## 13. Accessibility
 
-VoiceOver and macOS accessibility support (semantic fonts/colors, `Button` over `onTapGesture`, accessibility labels/values on rows, chips, panels, sliders, `@ScaledMetric` spacing) is Task 20 in `tasks/index.md`.
+VoiceOver and macOS accessibility support (semantic fonts/colors, `Button` over `onTapGesture`, accessibility labels/values on rows, chips, panels, sliders, `@ScaledMetric` spacing) is Task 20 in `tasks/feature_roadmap.md`.
 
 ---
 

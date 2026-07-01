@@ -26,4 +26,26 @@ nonisolated struct FilterState: Codable, Sendable, Equatable {
 
     /// No tags selected — the tag filter matches everything.
     var isEmpty: Bool { selectedTags.isEmpty }
+
+    /// Adds or removes `tag` from the tag filter, clearing any active triage filter — editing the
+    /// tag filter and holding a triage filter are mutually exclusive.
+    mutating func toggle(tag: String) {
+        serviceFilter = nil
+        if let index = selectedTags.firstIndex(where: { TagParser.sameTag($0, tag) }) {
+            selectedTags.remove(at: index)
+        } else {
+            selectedTags.append(tag)
+        }
+    }
+
+    /// Sets or unsets the triage filter (mutually exclusive with itself). While set it overrides
+    /// the tag filter.
+    mutating func toggle(service filter: ServiceFilter) {
+        serviceFilter = (serviceFilter == filter) ? nil : filter
+    }
+
+    /// Clears the tag filter, leaving any triage filter in place.
+    mutating func clearTags() {
+        selectedTags = []
+    }
 }

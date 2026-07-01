@@ -90,13 +90,13 @@ final class PlaybackCoordinator: PlaybackSource {
     /// `makeVideoEngine`/`makeAudioEngine` are injectable so tests substitute the
     /// window-free audio engine for the video slot, avoiding Vulkan startup.
     init(
-        bookmarkService: BookmarkService,
+        folderAccess: ScopedFolderAccess,
         globalSettings: GlobalSettings = GlobalSettings(),
         imageEngine: ImagePlaybackEngine = ImagePlaybackEngine(),
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() },
         makeAudioEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() }
     ) {
-        self.folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService)
+        self.folderAccess = folderAccess
         self.globalSettings = globalSettings
         self.imageEngine = imageEngine
         self.makeVideoEngine = makeVideoEngine

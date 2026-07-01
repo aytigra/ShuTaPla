@@ -68,7 +68,7 @@ import SwiftData
     /// A coordinator whose mpv channels use the window-free audio engine.
     private func makeCoordinator(_ bookmarks: BookmarkService) -> PlaybackCoordinator {
         PlaybackCoordinator(
-            bookmarkService: bookmarks,
+            folderAccess: ScopedFolderAccess(bookmarkService: bookmarks),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
@@ -665,7 +665,7 @@ import SwiftData
         // synchronously, so the test counts pause() calls instead.
         let recorder = try RecordingAudioEngine()
         let coordinator = PlaybackCoordinator(
-            bookmarkService: BookmarkService(),
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )
@@ -733,7 +733,7 @@ import SwiftData
         // track, so the fix must immediately pause it back rather than let it play behind the overlay.
         let recorder = try RecordingAudioEngine()
         let coordinator = PlaybackCoordinator(
-            bookmarkService: BookmarkService(),
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )
@@ -784,7 +784,7 @@ import SwiftData
 
     private func makeRecordingCoordinator(_ recorder: RecordingLoadEngine) -> PlaybackCoordinator {
         PlaybackCoordinator(
-            bookmarkService: BookmarkService(),
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )

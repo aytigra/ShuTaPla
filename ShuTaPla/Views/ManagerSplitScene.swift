@@ -405,7 +405,7 @@ private struct ScopeTabs: View {
 /// channel. The tab also drives the sidebar: clicking the active scope collapses the left panel;
 /// clicking either tab while collapsed expands it and selects that scope.
 private struct ScopeTabButton: View {
-    let scope: ManagerScope
+    let scope: MediaType
     let title: String
     let systemImage: String
 

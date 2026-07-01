@@ -120,7 +120,7 @@ import SwiftData
     private func makeCoordinator(_ bookmarks: BookmarkService) -> PlaybackCoordinator {
         // Image-only here, but the mpv slots stay window-free in case the channel is probed.
         PlaybackCoordinator(
-            bookmarkService: bookmarks,
+            folderAccess: ScopedFolderAccess(bookmarkService: bookmarks),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )

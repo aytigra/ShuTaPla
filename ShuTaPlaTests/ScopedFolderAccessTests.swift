@@ -26,6 +26,12 @@ struct ScopedFolderAccessTests {
         Playlist(name: "p", folderBookmark: bookmark, folderPath: "/tmp", mediaType: .video)
     }
 
+    /// A re-access prompt returning a preset URL (or `nil` to model the user cancelling).
+    private struct StubReaccess: FolderReaccessPrompting {
+        var granted: URL?
+        func requestAccess(to playlist: Playlist) -> URL? { granted }
+    }
+
     @Test func beginOpensSessionAndUrlResolves() throws {
         let bookmarks = BookmarkService()
         let access = ScopedFolderAccess(bookmarkService: bookmarks)
@@ -97,5 +103,43 @@ struct ScopedFolderAccessTests {
 
         #expect(access.begin(for: playlist) == nil)
         #expect(access.url(for: playlist.id) == nil)
+    }
+
+    // MARK: - One-shot editing access
+
+    @Test func withAccessRunsBodyUnderScopedSessionAndReleases() throws {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let folder = try makeFolder()
+        let playlist = makePlaylist(folder.bookmark)
+
+        let seen = access.withAccess(to: playlist) { $0 }
+        #expect(seen == folder.url)
+        // The transient session is balanced — no grant leaks past the body.
+        #expect(bookmarks.referenceCount(for: playlist.folderBookmark) == 0)
+    }
+
+    @Test func withAccessRefreshesStaleBookmarkThroughPrompt() throws {
+        let bookmarks = BookmarkService()
+        let folder = try makeFolder()
+        // A garbage bookmark fails the initial resolve, forcing the re-grant path.
+        let access = ScopedFolderAccess(bookmarkService: bookmarks, prompt: StubReaccess(granted: folder.url))
+        let playlist = makePlaylist(Data([0x01, 0x02, 0x03]))
+
+        let seen = access.withAccess(to: playlist) { $0 }
+        #expect(seen == folder.url)
+        // The prompt's folder was baked into a fresh bookmark and path on the playlist.
+        #expect(playlist.folderPath == folder.url.path(percentEncoded: false))
+        #expect((try? BookmarkService.resolve(playlist.folderBookmark))?.url == folder.url)
+        #expect(bookmarks.referenceCount(for: playlist.folderBookmark) == 0)
+    }
+
+    @Test func withAccessReturnsNilWhenPromptCancels() {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks, prompt: StubReaccess(granted: nil))
+        let playlist = makePlaylist(Data([0x01, 0x02, 0x03]))
+
+        let result = access.withAccess(to: playlist) { _ in "ran" }
+        #expect(result == nil)
     }
 }

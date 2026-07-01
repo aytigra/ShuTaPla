@@ -60,6 +60,16 @@ nonisolated enum FileSystemError: Error, Equatable {
     case nameCollision
     case fileNotFound
     case operationFailed(String)
+
+    /// User-facing copy for the failure, surfaced by the file-edit flows.
+    var userMessage: String {
+        switch self {
+        case .invalidName: return "That name isn't valid."
+        case .nameCollision: return "A file with that name already exists."
+        case .fileNotFound: return "The file no longer exists on disk."
+        case .operationFailed(let detail): return "Rename failed: \(detail)"
+        }
+    }
 }
 
 // MARK: - Protocol

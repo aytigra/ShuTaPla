@@ -83,6 +83,8 @@ private struct StubFileSystem: FileSystemProviding {
     /// When set, `rescan` throws — the "folder unreadable, leave membership as it was" path, for
     /// tests that exercise a re-scan's side effects without it reconciling files away.
     var rescanFails = false
+    /// When set, `renameFile` throws it — exercises the failure-message mapping.
+    var renameError: FileSystemError?
 
     func scanFolder(bookmark: Data) async throws -> ScanResult { result }
     func rescan(bookmark: Data) async throws -> [ScannedFile] {
@@ -90,7 +92,8 @@ private struct StubFileSystem: FileSystemProviding {
         return rescanResult
     }
     func renameFile(at url: URL, to newName: String) async throws -> URL {
-        url.deletingLastPathComponent().appendingPathComponent(newName)
+        if let renameError { throw renameError }
+        return url.deletingLastPathComponent().appendingPathComponent(newName)
     }
     func trashFiles(_ urls: [URL]) async throws -> TrashResult {
         trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
@@ -985,6 +988,32 @@ struct AppStateTests {
         #expect(file.taggingStatus == .valid)
     }
 
+    @Test(arguments: [
+        (FileSystemError.invalidName, "That name isn't valid."),
+        (FileSystemError.nameCollision, "A file with that name already exists."),
+        (FileSystemError.fileNotFound, "The file no longer exists on disk."),
+        (FileSystemError.operationFailed("boom"), "Rename failed: boom"),
+    ])
+    func renameFileSurfacesFailureMessage(error: FileSystemError, expected: String) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "old.mp4", fileName: "old.mp4", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        var stub = StubFileSystem(result: emptyResult)
+        stub.renameError = error
+        let appState = AppState(modelContext: context, fileSystem: stub)
+
+        let message = await appState.renameFile(file, to: "new.mp4")
+
+        #expect(message == expected)
+    }
+
     @Test func deleteFilesRemovesTrashedFromPlaylist() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -1635,7 +1664,7 @@ struct AppStateTests {
         addFile("3.mp3", order: 2, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        appState.rememberLastManaged(audio)   // occupy the audio channel slot; channel files derive from it
+        appState.remember(audio)   // occupy the audio channel slot; channel files derive from it
         #expect(appState.audioChannelFiles.count == 3)
 
         appState.toggleFilterTag("jazz", on: audio)
@@ -1996,7 +2025,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.rememberLastManaged(audio)   // loads the audio channel slot without playing
+        appState.remember(audio)   // loads the audio channel slot without playing
 
         // Nothing is playing, so the engine holds no live track — yet the overlay still resolves
         // the current file from the playlist's persisted resume position, exactly as the Manager
@@ -2016,7 +2045,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.rememberLastManaged(audio)
+        appState.remember(audio)
         appState.toggleFilterTag("blues", on: audio)   // a filter the resume track does not match
 
         // Mirrors the Manager: when the remembered file is filtered out of view, there's
@@ -2038,7 +2067,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.rememberLastManaged(audio)
+        appState.remember(audio)
 
         // The audio overlay is a transport list, not a triage surface: skipped tracks are never
         // playable, so they must not appear in it, and a skipped resume track must not resolve as
@@ -2286,7 +2315,7 @@ struct AppStateTests {
         let appState = env.appState
         appState.manage(env.video)
         await appState.updateTask?.value   // drain the re-scan before the body returns
-        appState.rememberLastManaged(env.audio)   // an audio playlist sitting in the channel
+        appState.remember(env.audio)   // an audio playlist sitting in the channel
 
         appState.switchScope(to: .audio)
         #expect(appState.managedPlaylist === env.audio)   // synced from the audio channel slot
@@ -2298,8 +2327,8 @@ struct AppStateTests {
 
         // Recording a video then an image leaves both remembered — the visual memories don't
         // overwrite each other (only the *playing* visual channel is mutually exclusive).
-        appState.rememberLastManaged(env.video)
-        appState.rememberLastManaged(env.image)
+        appState.remember(env.video)
+        appState.remember(env.image)
         #expect(appState.lastManagedVideoPlaylist === env.video)
         #expect(appState.lastManagedImagePlaylist === env.image)
         #expect(appState.appStateModel.lastManagedVideoPlaylistId == env.video.id)

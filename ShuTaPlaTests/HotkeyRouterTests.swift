@@ -320,7 +320,7 @@ import AppKit
 
     @Test func deleteUnderAudioKeyContextTargetsTheAudioTrack() throws {
         let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
-        f.appState.rememberLastManaged(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
+        f.appState.remember(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
         defer { f.appState.coordinator.shutdown() }
 
         // With the audio overlay holding key context, `[delete]` targets the focused audio track
@@ -360,7 +360,7 @@ import AppKit
 
     @Test func spaceRestartsAStoppedAudioChannel() throws {
         let f = try playerFixture(.audio, files: ["a.mp3", "b.mp3"], overlay: audioOverlay())
-        f.appState.rememberLastManaged(f.playlist)   // the persistent slot survives Stop
+        f.appState.remember(f.playlist)   // the persistent slot survives Stop
         defer { f.appState.coordinator.shutdown() }
 
         f.appState.coordinator.stop(f.playlist)

@@ -56,4 +56,15 @@ extension Playlist {
         case nil: break
         }
     }
+
+    /// Voids every remembered resume position — the unfiltered slot and each saved search's — as a
+    /// new shuffle axis (Reshuffle) invalidates positions keyed to the old one.
+    func clearResumePositions() {
+        unfilteredResumeSortOrder = nil
+        savedSearches = savedSearches.map {
+            var search = $0
+            search.resumeSortOrder = nil
+            return search
+        }
+    }
 }

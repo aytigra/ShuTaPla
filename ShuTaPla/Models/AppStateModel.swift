@@ -21,7 +21,7 @@ final class AppStateModel {
     var audioChannelPlaylistId: UUID?
 
     /// The scope the Manager was last in, so a relaunch reopens it and derives the managed
-    /// playlist from that scope's remembered playlist. Raw value of `ManagerScope`.
+    /// playlist from that scope's remembered playlist. Raw value of the scope's `MediaType`.
     var managerScopeRaw: String?
 
     /// Encoded `NSRect` of the window.
