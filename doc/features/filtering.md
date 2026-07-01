@@ -27,9 +27,9 @@ Filtering affects playback: files that don't match are silently skipped during p
 ## Filter persistence and history
 
 - Each playlist remembers its current filter selection across playlist switches, so returning to a playlist restores its filter.
-- **Search history** is playlist-scoped and split into two parts:
-  - **Multi-tag searches** (two or more tags in either AND or OR mode) are remembered as saved searches, listed for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination. The list keeps the 10 most recent unique searches — re-applying an already-saved combination moves it to the top instead of adding a duplicate; an entry can be removed manually.
-  - **Single-tag filters** are not stored as separate entries; instead, frequently used tags float to the top of the autocomplete dropdown within that playlist.
+- **Saved searches** are playlist-scoped. Any non-empty tag filter — one or more tags, in AND or OR mode — can be saved for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination. Save is offered only for a filter that isn't already saved; re-selecting a saved combination moves it to the top (keeping its remembered position) rather than adding a duplicate. An entry can be removed manually, and the list is unbounded. A playlist-wide tag **rename** rewrites the saved searches that used the tag; a tag **removal** drops a saved search that would be left with one tag or none (its remembered position goes with it) and rewrites any left with two or more.
+- Frequently used tags float to the top of the autocomplete dropdown within that playlist, independent of what is saved.
+- **Per-filter resume position.** Each saved search and the unfiltered state remembers the resume point it was last left at, recorded as a position on the shuffle order so it survives the exact file leaving the set (filtered out, deleted, or pruned). Changing the filter restores the incoming filter's remembered position — a live audio channel switches to it immediately, a suppressed visual pre-loads it. Service Filters get no slot, and Reshuffle clears every remembered position.
 
 ## Future direction (not in scope yet)
 

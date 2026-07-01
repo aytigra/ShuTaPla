@@ -1,25 +1,12 @@
 //
-//  Migrations.swift
+//  SchemaV1.swift
 //  ShuTaPla
 //
-//  Versioned schemas and the migration plan that carries an existing on-disk store
-//  forward across schema changes. Tags and tagging status are derived from filenames
-//  and repopulate on the next scan, so they are never migrated as data — which keeps
-//  every stage lightweight while the non-derivable rows (playlists, bookmarks,
-//  preferences, positions, sort order) are preserved.
+//  The pre-`Tag` schema, pinning the stored shape when filename tags were an inline `[String]`.
 //
 
 import Foundation
 import SwiftData
-
-/// The current schema. Its models are the live top-level types.
-enum SchemaV2: VersionedSchema {
-    static let versionIdentifier = Schema.Version(2, 0, 0)
-
-    static var models: [any PersistentModel.Type] {
-        [Playlist.self, PlaylistFile.self, Tag.self, AppStateModel.self, GlobalSettings.self]
-    }
-}
 
 /// The pre-`Tag` schema: filename tags were an inline `[String]` and tagging status a
 /// stored enum, with no `Tag` entity. `AppStateModel`/`GlobalSettings` never referenced
@@ -98,20 +85,5 @@ enum SchemaV1: VersionedSchema {
             self.isSkipped = isSkipped
             self.sortOrder = sortOrder
         }
-    }
-}
-
-/// Carries an existing store forward to `SchemaV2`. The `Tag` relationship and
-/// `taggingStatusCode` are filename-derived and rebuild on the next scan, so the stage is
-/// lightweight: SwiftData drops the old inline `tags`/`taggingStatus` columns and adds the
-/// `Tag` entity, the `tags` relationship, and `taggingStatusCode`, while every other row
-/// is preserved untouched.
-enum AppMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] {
-        [SchemaV1.self, SchemaV2.self]
-    }
-
-    static var stages: [MigrationStage] {
-        [.lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self)]
     }
 }

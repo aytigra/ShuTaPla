@@ -96,7 +96,7 @@ struct FilterBar: View {
                 Button("Save") { appState.saveCurrentSearch(on: playlist) }
                     .buttonStyle(.borderless)
                     .font(.caption)
-                    .disabled(playlist.filterState.isEmpty)
+                    .disabled(playlist.filterState.isEmpty || playlist.isCurrentFilterSaved)
             }
 
             if playlist.savedSearches.isEmpty {

@@ -39,8 +39,13 @@ final class Playlist {
     var preferences: PlaylistPreferences = PlaylistPreferences()
     var filterState: FilterState = FilterState()
 
-    /// 10 most recent unique multi-tag searches.
+    /// Most recent unique saved searches, each carrying its own resume position.
     var savedSearches: [SavedSearch] = []
+
+    /// Resume position for the unfiltered state, as a point on the shuffle axis
+    /// (`PlaylistFile.sortOrder`). The no-filter counterpart of `SavedSearch.resumeSortOrder`;
+    /// `nil` until played unfiltered, and cleared by Reshuffle.
+    var unfilteredResumeSortOrder: Int?
 
     /// Per-playlist tag usage counts, drives filter/editor dropdown ordering.
     var tagFrequency: [String: Int] = [:]

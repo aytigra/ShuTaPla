@@ -14,6 +14,8 @@ macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
 **During the whole implementation process re-check your work against the task doc, not only against the code in front of you.** If agreed goal and surrounding code pull apart, or any uncertainty arises, notice it and resolve it deliberately rather than letting proximity decide, stop and ask if resolution is not obvious.
 
+**When changing SwiftData models - add migration**
+
 **When inferred implementation does not work after several tries - stop guessing, do documentation and web search!**
 
 **Before concluding task/step as done run a checklist**

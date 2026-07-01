@@ -513,12 +513,7 @@ final class AppState {
         managerScope = scope
         appStateModel.managerScopeRaw = scope.rawValue
         managedPlaylist = lastManagedPlaylist(for: scope)
-        managerSelection = []
-        if let playlist = managedPlaylist, let id = playlist.currentFileID,
-           displaySequenceContains(id, of: playlist) {
-            managerSelection = [id]
-        }
-        scrollSelectionToken += 1
+        reseedManagerSelection()
     }
 
     // MARK: - App lifecycle
@@ -1127,6 +1122,13 @@ final class AppState {
         let skipped = playlist.files.filter(\.isSkipped)
         for (index, file) in playable.enumerated() { file.sortOrder = index }
         for (offset, file) in skipped.enumerated() { file.sortOrder = playable.count + offset }
+        // A new shuffle axis voids every remembered position keyed to the old one.
+        playlist.unfilteredResumeSortOrder = nil
+        playlist.savedSearches = playlist.savedSearches.map {
+            var search = $0
+            search.resumeSortOrder = nil
+            return search
+        }
         persistAndRefresh()
     }
 
@@ -1497,17 +1499,26 @@ final class AppState {
     private func rewriteTagInFilters(_ playlist: Playlist, _ transform: (String) -> String) {
         playlist.filterState.selectedTags = TagParser.dedupe(playlist.filterState.selectedTags.map(transform))
         playlist.savedSearches = playlist.savedSearches.map {
-            SavedSearch(id: $0.id, tags: TagParser.dedupe($0.tags.map(transform)), mode: $0.mode)
+            var search = $0
+            search.tags = TagParser.dedupe($0.tags.map(transform))
+            return search
         }
     }
 
     /// Drops `tag` from the playlist's active tag filter and its saved searches after a
-    /// playlist-wide removal. A saved search left with no tags is discarded.
+    /// playlist-wide removal. A saved search that referenced the tag is discarded outright when
+    /// removing it would leave one tag or none — a resume position belongs to a specific tag
+    /// combination, so it goes with the search rather than orphaning onto a narrower one. A search
+    /// left with two or more tags survives, rewritten to the remainder; one that never carried the
+    /// tag is untouched.
     private func removeTagFromFilters(_ playlist: Playlist, tag: String) {
         playlist.filterState.selectedTags.removeAll { TagParser.sameTag($0, tag) }
-        playlist.savedSearches = playlist.savedSearches.compactMap {
-            let tags = $0.tags.filter { !TagParser.sameTag($0, tag) }
-            return tags.isEmpty ? nil : SavedSearch(id: $0.id, tags: tags, mode: $0.mode)
+        playlist.savedSearches = playlist.savedSearches.compactMap { search in
+            let remaining = search.tags.filter { !TagParser.sameTag($0, tag) }
+            guard remaining.count == search.tags.count || remaining.count > 1 else { return nil }
+            var updated = search
+            updated.tags = remaining
+            return updated
         }
     }
 
@@ -1536,9 +1547,9 @@ final class AppState {
     // MARK: - Filtering
     //
     // Each method edits the *given* playlist's persisted filter state — the tag filter and the
-    // triage (service) filter alike — and the surfaces re-derive (they read the model). The one
-    // explicit side effect is the live-channel reconcile: if the edited playlist is currently
-    // playing and its playing file fell out of the filter, the engine is advanced to a match.
+    // triage (service) filter alike — and the surfaces re-derive (they read the model). The
+    // explicit side effect is `filterChanged`: the incoming filter's remembered resume position is
+    // restored onto the cursor, a live channel follows to it, and the managed selection re-centers.
 
     /// Toggles a triage filter on `playlist`. Triage filters are mutually exclusive and, while
     /// set, override the tag filter.
@@ -1574,7 +1585,7 @@ final class AppState {
     }
 
     /// Remembers `playlist`'s current tag filter as a saved search (most-recent first, unique by
-    /// tag set + operator, capped at 10). No-op when the filter is empty.
+    /// tag set + operator). No-op when the filter is empty.
     func saveCurrentSearch(on playlist: Playlist) {
         guard !playlist.filterState.isEmpty else { return }
         promote(SavedSearch(tags: playlist.filterState.selectedTags, mode: playlist.filterState.filterMode), in: playlist)
@@ -1594,18 +1605,61 @@ final class AppState {
         playlist.savedSearches.removeAll { $0.matches(search) }
     }
 
+    /// Moves the matching saved search to the top of the recents, or inserts `search` when none
+    /// matches. An existing match is kept as-is — preserving its captured `resumeSortOrder` — so
+    /// re-saving a filter that is already saved never discards its remembered position.
     private func promote(_ search: SavedSearch, in playlist: Playlist) {
+        let existing = playlist.savedSearches.first { $0.matches(search) }
         var searches = playlist.savedSearches.filter { !$0.matches(search) }
-        searches.insert(search, at: 0)
-        playlist.savedSearches = Array(searches.prefix(10))
+        searches.insert(existing ?? search, at: 0)
+        playlist.savedSearches = searches
     }
 
-    /// The one explicit effect of a filter edit (the derivation boundary): if `playlist` is on a
-    /// live channel and its playing file fell out of the new filter, advance the engine to a file
-    /// that still matches. Every other surface re-derives from the model on its own.
+    /// Settles a playlist into the incoming filter after its `filterState` was edited. The new
+    /// filter is persisted first so the store-side sequence reflects it, then the incoming filter's
+    /// remembered slot is restored onto `currentFileID`: a live channel follows to that file (audio
+    /// switches tracks now, a suppressed visual pre-loads), while a filter with no stored position
+    /// falls back to the reconcile (advance only if the current file left the set). The managed
+    /// playlist re-centers its selection on the resulting cursor.
     private func filterChanged(on playlist: Playlist) {
-        persistAndRefresh()   // the surfaces re-derive store-side; reconcile reads the sequence too
-        coordinator.reconcile(playlistThatChanged: playlist)
+        persistAndRefresh()   // the new filter must be in the store before the sequence/slot are read
+
+        if let target = restoreTarget(for: playlist) {
+            playlist.currentFileID = target.id
+            // A live channel reloads whenever its engine isn't already showing the target — catching
+            // the channel a prior empty reconcile left unloaded while `currentFileID` still names the
+            // departed file, without restarting a file that's already up.
+            if coordinator.isLive(playlist), coordinator.currentFile(for: playlist)?.id != target.id {
+                coordinator.jump(playlist, to: target)
+            }
+        } else {
+            coordinator.reconcile(playlistThatChanged: playlist)
+        }
+
+        if managedPlaylist === playlist { reseedManagerSelection() }
+    }
+
+    /// The file the incoming filter's remembered position resolves to: the first file of the new
+    /// playback sequence at or after the stored shuffle order, wrapping to the first when none
+    /// qualify. `nil` — leaving the cursor untouched — when the active filter has no slot or no
+    /// stored position yet (first visit / ad-hoc / service), or the sequence is empty.
+    private func restoreTarget(for playlist: Playlist) -> PlaylistFile? {
+        guard let stored = playlist.activeResumeSortOrder else { return nil }
+        let sequence = playlist.playbackFiles
+        guard !sequence.isEmpty else { return nil }
+        return sequence.first { $0.sortOrder >= stored } ?? sequence.first
+    }
+
+    /// Re-centers the Manager on the managed playlist's cursor — the selection re-seed a scope
+    /// switch and a filter change share: highlight the resume file when it survives the current
+    /// filter, else clear, and bump the scroll token so the list re-centers either way.
+    private func reseedManagerSelection() {
+        managerSelection = []
+        if let playlist = managedPlaylist, let id = playlist.currentFileID,
+           displaySequenceContains(id, of: playlist) {
+            managerSelection = [id]
+        }
+        scrollSelectionToken += 1
     }
 
     private func message(for error: FileSystemError) -> String {

@@ -47,11 +47,12 @@ Five `@Model` entities. `Playlist` owns its `PlaylistFile`s (`@Relationship`, ca
 GlobalSettings (singleton)   — default slideshow interval, file-position persistence, image fit mode
 
 Playlist                     — name, folderBookmark (security-scoped), folderPath, mediaType,
- │                             sortOrder, currentFileID, playbackState, createdAt
+ │                             sortOrder, currentFileID, playbackState, createdAt,
+ │                             unfilteredResumeSortOrder?  (no-filter resume slot)
  ├── preferences: PlaylistPreferences   — volume, slideshow on/interval?, imageFitMode?,
  │                                         filePositionPersistence?, viewMode  (nil = use global)
  ├── filterState: FilterState           — selectedTags, filterMode (and/or), serviceFilter?
- ├── savedSearches: [SavedSearch]        — 10 most recent unique multi-tag searches
+ ├── savedSearches: [SavedSearch]        — unique tag-set+operator searches, each with resumeSortOrder?
  ├── tagFrequency: [String: Int]         — per-playlist tag usage counts (drives dropdown order)
  └── files: [PlaylistFile]
       └── relativePath, fileName, tags: [Tag] (many-to-many), taggingStatusCode (scalar),

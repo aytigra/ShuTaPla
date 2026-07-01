@@ -135,7 +135,7 @@ final class PlaybackCoordinator: PlaybackSource {
         liveVisualPlaylist = playlist
         visualKind = playlist.mediaType
         playlist.playbackState = .playing
-        if let start { playlist.currentFileID = start.id }
+        if let start { setCurrentFile(start, on: playlist) }
 
         switch playlist.mediaType {
         case .image:
@@ -163,7 +163,7 @@ final class PlaybackCoordinator: PlaybackSource {
         let resumeAt = resumePosition(for: playlist, start: start, lifecycle: lifecycle)
         liveAudioPlaylist = playlist
         playlist.playbackState = .playing
-        if let start { playlist.currentFileID = start.id }
+        if let start { setCurrentFile(start, on: playlist) }
 
         engine.source = self
         engine.volume = volume(for: playlist)
@@ -211,14 +211,14 @@ final class PlaybackCoordinator: PlaybackSource {
     /// Pauses a playing playlist, recording its own Paused state. A no-op while
     /// suppressed defers the engine pause to suppression, but the state still flips.
     func pause(_ playlist: Playlist) {
-        guard isActive(playlist) else { return }
+        guard isLive(playlist) else { return }
         playlist.playbackState = .paused
         if !isSuppressed { suspend(playlist) }
     }
 
     /// Resumes a paused playlist, restoring its Playing state.
     func unpause(_ playlist: Playlist) {
-        guard isActive(playlist) else { return }
+        guard isLive(playlist) else { return }
         playlist.playbackState = .playing
         if !isSuppressed { resume(playlist) }
     }
@@ -230,9 +230,9 @@ final class PlaybackCoordinator: PlaybackSource {
     /// The play/pause button's full action: a playlist on the channel toggles between Playing
     /// and Paused; a stopped one (Stop removed it from the channel) starts, resuming from its
     /// remembered file. `togglePauseIfActive` alone can't start a stopped playlist — `unpause` guards on
-    /// `isActive` — so the audio overlay's transport would otherwise be a dead end after Stop.
+    /// `isLive` — so the audio overlay's transport would otherwise be a dead end after Stop.
     func playOrTogglePause(_ playlist: Playlist) {
-        if isActive(playlist) { togglePauseIfActive(playlist) } else { play(playlist) }
+        if isLive(playlist) { togglePauseIfActive(playlist) } else { play(playlist) }
     }
 
     // MARK: - Suppression (pause overlay)
@@ -395,7 +395,7 @@ final class PlaybackCoordinator: PlaybackSource {
         guard let folder = folderURLByPlaylist[playlist.id] else { return }
         persistPosition(on: playlist)   // save the outgoing file before loading the new one
         let url = folder.appending(path: file.relativePath)
-        playlist.currentFileID = file.id
+        setCurrentFile(file, on: playlist)
         // A jump is a fresh entry into a file (a double-click, or a reconcile landing on a new
         // file), so it resumes mid-file only when file-position persistence is on for the playlist.
         let resumeAt = persistsPosition(playlist) ? file.lastPosition : nil
@@ -536,7 +536,15 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     func engineDidAdvance(to file: PlaylistFile) {
-        file.playlist?.currentFileID = file.id
+        if let playlist = file.playlist { setCurrentFile(file, on: playlist) }
+    }
+
+    /// Records `file` as `playlist`'s current resume cursor and mirrors its shuffle position into
+    /// the active filter's slot — the single point every natural file switch (Play, jump, an
+    /// engine-reported advance) routes through, so the outgoing filter's slot stays current.
+    private func setCurrentFile(_ file: PlaylistFile, on playlist: Playlist) {
+        playlist.currentFileID = file.id
+        playlist.captureResumePosition(file.sortOrder)
     }
 
     // MARK: - Channel routing
@@ -549,7 +557,23 @@ final class PlaybackCoordinator: PlaybackSource {
         return nil
     }
 
-    private func isActive(_ playlist: Playlist) -> Bool { channel(of: playlist) != nil }
+    /// Whether `playlist` currently occupies either channel. The pause/unpause transport gates on
+    /// it, and the filter-change restore consults it to decide between following the live channel
+    /// to the restored file and a plain reconcile.
+    func isLive(_ playlist: Playlist) -> Bool { channel(of: playlist) != nil }
+
+    /// The file the engine on `playlist`'s channel currently has loaded, or `nil` when the playlist
+    /// isn't live or its channel was emptied by a prior reconcile. The filter-change restore
+    /// compares this to its target so it reloads an emptied channel instead of trusting
+    /// `currentFileID` (which a reconcile leaves pointing at the departed file), while still not
+    /// restarting a file the engine already shows.
+    func currentFile(for playlist: Playlist) -> PlaylistFile? {
+        switch channel(of: playlist) {
+        case .visualImage, .visualVideo: return visualCurrentFile
+        case .audio: return audioCurrentFile
+        case nil: return nil
+        }
+    }
 
     /// Halts a playlist's engine without changing its persisted state.
     private func suspend(_ playlist: Playlist) {

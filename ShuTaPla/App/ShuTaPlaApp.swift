@@ -20,7 +20,7 @@ struct ShuTaPlaApp: App {
     @State private var durationService = DurationService()
 
     init() {
-        let schema = Schema(versionedSchema: SchemaV2.self)
+        let schema = Schema(versionedSchema: SchemaV3.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer
         do {

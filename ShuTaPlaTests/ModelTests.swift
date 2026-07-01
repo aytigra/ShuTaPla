@@ -215,6 +215,22 @@ struct ModelTests {
         #expect(decoded.serviceFilter == nil)
     }
 
+    @Test func savedSearchRoundTripsResumeSortOrder() throws {
+        let original = SavedSearch(tags: ["beach"], mode: .or, resumeSortOrder: 7)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SavedSearch.self, from: data)
+        #expect(decoded.resumeSortOrder == 7)
+    }
+
+    /// A search persisted before per-filter resume positions has no `resumeSortOrder` key;
+    /// it must decode to `nil` rather than failing, so existing playlists keep loading.
+    @Test func savedSearchDecodesWithoutResumeSortOrderKey() throws {
+        let legacy = #"{"id":"5BD9F8E0-0000-0000-0000-000000000000","tags":["beach"],"mode":"and"}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(SavedSearch.self, from: legacy)
+        #expect(decoded.tags == ["beach"])
+        #expect(decoded.resumeSortOrder == nil)
+    }
+
     // MARK: - Enum raw values
 
     @Test(arguments: [

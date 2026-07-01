@@ -2,9 +2,9 @@
 //  SavedSearch.swift
 //  ShuTaPla
 //
-//  Embedded value type stored on `Playlist`. A remembered multi-tag search:
-//  the 10 most recent unique combinations. Re-applying an existing one moves
-//  it to the top instead of duplicating.
+//  Embedded value type stored on `Playlist`. A remembered tag search — a unique
+//  tag-set + operator combination, each carrying its own playback resume position.
+//  Re-applying an existing one moves it to the top instead of duplicating.
 //
 
 import Foundation
@@ -16,10 +16,15 @@ nonisolated struct SavedSearch: Codable, Sendable, Hashable, Identifiable {
     var tags: [String]
     var mode: FilterMode
 
-    init(id: UUID = UUID(), tags: [String], mode: FilterMode) {
+    /// The playback resume position last played under this search, as a point on the playlist's
+    /// shuffle axis (`PlaylistFile.sortOrder`). `nil` until played under, and cleared by Reshuffle.
+    var resumeSortOrder: Int?
+
+    init(id: UUID = UUID(), tags: [String], mode: FilterMode, resumeSortOrder: Int? = nil) {
         self.id = id
         self.tags = tags
         self.mode = mode
+        self.resumeSortOrder = resumeSortOrder
     }
 
     init(from decoder: any Decoder) throws {
@@ -28,6 +33,8 @@ nonisolated struct SavedSearch: Codable, Sendable, Hashable, Identifiable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         tags = try container.decode([String].self, forKey: .tags)
         mode = try container.decode(FilterMode.self, forKey: .mode)
+        // Absent in searches saved before per-filter resume positions.
+        resumeSortOrder = try container.decodeIfPresent(Int.self, forKey: .resumeSortOrder)
     }
 
     /// Two searches are the same combination when they cover the same tag set
