@@ -116,6 +116,8 @@ struct PlaylistTagsView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .contentShape(Rectangle())
+            .onTapGesture { appState.setTagFilter(to: tag, on: playlist) }
+            .help("Filter the playlist by this tag")
         }
     }
 

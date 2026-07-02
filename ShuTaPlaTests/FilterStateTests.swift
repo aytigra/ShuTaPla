@@ -42,6 +42,14 @@ struct FilterStateTests {
         #expect(state.serviceFilter == .skipped)
     }
 
+    @Test func setOnlyReplacesTheFilterWithASingleTagAndClearsTriage() {
+        var state = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .skipped)
+        state.setOnly(tag: "beach")
+        #expect(state.selectedTags == ["beach"])
+        #expect(state.serviceFilter == nil)
+        #expect(state.filterMode == .or)   // the AND/OR operator is left untouched
+    }
+
     @Test func clearTagsLeavesTheTriageFilterInPlace() {
         var state = FilterState(selectedTags: ["a", "b"], filterMode: .and, serviceFilter: .skipped)
         state.clearTags()

@@ -24,6 +24,12 @@ extension AppState {
         filterChanged(on: playlist)
     }
 
+    /// Replaces `playlist`'s tag filter with a single tag.
+    func setTagFilter(to tag: String, on playlist: Playlist) {
+        playlist.filterState.setOnly(tag: tag)
+        filterChanged(on: playlist)
+    }
+
     /// Sets the AND/OR operator on `playlist`'s tag filter.
     func setFilterMode(_ mode: FilterMode, on playlist: Playlist) {
         playlist.filterState.filterMode = mode

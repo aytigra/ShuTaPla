@@ -1385,6 +1385,33 @@ struct AppStateTests {
         await appState.updateTask?.value
     }
 
+    @Test func setTagFilterReplacesTheWholeFilterWithTheClickedTag() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.manage(playlist)
+
+        // A pre-existing multi-tag AND filter that the click must replace outright.
+        appState.setFilterMode(.and, on: playlist)
+        appState.toggleFilterTag("beach", on: playlist)
+        appState.toggleFilterTag("sun", on: playlist)
+        #expect(appState.managerFiles.count == 1)
+
+        appState.setTagFilter(to: "beach", on: playlist)
+
+        #expect(playlist.filterState.selectedTags == ["beach"])   // replaced, not appended
+        #expect(appState.managerFiles.count == 2)                 // both "beach" files now show
+
+        await appState.updateTask?.value
+    }
+
     @Test func removeTagAcrossPlaylistDropsItFromFilterAndSavedSearches() async throws {
         let container = try makeContainer()
         let context = container.mainContext

@@ -48,4 +48,10 @@ nonisolated struct FilterState: Codable, Sendable, Equatable {
     mutating func clearTags() {
         selectedTags = []
     }
+
+    /// Replaces the tag filter with a single tag, clearing any active triage filter.
+    mutating func setOnly(tag: String) {
+        serviceFilter = nil
+        selectedTags = [tag]
+    }
 }
