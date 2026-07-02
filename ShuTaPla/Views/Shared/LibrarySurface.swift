@@ -202,6 +202,9 @@ struct LibrarySurface: View {
                 file: file,
                 playlist: playlist,
                 isSelected: context.currentFile?.id == file.id,
+                // The overlay list already conveys the current file as the selection; the
+                // playback-cursor glyph is the Manager's cue, where selection is independent.
+                isCurrent: false,
                 isRenaming: fileRenamingID == file.id,
                 isStripping: appState.strippingFileIDs.contains(file.id),
                 draftName: $fileDraftName,

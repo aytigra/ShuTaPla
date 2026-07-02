@@ -12,6 +12,7 @@ struct FileRowView: View {
     let file: PlaylistFile
     let playlist: Playlist
     let isSelected: Bool
+    let isCurrent: Bool
     let isRenaming: Bool
     let isStripping: Bool
     @Binding var draftName: String
@@ -42,6 +43,11 @@ struct FileRowView: View {
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear)
+        // A purple border marks the playback cursor, layered over the accent selection
+        // wash so a current row that's also selected shows both cues.
+        .overlay {
+            if isCurrent { Rectangle().strokeBorder(Color.playbackCursor, lineWidth: 2) }
+        }
         // Dim the row behind a spinner while its audio is being removed.
         .opacity(isStripping ? 0.5 : 1)
         .overlay(alignment: .trailing) {

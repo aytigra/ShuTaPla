@@ -53,6 +53,9 @@ struct FileCellConfiguration {
     let file: PlaylistFile
     let playlist: Playlist
     let isSelected: Bool
+    /// This file is the playlist's playback cursor (`currentFileID`) — where playback
+    /// sits or would resume, marked independently of the multi-select highlight.
+    let isCurrent: Bool
     let isRenaming: Bool
     let isStripping: Bool
     let draftName: Binding<String>
@@ -179,6 +182,7 @@ struct FileCollectionView<Cell: View>: View {
             file: file,
             playlist: playlist,
             isSelected: appState.managerSelection.contains(file.id),
+            isCurrent: file.id == playlist.currentFileID,
             isRenaming: renamingID == file.id,
             isStripping: appState.strippingFileIDs.contains(file.id),
             draftName: $draftName,

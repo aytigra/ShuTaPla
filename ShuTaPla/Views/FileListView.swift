@@ -26,6 +26,7 @@ struct FileListView: View {
                 file: config.file,
                 playlist: config.playlist,
                 isSelected: config.isSelected,
+                isCurrent: config.isCurrent,
                 isRenaming: config.isRenaming,
                 isStripping: config.isStripping,
                 draftName: config.draftName,

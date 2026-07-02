@@ -28,6 +28,7 @@ struct FileGalleryView: View {
                 file: config.file,
                 playlist: config.playlist,
                 isSelected: config.isSelected,
+                isCurrent: config.isCurrent,
                 isRenaming: config.isRenaming,
                 isStripping: config.isStripping,
                 draftName: config.draftName,
@@ -44,6 +45,7 @@ private struct GalleryCell: View {
     let file: PlaylistFile
     let playlist: Playlist
     let isSelected: Bool
+    let isCurrent: Bool
     let isRenaming: Bool
     let isStripping: Bool
     @Binding var draftName: String
@@ -123,9 +125,10 @@ private struct GalleryCell: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            // The playback cursor is purple; a selected-but-not-current tile keeps the accent.
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
+                    .strokeBorder(borderColor, lineWidth: 3)
             }
             // A dimming scrim with a spinner while this cell's audio is being removed.
             .overlay {
@@ -149,6 +152,12 @@ private struct GalleryCell: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    /// Purple for the playback cursor, accent for a selected non-current tile, none otherwise.
+    private var borderColor: Color {
+        if isCurrent { return .playbackCursor }
+        return isSelected ? .accentColor : .clear
     }
 
     /// Reload when the file is replaced or renamed (path change).
