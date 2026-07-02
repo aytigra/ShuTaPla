@@ -32,6 +32,21 @@ struct RootView: View {
                 audioOverlayLayer
             }
         }
+        // The Manager "peek" card, above every mode and overlay but inside the safe area, so its
+        // dimmed backdrop stops at the toolbar rather than under the window chrome. It lives in its
+        // own overlay with a self-contained animation: were the fade on the outer ZStack, closing
+        // the preview would pull the AppKit-hosted Manager split view into the same transaction and
+        // its panes would fade unevenly. Scoped here, only the backdrop and card animate.
+        .overlay {
+            ZStack {
+                if appState.preview.isOpen {
+                    MediaPreviewView()
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: appState.preview.isOpen)
+            .environment(appState.preview)
+        }
         .environment(overlayManager)
         // A persist failure is surfaced app-wide: any mutation surface could have raised it, and
         // `persistAndRefresh` has already rolled the context back to keep the model consistent.

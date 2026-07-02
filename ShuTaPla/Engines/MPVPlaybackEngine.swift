@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import CoreGraphics
 
 @MainActor
 @Observable
@@ -29,6 +30,10 @@ class MPVPlaybackEngine: SourceNavigating {
 
     /// Duration of the current file in seconds, or 0 until known.
     private(set) var duration: TimeInterval = 0
+
+    /// The decoded video's display size (observed `dwidth` / `dheight`), or `.zero` until known.
+    /// The Manager preview reads this for its card's aspect ratio; audio (`vo=null`) leaves it zero.
+    private(set) var videoSize: CGSize = .zero
 
     /// Whether the file is advancing (not paused). Driven by mpv's `pause` so it
     /// reflects the engine's real state rather than the last requested command.
@@ -101,6 +106,7 @@ class MPVPlaybackEngine: SourceNavigating {
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
         currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
+        videoSize = .zero              // the new file re-reports its size; don't linger on the old one
         isPlaying = true               // optimistic; corrected by the next `pause` event
         if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)
@@ -148,12 +154,18 @@ class MPVPlaybackEngine: SourceNavigating {
         }
     }
 
-    private func handle(_ event: MPVEvent) {
+    /// Folds one client event into observable state. Internal so tests can drive the mapping
+    /// directly (the real events arrive off the client's queue).
+    func handle(_ event: MPVEvent) {
         switch event {
         case .timePosition(let value):
             currentTime = value ?? 0
         case .duration(let value):
             duration = value ?? 0
+        case .videoWidth(let value):
+            videoSize.width = CGFloat(value ?? 0)
+        case .videoHeight(let value):
+            videoSize.height = CGFloat(value ?? 0)
         case .pausedChanged(let paused):
             isPlaying = !paused
         case .endFile(.eof):

@@ -16,6 +16,12 @@ nonisolated enum MPVEvent: Sendable, Equatable {
     /// The pause state changed (observed `pause`).
     case pausedChanged(Bool)
 
+    /// The decoded video's display width / height became known (observed `dwidth` / `dheight`,
+    /// already corrected for anamorphic pixels and rotation). Arrive as a pair around file load;
+    /// `nil` while no video is decoded. Together they give the preview card its aspect ratio.
+    case videoWidth(Int?)
+    case videoHeight(Int?)
+
     /// A file finished loading and playback metadata is available (`MPV_EVENT_FILE_LOADED`).
     case fileLoaded
 

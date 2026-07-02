@@ -206,6 +206,18 @@ final class HotkeyRouter {
             }
         }
 
+        // The Manager preview lightbox owns the keyboard while open: `[space]`/`[esc]` close
+        // it, and every other key is swallowed so nothing acts on the file list behind it. It
+        // has no native buttons, so — unlike a confirmation alert — the router acts on the keys
+        // itself rather than passing them through.
+        if appState?.preview.isOpen == true {
+            switch Hotkey(event: event) {
+            case .space, .escape: appState?.closePreview()
+            default: break
+            }
+            return nil
+        }
+
         if let key = Hotkey(event: event), route(key, rightOption: rightOptionDown) {
             return nil
         }
@@ -364,6 +376,10 @@ final class HotkeyRouter {
             // otherwise swallow the key. Manager `[esc]` never closes the window.
             appState?.cancelInProgressOperation()
             return true
+        case .space:
+            // Open the preview lightbox on the single selected file. (Closing it is handled in
+            // `handle` while it's open, so this only ever opens.)
+            return appState?.togglePreviewOfSelection() ?? false
         case .enter:
             // Play the selected file (the text-input guard upstream means this only fires
             // when no field is focused, so a rename's Return still commits the field).

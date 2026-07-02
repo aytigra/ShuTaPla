@@ -6,7 +6,7 @@ macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
 **Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.**
 
-**The work is organized through plan files in doc/tasks folder. A design or implementation decision is settled only once it has been talked through with the user and written into the task doc file. Task steps are established in such file and always implemented only one step at a time.** Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
+**The work is organized through plan files in doc/tasks folder. A design or implementation decision is settled only once it has been talked through with the user, written into the task doc file. Task steps are established in such file and always implemented only one step at a time. Implementation starts only after confirmation from user.** Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
 
 **Load relevant skills before implementation**
 

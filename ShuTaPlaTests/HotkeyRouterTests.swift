@@ -597,6 +597,46 @@ import AppKit
         #expect(f.appState.coordinator.visualCurrentFile?.id == files[1].id)
     }
 
+    @Test func managerSpaceOpensPreviewForSingleSelection() throws {
+        let f = try managerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.preview.shutdown(); f.appState.coordinator.shutdown() }
+
+        let files = f.appState.managerFiles
+        f.appState.managerSelection = [files[0].id]
+
+        #expect(f.router.route(.space, rightOption: false))
+        #expect(f.appState.preview.isOpen)
+    }
+
+    @Test func managerSpaceIsANoOpWithoutASingleSelection() throws {
+        let f = try managerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+
+        // Nothing selected → the preview never opens and the key isn't consumed.
+        #expect(!f.router.route(.space, rightOption: false))
+        #expect(!f.appState.preview.isOpen)
+    }
+
+    @Test func openPreviewOwnsTheKeyboardAndClosesOnSpaceOrEsc() throws {
+        let f = try managerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.preview.shutdown(); f.appState.coordinator.shutdown() }
+
+        let files = f.appState.managerFiles
+        f.appState.managerSelection = [files[0].id]
+        f.router.route(.space, rightOption: false)
+        #expect(f.appState.preview.isOpen)
+
+        // While the lightbox is open every other key is swallowed and can't reach the list.
+        #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
+        #expect(f.appState.managerSelection == [files[0].id])     // selection didn't move
+        #expect(f.appState.preview.isOpen)
+
+        // [esc] closes it (as does a second [space]).
+        let esc = keyEvent(keyCode: 53)
+        #expect(f.router.handle(esc) == nil)
+        #expect(!f.appState.preview.isOpen)
+    }
+
     @Test func managerEnterDoesNothingWithoutSelection() throws {
         let f = try managerFixture(.image, files: ["1.jpg", "2.jpg"])
         defer { f.appState.coordinator.shutdown() }

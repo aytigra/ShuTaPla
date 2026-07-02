@@ -40,6 +40,11 @@ final class AppState {
     /// resolves file URLs through `bookmarkService`. Injected into the player views.
     let coordinator: PlaybackCoordinator
 
+    /// The Manager "peek": shows one selected file on its own engine, outside the coordinator's
+    /// channels, so it disturbs neither the playlist nor the live audio channel. Injected into
+    /// the lightbox view; driven from `togglePreviewOfSelection()`.
+    let preview: MediaPreview
+
     /// Runs the Update path's file reconciliation on its own `ModelContext` off the main actor,
     /// so a re-scan's O(N) derive/diff/write never blocks the UI. Built from the shared container.
     let scanActor: PlaylistScanActor
@@ -194,6 +199,7 @@ final class AppState {
             globalSettings: settings,
             makeVideoEngine: makeVideoEngine
         )
+        self.preview = MediaPreview(folderAccess: folderAccess, makeVideoEngine: makeVideoEngine)
         self.scanActor = PlaylistScanActor(modelContainer: modelContext.container)
 
         // Welcome until at least one playlist exists, otherwise Manager — unless a

@@ -127,6 +127,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
         // With keep-open=yes mpv holds the last frame and signals the natural end by flipping
         // eof-reached rather than emitting END_FILE, so this is the engine's "advance" trigger.
         mpv_observe_property(handle, PropertyID.eofReached, "eof-reached", MPV_FORMAT_FLAG)
+        // The decoded display size, for the Manager preview card's aspect ratio.
+        mpv_observe_property(handle, PropertyID.dwidth, "dwidth", MPV_FORMAT_INT64)
+        mpv_observe_property(handle, PropertyID.dheight, "dheight", MPV_FORMAT_INT64)
 
         // Route mpv's wakeups onto our serial drain. The callback fires on an mpv-internal
         // thread; it must be a capture-free literal closure to form a C function pointer, so it
@@ -348,6 +351,10 @@ nonisolated final class MPVClient: @unchecked Sendable {
             case "eof-reached":
                 // Only the rising edge matters; eof-reached also clears to false on a seek-back.
                 return flagValue(prop) ? .endFile(.eof) : nil
+            case "dwidth":
+                return .videoWidth(intValue(prop))
+            case "dheight":
+                return .videoHeight(intValue(prop))
             default:
                 return nil
             }
@@ -405,6 +412,8 @@ nonisolated final class MPVClient: @unchecked Sendable {
         static let duration: UInt64 = 2
         static let pause: UInt64 = 3
         static let eofReached: UInt64 = 4
+        static let dwidth: UInt64 = 5
+        static let dheight: UInt64 = 6
     }
 }
 
@@ -448,6 +457,11 @@ private nonisolated func command(_ handle: OpaquePointer, _ args: String...) {
 private nonisolated func doubleValue(_ prop: mpv_event_property) -> Double? {
     guard prop.format == MPV_FORMAT_DOUBLE, let data = prop.data else { return nil }
     return data.assumingMemoryBound(to: Double.self).pointee
+}
+
+private nonisolated func intValue(_ prop: mpv_event_property) -> Int? {
+    guard prop.format == MPV_FORMAT_INT64, let data = prop.data else { return nil }
+    return Int(data.assumingMemoryBound(to: Int64.self).pointee)
 }
 
 private nonisolated func flagValue(_ prop: mpv_event_property) -> Bool {
