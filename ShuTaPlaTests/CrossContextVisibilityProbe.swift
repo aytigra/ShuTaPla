@@ -69,7 +69,7 @@ struct CrossContextVisibilityProbe {
     /// A second context deletes one file and adds another, then saves. Two facts the Update path
     /// leans on: (a) a store-side fetch reflects the new set (the UI's `displaySequence` path, which
     /// the version bump re-derives), and (b) a held reference to the deleted file still surrenders its
-    /// stored `id` for UI cleanup (pruning `pendingManagerDelete`) without trapping — `model(for:)`
+    /// stored `id` for UI cleanup (pruning `pendingConfirmation`) without trapping — `model(for:)`
     /// keeps a stale-but-live object for a cross-context delete. (The held *relationship* going stale
     /// until refaulted is covered by `refreshFromStoreRefaultsHeldPlaylistAfterSiblingSave`.)
     @Test func secondContextDeleteAndAddVisibleToMainContext() throws {
@@ -86,7 +86,7 @@ struct CrossContextVisibilityProbe {
         let playlistID = playlist.persistentModelID
         let storedUUID = file.id
 
-        // Hold a main-context reference (as pendingManagerDelete would), then mutate elsewhere.
+        // Hold a main-context reference (as pendingConfirmation would), then mutate elsewhere.
         let mainRef = main.model(for: fileID) as? PlaylistFile
 
         let bg = ModelContext(container)

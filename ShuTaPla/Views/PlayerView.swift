@@ -81,14 +81,14 @@ struct PlayerView: View {
         .alert(
             "Move to Trash?",
             isPresented: Binding(
-                get: { appState.playerDeleteCandidate != nil },
-                set: { if !$0 { appState.cancelPlayerDelete() } }
+                get: { appState.pendingConfirmation?.playerDeleteFile != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
             ),
-            presenting: appState.playerDeleteCandidate
+            presenting: appState.pendingConfirmation?.playerDeleteFile
         ) { file in
-            Button("Move to Trash", role: .destructive) { appState.confirmPlayerDelete() }
+            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelPlayerDelete() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         } message: { file in
             Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
@@ -96,32 +96,16 @@ struct PlayerView: View {
         .alert(
             "Remove Audio?",
             isPresented: Binding(
-                get: { !appState.pendingAudioStrip.isEmpty },
-                set: { if !$0 { appState.cancelAudioStrip() } }
+                get: { appState.pendingConfirmation?.audioStripFiles != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
             )
         ) {
-            Button("Remove Audio", role: .destructive) { appState.confirmAudioStrip() }
+            Button("Remove Audio", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelAudioStrip() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         } message: {
             Text("The original is moved to the Trash; playback resumes where it left off.")
-        }
-        .alert(
-            "Couldn't remove audio",
-            isPresented: Binding(get: { appState.audioStripError != nil }, set: { if !$0 { appState.audioStripError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.audioStripError = nil }
-        } message: {
-            Text(appState.audioStripError ?? "")
-        }
-        .alert(
-            "Couldn't move to Trash",
-            isPresented: Binding(get: { appState.playerDeleteError != nil }, set: { if !$0 { appState.playerDeleteError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.playerDeleteError = nil }
-        } message: {
-            Text(appState.playerDeleteError ?? "")
         }
     }
 

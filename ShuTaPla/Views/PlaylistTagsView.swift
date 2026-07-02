@@ -37,12 +37,12 @@ struct PlaylistTagsView: View {
             content
         }
         .alert(
-            appState.pendingTagRemoval.map { "Remove “\($0)” from every file in this playlist?" } ?? "",
-            isPresented: Binding(get: { appState.pendingTagRemoval != nil }, set: { if !$0 { appState.cancelTagRemoval() } })
+            appState.pendingConfirmation?.tagRemovalTag.map { "Remove “\($0)” from every file in this playlist?" } ?? "",
+            isPresented: Binding(get: { appState.pendingConfirmation?.tagRemovalTag != nil }, set: { if !$0 { appState.cancelConfirmation() } })
         ) {
-            Button("Remove Tag", role: .destructive) { appState.confirmTagRemoval() }
+            Button("Remove Tag", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelTagRemoval() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         } message: {
             Text("This renames the files on disk and can't be undone.")
@@ -54,14 +54,6 @@ struct PlaylistTagsView: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
-        }
-        .alert(
-            "Couldn't remove tag",
-            isPresented: Binding(get: { appState.tagRemovalError != nil }, set: { if !$0 { appState.tagRemovalError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.tagRemovalError = nil }
-        } message: {
-            Text(appState.tagRemovalError ?? "")
         }
     }
 
@@ -115,7 +107,7 @@ struct PlaylistTagsView: View {
                 .buttonStyle(.borderless)
                 .help("Rename this tag across the playlist")
 
-                Button(role: .destructive) { appState.pendingTagRemoval = tag } label: {
+                Button(role: .destructive) { appState.requestTagRemoval(tag) } label: {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)

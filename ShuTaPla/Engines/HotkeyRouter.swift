@@ -138,18 +138,9 @@ final class HotkeyRouter {
     /// swallow the rest, or bare keys leak to playback / the file list behind the modal.
     private var hasBlockingConfirmation: Bool {
         guard let appState else { return false }
-        return !appState.pendingManagerDelete.isEmpty
-            || !appState.pendingAudioStrip.isEmpty
-            || appState.playerDeleteCandidate != nil
-            || appState.pendingTagRemoval != nil
-            || appState.pendingPlaylistDelete != nil
-            || appState.managerDeleteError != nil
-            || appState.audioStripError != nil
-            || appState.tagRemovalError != nil
-            || appState.playerDeleteError != nil
+        return appState.pendingConfirmation != nil
+            || appState.confirmationError != nil
             || appState.playerRenameError != nil
-            || appState.audioDeleteCandidate != nil
-            || appState.audioDeleteError != nil
             || appState.audioRenameError != nil
             || appState.pendingTypeChoice != nil
             || appState.addPlaylistError != nil

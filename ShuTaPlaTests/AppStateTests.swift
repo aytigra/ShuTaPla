@@ -1435,17 +1435,17 @@ struct AppStateTests {
         fileSystem.trashFails = true
         let appState = AppState(modelContext: context, fileSystem: fileSystem)
 
-        appState.playerDeleteCandidate = file
-        appState.confirmPlayerDelete()
+        appState.requestPlayerDelete(file)
+        appState.confirmConfirmation()
 
         // The fire-and-forget trash fails, so the player reports the message instead of
         // silently advancing, and the file stays in the playlist.
         var waited = 0
-        while appState.playerDeleteError == nil && waited < 100 {
+        while appState.confirmationError == nil && waited < 100 {
             try? await Task.sleep(for: .milliseconds(20))
             waited += 1
         }
-        #expect(appState.playerDeleteError != nil)
+        #expect(appState.confirmationError != nil)
         #expect(file.playlist === playlist)
         #expect(playlist.files.contains { $0 === file })
     }
@@ -1643,13 +1643,31 @@ struct AppStateTests {
         let stub = StubFileSystem(result: emptyResult, rescanResult: [])
         let appState = AppState(modelContext: context, fileSystem: stub)
         appState.managedPlaylist = playlist
-        appState.pendingManagerDelete = [a]
+        appState.pendingConfirmation = .managerDelete([a])
 
         // The re-scan prunes "a.mp4"; the pending delete that targeted it must be
         // cleared so confirming can't dereference the destroyed model.
         await appState.update(playlist)
 
-        #expect(appState.pendingManagerDelete.isEmpty)
+        #expect(appState.pendingConfirmation == nil)
+    }
+
+    @Test func managerDeleteRequestModelsOnePendingConfirmation() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a.mp4", order: 0, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.managedPlaylist = playlist
+
+        // The request models exactly one pending confirmation carrying its target.
+        appState.requestManagerDelete([a])
+        #expect(appState.pendingConfirmation?.managerDeleteFiles?.map(\.id) == [a.id])
+
+        // Cancelling clears it.
+        appState.cancelConfirmation()
+        #expect(appState.pendingConfirmation == nil)
     }
 
     // MARK: - Audio overlay (Task 15)
@@ -1747,9 +1765,9 @@ struct AppStateTests {
         #expect(audio.currentFileID == first.id)
 
         // Trashing the playing track must advance the channel to the survivor, mirroring the
-        // visual confirmPlayerDelete; otherwise the engine stays on the deleted file.
-        appState.audioDeleteCandidate = first
-        appState.confirmAudioDelete()
+        // visual delete confirmation; otherwise the engine stays on the deleted file.
+        appState.requestAudioDelete(first)
+        appState.confirmConfirmation()
 
         var waited = 0
         while audio.files.count > 1 && waited < 100 {
@@ -1783,7 +1801,7 @@ struct AppStateTests {
         // channel off it, exactly as the audio-overlay delete does — otherwise the engine keeps
         // the destroyed model and its next advance dereferences it.
         appState.requestManagerDelete([first])
-        appState.confirmManagerDelete()
+        appState.confirmConfirmation()
 
         var waited = 0
         while audio.files.count > 1 && waited < 100 {
@@ -2009,9 +2027,9 @@ struct AppStateTests {
 
         // A trash confirmation pointing at a file the re-scan prunes must not survive to act
         // on a destroyed model.
-        appState.audioDeleteCandidate = doomed
+        appState.requestAudioDelete(doomed)
         await appState.update(audio)
-        #expect(appState.audioDeleteCandidate == nil)
+        #expect(appState.pendingConfirmation == nil)
     }
 
     @Test func currentAudioFileResolvesFromTheModelWhenStopped() throws {

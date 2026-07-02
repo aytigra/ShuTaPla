@@ -206,16 +206,9 @@ extension AppState {
     /// dropped playing file.
     private func applyScanResult(_ result: ScanReconcileResult, to playlist: Playlist) {
         let removedIDs = Set(result.removedFileIDs)
-        // Drop pending references to pruned files so a delete confirmation raised over one the
-        // re-scan removed can't act on (and dereference) a destroyed model when the user confirms.
-        pendingManagerDelete.removeAll { removedIDs.contains($0.id) }
-        pendingAudioStrip.removeAll { removedIDs.contains($0.id) }
-        if let candidate = playerDeleteCandidate, removedIDs.contains(candidate.id) {
-            playerDeleteCandidate = nil
-        }
-        if let candidate = audioDeleteCandidate, removedIDs.contains(candidate.id) {
-            audioDeleteCandidate = nil
-        }
+        // Drop pending references to pruned files so a confirmation raised over one the re-scan
+        // removed can't act on (and dereference) a destroyed model when the user confirms.
+        pendingConfirmation = pendingConfirmation?.pruning(removedFileIDs: removedIDs)
         managerSelection.subtract(removedIDs)
 
         // The actor committed on its own context, which doesn't merge into this held playlist; a

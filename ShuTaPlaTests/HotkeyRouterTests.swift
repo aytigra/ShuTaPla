@@ -303,7 +303,7 @@ import AppKit
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.playerDeleteCandidate != nil)
+        #expect(f.appState.pendingConfirmation?.playerDeleteFile != nil)
 
         // While the confirmation is up the alert owns the keyboard: `[enter]`/`[esc]` pass
         // through to its buttons and every other key is swallowed so transport can't run.
@@ -311,7 +311,7 @@ import AppKit
         #expect(f.router.handle(arrowRight) == nil)
         let current = f.playlist.currentFileID
         #expect(f.playlist.currentFileID == current)
-        #expect(f.appState.playerDeleteCandidate != nil)
+        #expect(f.appState.pendingConfirmation?.playerDeleteFile != nil)
 
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)      // passed to the alert's Cancel button
@@ -326,17 +326,17 @@ import AppKit
         // With the audio overlay holding key context, `[delete]` targets the focused audio track
         // (the audio confirmation), not the visual file — like every other contextual key.
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.audioDeleteCandidate != nil)
-        #expect(f.appState.playerDeleteCandidate == nil)
+        #expect(f.appState.pendingConfirmation?.audioDeleteFile != nil)
+        #expect(f.appState.pendingConfirmation?.playerDeleteFile == nil)
     }
 
     @Test func rRaisesRemoveAudioConfirmationForThePlayingVideo() throws {
         let f = try playerFixture(.video, files: ["1.mp4", "2.mp4"])
         defer { f.appState.coordinator.shutdown() }
-        let playing = f.appState.coordinator.visualCurrentFile
+        let playing = try #require(f.appState.coordinator.visualCurrentFile)
 
         #expect(f.router.route(.r, rightOption: false))
-        #expect(f.appState.pendingAudioStrip.map(\.id) == [playing?.id])
+        #expect(f.appState.pendingConfirmation?.audioStripFiles?.map(\.id) == [playing.id])
     }
 
     @Test func rTargetsTheVideoEvenWhenAudioHoldsKeyContext() throws {
@@ -344,10 +344,10 @@ import AppKit
         // contextual keys, the audio overlay holding key context doesn't divert it.
         let f = try playerFixture(.video, files: ["1.mp4", "2.mp4"], overlay: audioOverlay())
         defer { f.appState.coordinator.shutdown() }
-        let playing = f.appState.coordinator.visualCurrentFile
+        let playing = try #require(f.appState.coordinator.visualCurrentFile)
 
         #expect(f.router.route(.r, rightOption: false))
-        #expect(f.appState.pendingAudioStrip.map(\.id) == [playing?.id])
+        #expect(f.appState.pendingConfirmation?.audioStripFiles?.map(\.id) == [playing.id])
     }
 
     @Test func rIsANoOpWhenAnImageIsOnTheVisualChannel() throws {
@@ -355,7 +355,7 @@ import AppKit
         defer { f.appState.coordinator.shutdown() }
 
         #expect(!f.router.route(.r, rightOption: false))   // images have no audio track to strip
-        #expect(f.appState.pendingAudioStrip.isEmpty)
+        #expect(f.appState.pendingConfirmation == nil)
     }
 
     @Test func spaceRestartsAStoppedAudioChannel() throws {
@@ -625,7 +625,7 @@ import AppKit
         defer { f.appState.coordinator.shutdown() }
 
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.pendingManagerDelete.count == 1)
+        #expect(f.appState.pendingConfirmation?.managerDeleteFiles?.count == 1)
 
         // While the confirmation is up the alert owns the keyboard: `[esc]` passes through
         // to its Cancel button (the idle-esc chain doesn't run), and other keys are
@@ -644,7 +644,7 @@ import AppKit
         // The alert owns its keys: while it's up, `[enter]`/`[esc]` pass through to it
         // (handled natively by its default/cancel buttons) rather than being routed —
         // so the player is never entered — and every other key is swallowed.
-        f.appState.pendingTagRemoval = "beach"
+        f.appState.requestTagRemoval("beach")
 
         let enter = keyEvent(keyCode: 36)
         #expect(f.router.handle(enter) === enter)         // passed through to the alert
@@ -663,7 +663,7 @@ import AppKit
         // A single-button error alert (here a failed audio strip) is still a modal that owns
         // the keyboard: bare keys must be swallowed and `[enter]`/`[esc]` pass through to it,
         // rather than leaking to playback behind the alert.
-        f.appState.audioStripError = "Couldn't remove audio."
+        f.appState.confirmationError = ConfirmationError(title: "Couldn't remove audio", message: "Couldn't remove audio.")
 
         let current = f.playlist.currentFileID
         #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
@@ -678,12 +678,12 @@ import AppKit
         f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
 
-        f.appState.pendingPlaylistDelete = f.playlist
+        f.appState.requestPlaylistDelete(f.playlist)
 
         // [delete] would normally raise a file-trash confirmation; while the playlist-delete
         // dialog owns the keyboard it must be swallowed instead of stacking another modal.
         #expect(f.router.handle(keyEvent(keyCode: 51)) == nil)   // [delete] swallowed
-        #expect(f.appState.pendingManagerDelete.isEmpty)
+        #expect(f.appState.pendingConfirmation?.playlistToDelete === f.playlist)
 
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)                    // passed through to the dialog

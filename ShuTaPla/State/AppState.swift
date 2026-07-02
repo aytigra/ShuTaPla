@@ -115,21 +115,17 @@ final class AppState {
     /// store-side lists re-derive from the unchanged saved store. Presented by the app-root alert.
     var saveError: String?
 
-    /// Files awaiting the Manager trash confirmation (raised by the `[delete]` hotkey or
-    /// a row's Delete command). While non-empty the center panel shows the confirmation
-    /// alert, which owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
-    /// default/cancel buttons and swallows every other key.
-    var pendingManagerDelete: [PlaylistFile] = []
+    /// The one modal confirmation currently pending, if any (`nil` = none). Its case names the
+    /// destructive family and carries its target; at most one can be pending, enforced by the type.
+    /// While non-nil the matching `.alert` host owns the keyboard: the `HotkeyRouter` passes
+    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
+    var pendingConfirmation: PendingConfirmation?
 
-    /// A user-facing message when a Manager trash confirmation fails, surfaced by the
-    /// center panel's alert.
-    var managerDeleteError: String?
-
-    /// The playlist awaiting a delete confirmation in the sidebar. While non-nil the sidebar
-    /// shows the confirmation dialog, which owns the keyboard: the `HotkeyRouter` passes
-    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key (so a bare
-    /// `[delete]` can't stack a second trash confirmation behind it).
-    var pendingPlaylistDelete: Playlist?
+    /// A user-facing message when a confirmation's destructive work fails. One channel — only one
+    /// confirmation runs at a time — presented once by the app-root `RootView` alert (where the
+    /// audio overlay can't double-present it over the Manager panel); its title carries each
+    /// family's wording.
+    var confirmationError: ConfirmationError?
 
     /// Raises the folder picker for adding a playlist. The Welcome screen and the sidebar's
     /// plus button both set this; the shared `AddPlaylistFlow` modifier presents the picker.
@@ -148,51 +144,18 @@ final class AppState {
     /// disable and show a spinner.
     var isAddingPlaylist = false
 
-    /// Videos awaiting the remove-audio confirmation (raised by a row's Remove Audio
-    /// command). While non-empty the center panel shows the confirmation alert, which
-    /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its
-    /// default/cancel buttons and swallows every other key.
-    var pendingAudioStrip: [PlaylistFile] = []
-
-    /// A user-facing message when removing audio fails, surfaced by the center
-    /// panel's alert.
-    var audioStripError: String?
-
     /// Files whose audio is being removed, so their list/gallery rows can show a
     /// spinner while the remux runs.
     var strippingFileIDs: Set<UUID> = []
 
-    /// The playlist tag awaiting a remove-from-all-files confirmation in the Manager
-    /// tag-management panel. While non-nil the panel shows the confirmation alert, which
-    /// owns the keyboard: the `HotkeyRouter` passes `[enter]`/`[esc]` to its default/cancel
-    /// buttons and swallows every other key.
-    var pendingTagRemoval: String?
-
-    /// A user-facing message when a playlist-wide tag removal fails, surfaced by the
-    /// tag-management panel's alert.
-    var tagRemovalError: String?
-
-    /// The file the Player-mode `[delete]` hotkey is asking to trash. While non-nil the
-    /// player shows a confirmation alert, which owns the keyboard: the `HotkeyRouter` passes
-    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
-    var playerDeleteCandidate: PlaylistFile?
-
-    /// A user-facing message when a Player-mode trash fails, surfaced by the player's alert.
-    var playerDeleteError: String?
-
     /// A user-facing message when a rename from the Visual Overlay fails, surfaced by
-    /// that overlay's alert. On `AppState` (not view-local) so the `HotkeyRouter` can register
-    /// it as a blocking modal and stop bare keys leaking to playback behind it.
+    /// that overlay's alert. Not a confirmation outcome, so it stays its own channel; on
+    /// `AppState` (not view-local) so the `HotkeyRouter` can register it as a blocking modal
+    /// and stop bare keys leaking to playback behind it.
     var playerRenameError: String?
 
-    /// The audio track the extended overlay is asking to trash. Kept separate from
-    /// `playerDeleteCandidate` because the extended overlay spans Manager and Player mode,
-    /// where the player's visual-file delete alert isn't mounted; its own confirmation
-    /// (and the error/rename messages below) is presented from the extended overlay.
-    var audioDeleteCandidate: PlaylistFile?
-
-    /// A user-facing message when an extended-overlay audio trash or rename fails.
-    var audioDeleteError: String?
+    /// A user-facing message when an extended-overlay audio rename fails — its own channel
+    /// for the same reason as `playerRenameError`.
     var audioRenameError: String?
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as

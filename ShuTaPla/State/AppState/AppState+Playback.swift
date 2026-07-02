@@ -148,7 +148,7 @@ extension AppState {
         let lastFileID = coordinator.visualCurrentFile?.id
         if let visual { coordinator.stop(visual) }
         coordinator.unsuppress()
-        playerDeleteCandidate = nil
+        cancelConfirmation()   // dismiss any player-context confirmation left open on exit
         if let visual { setManaged(visual) }
         if let lastFileID { managerSelection = [lastFileID] }
         scrollSelectionToken += 1

@@ -27,36 +27,28 @@ struct PlaylistCenterView: View {
         .alert(
             deleteTitle,
             isPresented: Binding(
-                get: { !appState.pendingManagerDelete.isEmpty },
-                set: { if !$0 { appState.cancelManagerDelete() } }
+                get: { appState.pendingConfirmation?.managerDeleteFiles != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
             )
         ) {
-            Button("Move to Trash", role: .destructive) { appState.confirmManagerDelete() }
+            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelManagerDelete() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         }
         .alert(
             audioStripTitle,
             isPresented: Binding(
-                get: { !appState.pendingAudioStrip.isEmpty },
-                set: { if !$0 { appState.cancelAudioStrip() } }
+                get: { appState.pendingConfirmation?.audioStripFiles != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
             )
         ) {
-            Button("Remove Audio", role: .destructive) { appState.confirmAudioStrip() }
+            Button("Remove Audio", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelAudioStrip() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         } message: {
             Text("The original is moved to the Trash.")
-        }
-        .alert(
-            "Couldn't remove audio",
-            isPresented: Binding(get: { appState.audioStripError != nil }, set: { if !$0 { appState.audioStripError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.audioStripError = nil }
-        } message: {
-            Text(appState.audioStripError ?? "")
         }
         .alert(
             "Something went wrong",
@@ -66,18 +58,10 @@ struct PlaylistCenterView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .alert(
-            "Couldn't move to Trash",
-            isPresented: Binding(get: { appState.managerDeleteError != nil }, set: { if !$0 { appState.managerDeleteError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.managerDeleteError = nil }
-        } message: {
-            Text(appState.managerDeleteError ?? "")
-        }
     }
 
     private var deleteTitle: String {
-        let files = appState.pendingManagerDelete
+        let files = appState.pendingConfirmation?.managerDeleteFiles ?? []
         return files.count.pluralized(
             one: "Move “\(files[0].fileName)” to the Trash?",
             many: "Move \(files.count) files to the Trash?"
@@ -85,7 +69,7 @@ struct PlaylistCenterView: View {
     }
 
     private var audioStripTitle: String {
-        let files = appState.pendingAudioStrip
+        let files = appState.pendingConfirmation?.audioStripFiles ?? []
         return files.count.pluralized(
             one: "Remove the audio from “\(files[0].fileName)”?",
             many: "Remove the audio from \(files.count) files?"

@@ -2,17 +2,20 @@
 //  AppState+Confirmations.swift
 //  ShuTaPla
 //
-//  The request / cancel / confirm triples behind the modal confirmations (Manager, Player, and
-//  extended-overlay audio delete; remove-audio; playlist-wide tag removal). Each `request` sets the
-//  pending state a blocking `.alert` binds to; `confirm` runs the destructive work as a retained,
-//  self-pruning Task so its SwiftData work is owned rather than fire-and-forget.
+//  The modal confirmations (Manager, Player, and extended-overlay audio delete; remove-audio;
+//  playlist-wide tag removal; sidebar playlist delete). Each `request*` sets `pendingConfirmation`
+//  to its case — the state a blocking `.alert` / `.confirmationDialog` binds to; the shared
+//  `confirmConfirmation` runs the destructive work as a retained, self-pruning Task so its
+//  SwiftData work is owned rather than fire-and-forget. The `request*` functions stay distinct
+//  because their guards differ (video-only strip, current-track reads); everything after the
+//  request is one path.
 //
 
 import Foundation
 
 extension AppState {
 
-    // MARK: - Manager delete
+    // MARK: - Requests
 
     /// Requests confirmation to trash the current file-list selection (Manager
     /// `[delete]`). Returns whether there was anything selected to delete.
@@ -20,45 +23,47 @@ extension AppState {
     func requestDeleteSelectedFiles() -> Bool {
         let files = managerSelectionFiles()
         guard !files.isEmpty else { return false }
-        pendingManagerDelete = files
+        pendingConfirmation = .managerDelete(files)
         return true
     }
 
-    /// Requests confirmation to trash a specific set of Manager files (a file row's
-    /// Delete command). Routes through AppState so `pendingManagerDelete` stays state
-    /// it owns and prunes when a re-scan removes a referenced file.
+    /// Requests confirmation to trash a specific set of Manager files (a file row's Delete command).
     func requestManagerDelete(_ files: [PlaylistFile]) {
-        pendingManagerDelete = files
+        pendingConfirmation = .managerDelete(files)
     }
-
-    /// Dismisses the Manager trash confirmation without trashing anything.
-    func cancelManagerDelete() {
-        pendingManagerDelete = []
-    }
-
-    /// Trashes the files pending in the Manager confirmation, surfacing any failure
-    /// through `managerDeleteError`.
-    func confirmManagerDelete() {
-        let targets = pendingManagerDelete
-        pendingManagerDelete = []
-        performDelete(targets) { self.managerDeleteError = $0 }
-    }
-
-    // MARK: - Player delete
 
     /// Requests confirmation to trash the file currently playing on the visual channel
     /// (Player `[delete]`). Returns whether there was a file to delete.
     @discardableResult
     func requestDeletePlayingFile() -> Bool {
         guard let file = coordinator.visualCurrentFile else { return false }
-        playerDeleteCandidate = file
+        pendingConfirmation = .playerDelete(file)
         return true
+    }
+
+    /// Requests confirmation to trash a specific file from the Visual Overlay.
+    func requestPlayerDelete(_ file: PlaylistFile) {
+        pendingConfirmation = .playerDelete(file)
+    }
+
+    /// Requests confirmation to trash the audio channel's current track (the extended
+    /// overlay's `[delete]`, when audio holds key context). Returns whether there was a
+    /// track to delete. The visual `[delete]` analog is `requestDeletePlayingFile`.
+    @discardableResult
+    func requestDeletePlayingAudioFile() -> Bool {
+        guard let file = currentAudioFile else { return false }
+        pendingConfirmation = .audioDelete(file)
+        return true
+    }
+
+    /// Requests confirmation to trash an audio track from the extended overlay.
+    func requestAudioDelete(_ file: PlaylistFile) {
+        pendingConfirmation = .audioDelete(file)
     }
 
     /// Requests confirmation to remove the audio from the video currently playing on the
     /// visual channel (Player `[r]`). Video-only — an image or audio file has no audio track
-    /// to strip. Returns whether there was a video to act on. The trash analog is
-    /// `requestDeletePlayingFile`; the per-file overlay/menu analog is `requestAudioStrip`.
+    /// to strip. Returns whether there was a video to act on.
     @discardableResult
     func requestStripPlayingFile() -> Bool {
         guard coordinator.liveVisualPlaylist?.mediaType == .video,
@@ -67,109 +72,73 @@ extension AppState {
         return true
     }
 
-    /// Requests confirmation to trash a specific file from the Visual Overlay.
-    /// Routes through AppState so `playerDeleteCandidate` stays state it owns and
-    /// prunes when a re-scan removes the file.
-    func requestPlayerDelete(_ file: PlaylistFile) {
-        playerDeleteCandidate = file
-    }
-
-    /// Dismisses the Player delete confirmation without trashing anything.
-    func cancelPlayerDelete() {
-        playerDeleteCandidate = nil
-    }
-
-    /// Trashes the file pending in the Player delete confirmation and advances the
-    /// player to the next still-available file in the playlist.
-    func confirmPlayerDelete() {
-        guard let file = playerDeleteCandidate else { return }
-        playerDeleteCandidate = nil
-        performDelete([file]) { self.playerDeleteError = $0 }
-    }
-
-    // MARK: - Extended-overlay audio delete
-
-    /// Requests confirmation to trash the audio channel's current track (the extended
-    /// overlay's `[delete]`, when audio holds key context). Returns whether there was a
-    /// track to delete. The visual `[delete]` analog is `requestDeletePlayingFile`.
-    @discardableResult
-    func requestDeletePlayingAudioFile() -> Bool {
-        guard let file = currentAudioFile else { return false }
-        audioDeleteCandidate = file
-        return true
-    }
-
-    /// Requests confirmation to trash an audio track from the extended overlay.
-    func requestAudioDelete(_ file: PlaylistFile) {
-        audioDeleteCandidate = file
-    }
-
-    /// Dismisses the extended-overlay trash confirmation without trashing anything.
-    func cancelAudioDelete() {
-        audioDeleteCandidate = nil
-    }
-
-    /// Trashes the track pending in the extended-overlay confirmation, surfacing any
-    /// failure through `audioDeleteError`.
-    func confirmAudioDelete() {
-        guard let file = audioDeleteCandidate else { return }
-        audioDeleteCandidate = nil
-        performDelete([file]) { self.audioDeleteError = $0 }
-    }
-
-    // MARK: - Remove audio
-
-    /// Requests confirmation to remove the audio track from a video-row's selection
-    /// (its Remove Audio command, in Manager or the player overlay). Routes through
-    /// AppState so `pendingAudioStrip` stays state it owns and prunes when a re-scan
-    /// removes a referenced file.
+    /// Requests confirmation to remove the audio track from a video-row's selection (its
+    /// Remove Audio command, in Manager or the player overlay).
     func requestAudioStrip(_ files: [PlaylistFile]) {
-        pendingAudioStrip = files
+        pendingConfirmation = .audioStrip(files)
     }
 
-    /// Dismisses the remove-audio confirmation without changing anything.
-    func cancelAudioStrip() {
-        pendingAudioStrip = []
+    /// Requests confirmation to remove `tag` from every file in the managed playlist.
+    func requestTagRemoval(_ tag: String) {
+        pendingConfirmation = .tagRemoval(tag)
     }
 
-    /// Removes the audio from the videos pending in the confirmation, surfacing any
-    /// failure through `audioStripError`.
-    func confirmAudioStrip() {
-        let targets = pendingAudioStrip
-        pendingAudioStrip = []
-        guard !targets.isEmpty else { return }
-        runConfirmation { if let error = await self.stripAudio(from: targets) { self.audioStripError = error } }
+    /// Requests confirmation to delete `playlist` and its files (the sidebar's Delete command).
+    func requestPlaylistDelete(_ playlist: Playlist) {
+        pendingConfirmation = .playlistDelete(playlist)
     }
 
-    // MARK: - Playlist-wide tag removal
+    // MARK: - Cancel / confirm
 
-    /// Dismisses the playlist-wide tag-removal confirmation without removing anything.
-    func cancelTagRemoval() {
-        pendingTagRemoval = nil
+    /// Dismisses the pending confirmation without acting on it.
+    func cancelConfirmation() {
+        pendingConfirmation = nil
     }
 
-    /// Removes the pending tag from every file in the selected playlist, surfacing any
-    /// failure through `tagRemovalError`.
-    func confirmTagRemoval() {
-        guard let tag = pendingTagRemoval, let playlist = managedPlaylist else {
-            pendingTagRemoval = nil
-            return
+    /// Runs the pending confirmation's destructive work as a retained, self-pruning Task,
+    /// routing any failure to `confirmationError` (its title naming the family), then clears the
+    /// pending state. A no-op when nothing is pending.
+    func confirmConfirmation() {
+        guard let pending = pendingConfirmation else { return }
+        pendingConfirmation = nil
+        switch pending {
+        case .managerDelete(let files): performDelete(files)
+        case .playerDelete(let file): performDelete([file])
+        case .audioDelete(let file): performDelete([file])
+        case .audioStrip(let files):
+            guard !files.isEmpty else { return }
+            runConfirmation {
+                if let error = await self.stripAudio(from: files) {
+                    self.confirmationError = ConfirmationError(title: "Couldn't remove audio", message: error)
+                }
+            }
+        case .tagRemoval(let tag):
+            guard let playlist = managedPlaylist else { return }
+            runConfirmation {
+                if let error = await self.removeTagAcrossPlaylist(playlist, tag: tag) {
+                    self.confirmationError = ConfirmationError(title: "Couldn't remove tag", message: error)
+                }
+            }
+        case .playlistDelete(let playlist):
+            runConfirmation { await self.delete(playlist) }
         }
-        pendingTagRemoval = nil
-        runConfirmation { if let error = await self.removeTagAcrossPlaylist(playlist, tag: tag) { self.tagRemovalError = error } }
     }
 
     // MARK: - Shared confirmation plumbing
 
     /// Trashes `files` as a retained confirmation task — `deleteFiles` advances any live channel
-    /// off them — routing the first failure message to `report`. The one place the trash + the
-    /// post-delete error handling lives, shared by the Manager, Player, and audio confirmations.
-    private func performDelete(_ files: [PlaylistFile], onError report: @escaping (String) -> Void) {
+    /// off them — surfacing the first failure as a "Couldn't move to Trash" error. Shared by the
+    /// Manager, Player, and audio delete confirmations.
+    private func performDelete(_ files: [PlaylistFile]) {
         guard !files.isEmpty else { return }
         // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is a
         // no-op and the surface stays on the file; surface the message rather than silently
         // advancing past an undeleted file.
-        runConfirmation { if let error = await self.deleteFiles(files) { report(error) } }
+        runConfirmation {
+            if let error = await self.deleteFiles(files) {
+                self.confirmationError = ConfirmationError(title: "Couldn't move to Trash", message: error)
+            }
+        }
     }
 
     /// Runs a confirmation operation as a retained, self-pruning Task so the SwiftData work

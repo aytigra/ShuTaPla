@@ -62,25 +62,17 @@ struct AudioOverlay: View {
         .alert(
             "Move to Trash?",
             isPresented: Binding(
-                get: { appState.audioDeleteCandidate != nil },
-                set: { if !$0 { appState.cancelAudioDelete() } }
+                get: { appState.pendingConfirmation?.audioDeleteFile != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
             ),
-            presenting: appState.audioDeleteCandidate
+            presenting: appState.pendingConfirmation?.audioDeleteFile
         ) { file in
-            Button("Move to Trash", role: .destructive) { appState.confirmAudioDelete() }
+            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelAudioDelete() }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
                 .keyboardShortcut(.cancelAction)
         } message: { file in
             Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
-        }
-        .alert(
-            "Couldn't move to Trash",
-            isPresented: Binding(get: { appState.audioDeleteError != nil }, set: { if !$0 { appState.audioDeleteError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.audioDeleteError = nil }
-        } message: {
-            Text(appState.audioDeleteError ?? "")
         }
         .alert(
             "Couldn't complete",

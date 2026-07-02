@@ -34,16 +34,15 @@ struct PlaylistSidebar: View {
         // since both browse here. The player-mode audio overlay is a pure selector with no delete.
         .confirmationDialog(
             "Delete playlist?",
-            isPresented: Binding(get: { appState.pendingPlaylistDelete != nil }, set: { if !$0 { appState.pendingPlaylistDelete = nil } }),
+            isPresented: Binding(get: { appState.pendingConfirmation?.playlistToDelete != nil }, set: { if !$0 { appState.cancelConfirmation() } }),
             titleVisibility: .visible,
-            presenting: appState.pendingPlaylistDelete
+            presenting: appState.pendingConfirmation?.playlistToDelete
         ) { playlist in
             Button("Delete “\(playlist.name)”", role: .destructive) {
-                appState.pendingPlaylistDelete = nil
-                Task { await appState.delete(playlist) }
+                appState.confirmConfirmation()
             }
             .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.pendingPlaylistDelete = nil }
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
         } message: { _ in
             Text("This removes the playlist from ShuTaPla. The files on disk are not touched.")
         }
@@ -162,7 +161,7 @@ struct PlaylistSidebar: View {
             .listRowBackground(isSelectedRow(playlist) ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }
-                Button("Delete", role: .destructive) { appState.pendingPlaylistDelete = playlist }
+                Button("Delete", role: .destructive) { appState.requestPlaylistDelete(playlist) }
             }
         }
     }

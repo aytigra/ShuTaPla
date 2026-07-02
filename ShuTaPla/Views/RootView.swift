@@ -46,6 +46,20 @@ struct RootView: View {
         } message: {
             Text(appState.saveError ?? "")
         }
+        // A confirmation's destructive work failed. Presented app-wide from one host so the audio
+        // overlay (which co-mounts over the Manager panel) can't double-present it; the carried
+        // title names the family.
+        .alert(
+            appState.confirmationError?.title ?? "",
+            isPresented: Binding(
+                get: { appState.confirmationError != nil },
+                set: { if !$0 { appState.confirmationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { appState.confirmationError = nil }
+        } message: {
+            Text(appState.confirmationError?.message ?? "")
+        }
         .addPlaylistFlow()
         .background(WindowCloseBridge { appState.windowWasClosed() })
         .background(WindowFrameBridge(
