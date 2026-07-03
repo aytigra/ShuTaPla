@@ -22,9 +22,9 @@ nonisolated enum FileCollectionLayout {
     case gallery
 
     /// Gallery grid metrics for the `LazyVGrid` columns.
-    static let galleryMinItemWidth: CGFloat = 150
-    static let galleryMaxItemWidth: CGFloat = 220
-    static let gallerySpacing: CGFloat = 12
+    static let galleryMinItemWidth: CGFloat = 200
+    static let galleryMaxItemWidth: CGFloat = 360
+    static let gallerySpacing: CGFloat = 4
 
     /// Derives the gallery's column count from the leading-edge x of every laid-out
     /// cell: cells in the same column share a leading edge, so the number of distinct

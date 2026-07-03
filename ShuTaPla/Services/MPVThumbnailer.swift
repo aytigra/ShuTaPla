@@ -33,11 +33,12 @@ nonisolated enum MPVThumbnailer {
 
     /// A representative frame from the video at `url`, no larger than `maxPixelSize`
     /// on its longest edge (or `nil` when libmpv can't decode it), paired with the
-    /// file's running time — which the same decode already determined, so the length
-    /// indicator gets it for free rather than opening the file a second time. Runs
-    /// the blocking extraction off the cooperative thread pool so a slow or stuck
-    /// decode never ties up a concurrency-limited Swift task thread.
-    static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, duration: TimeInterval?) {
+    /// file's metadata — duration and pixel dimensions the same decode already
+    /// determined, so the gallery's badge and cached shape get them for free rather
+    /// than opening the file a second time. Runs the blocking extraction off the
+    /// cooperative thread pool so a slow or stuck decode never ties up a
+    /// concurrency-limited Swift task thread.
+    static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
         let cancelled = Mutex(false)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -52,16 +53,17 @@ nonisolated enum MPVThumbnailer {
         }
     }
 
-    /// The running time of the video at `url` in seconds, or `nil` when libmpv
-    /// can't decode it. The cache-miss fallback behind `DurationService` for
-    /// containers AVFoundation can't open. Runs the blocking probe off the shared
-    /// pool so a stuck decode never ties up a concurrency-limited task thread.
-    static func duration(at url: URL) async -> TimeInterval? {
+    /// The metadata of the video at `url` — duration and pixel dimensions — or an empty
+    /// bundle when libmpv can't decode it. The cache-miss fallback behind
+    /// `MediaMetadataService` for containers AVFoundation can't open. Runs the blocking
+    /// probe off the shared pool so a stuck decode never ties up a concurrency-limited
+    /// task thread.
+    static func metadata(at url: URL) async -> MediaMetadata {
         let cancelled = Mutex(false)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 pool.async {
-                    continuation.resume(returning: probeDuration(at: url, isCancelled: { cancelled.withLock { $0 } }))
+                    continuation.resume(returning: probeMetadata(at: url, isCancelled: { cancelled.withLock { $0 } }))
                 }
             }
         } onCancel: {
@@ -69,11 +71,11 @@ nonisolated enum MPVThumbnailer {
         }
     }
 
-    /// Loads the file into a windowless, paused mpv instance just far enough to
-    /// read the demuxer's `duration` property, decoding nothing. Synchronous and
-    /// blocking — only called from `duration(at:)`.
-    private static func probeDuration(at url: URL, isCancelled: () -> Bool) -> TimeInterval? {
-        guard !isCancelled(), let handle = mpv_create() else { return nil }
+    /// Loads the file into a windowless, paused mpv instance just far enough to read the
+    /// demuxer's `duration` and display dimensions, decoding nothing. Synchronous and
+    /// blocking — only called from `metadata(at:)`.
+    private static func probeMetadata(at url: URL, isCancelled: () -> Bool) -> MediaMetadata {
+        guard !isCancelled(), let handle = mpv_create() else { return MediaMetadata() }
         defer { mpv_terminate_destroy(handle) }
 
         let options = [
@@ -86,23 +88,31 @@ nonisolated enum MPVThumbnailer {
         ]
         for (name, value) in options { mpv_set_option_string(handle, name, value) }
 
-        guard mpv_initialize(handle) >= 0 else { return nil }
+        guard mpv_initialize(handle) >= 0 else { return MediaMetadata() }
         loadFile(handle, path: url.path)
 
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
-            if isCancelled() { return nil }
+            if isCancelled() { return MediaMetadata() }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
-                return knownDuration(handle)
+                return loadedMetadata(handle)
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN, MPV_EVENT_IDLE:
-                return nil
+                return MediaMetadata()
             default:
                 continue
             }
         }
-        return nil
+        return MediaMetadata()
+    }
+
+    /// The loaded file's duration and display dimensions, read at `FILE_LOADED` while the
+    /// file is open — reading at `END_FILE` would be too late, as the properties revert as
+    /// mpv unloads the file. File size is the caller's `stat`, so it's left `nil` here.
+    private static func loadedMetadata(_ handle: OpaquePointer) -> MediaMetadata {
+        let dimensions = knownDimensions(handle)
+        return MediaMetadata(duration: knownDuration(handle), width: dimensions?.width, height: dimensions?.height)
     }
 
     /// The loaded file's `duration` property in seconds, or `nil` when libmpv hasn't
@@ -114,11 +124,29 @@ nonisolated enum MPVThumbnailer {
         return seconds
     }
 
+    /// The loaded file's video dimensions, or `nil` when libmpv hasn't determined them
+    /// (an audio-only file, or one not yet loaded). Reads the demuxer's track dimensions,
+    /// which are known at `FILE_LOADED` without decoding a frame — `dwidth`/`dheight` are
+    /// the display size and stay `0` under `vo=null` until a frame is decoded.
+    private static func knownDimensions(_ handle: OpaquePointer) -> (width: Int, height: Int)? {
+        guard let width = intProperty(handle, "current-tracks/video/demux-w"),
+              let height = intProperty(handle, "current-tracks/video/demux-h"),
+              width > 0, height > 0 else { return nil }
+        return (width, height)
+    }
+
+    /// An integer mpv property, or `nil` when it isn't available.
+    private static func intProperty(_ handle: OpaquePointer, _ name: String) -> Int? {
+        var value: Int64 = 0
+        guard mpv_get_property(handle, name, MPV_FORMAT_INT64, &value) >= 0 else { return nil }
+        return Int(value)
+    }
+
     /// Drives a one-shot mpv instance to write a single frame, then downscales it,
-    /// also reporting the file's duration the loaded instance knows. Synchronous and
+    /// also reporting the metadata the loaded instance knows. Synchronous and
     /// blocking — only called from `frame(at:maxPixelSize:)`.
-    private static func extract(at url: URL, maxPixelSize: Int, isCancelled: () -> Bool) -> (image: CGImage?, duration: TimeInterval?) {
-        guard !isCancelled(), let handle = mpv_create() else { return (nil, nil) }
+    private static func extract(at url: URL, maxPixelSize: Int, isCancelled: () -> Bool) -> (image: CGImage?, metadata: MediaMetadata) {
+        guard !isCancelled(), let handle = mpv_create() else { return (nil, MediaMetadata()) }
         defer { mpv_terminate_destroy(handle) }
 
         // mpv writes one PNG into a private directory we own and delete afterwards;
@@ -126,7 +154,7 @@ nonisolated enum MPVThumbnailer {
         let outDir = FileManager.default.temporaryDirectory
             .appending(path: "mpv-thumb-\(UUID().uuidString)", directoryHint: .isDirectory)
         guard (try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)) != nil
-        else { return (nil, nil) }
+        else { return (nil, MediaMetadata()) }
         defer { try? FileManager.default.removeItem(at: outDir) }
 
         // Ignore the user's mpv config and scripts; decode one frame, 10% in (past
@@ -149,32 +177,32 @@ nonisolated enum MPVThumbnailer {
         ]
         for (name, value) in options { mpv_set_option_string(handle, name, value) }
 
-        guard mpv_initialize(handle) >= 0 else { return (nil, nil) }
+        guard mpv_initialize(handle) >= 0 else { return (nil, MediaMetadata()) }
         loadFile(handle, path: url.path)
 
         // Pump events until the single frame ends the file, with a ceiling so a
-        // pathological decode can't block the pool thread indefinitely. The duration
+        // pathological decode can't block the pool thread indefinitely. The metadata
         // comes along for free — captured at `FILE_LOADED`, while the file is open, so
-        // the length indicator needn't reopen it. Reading at `END_FILE` would be too
-        // late: the property reverts as mpv unloads the file.
-        var duration: TimeInterval?
+        // the badge and cached shape needn't reopen it. Reading at `END_FILE` would be too
+        // late: the properties revert as mpv unloads the file.
+        var metadata = MediaMetadata()
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
-            if isCancelled() { return (nil, duration) }
+            if isCancelled() { return (nil, metadata) }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
-                duration = knownDuration(handle)
+                metadata = loadedMetadata(handle)
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN, MPV_EVENT_IDLE:
-                return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), duration)
+                return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
             default:
                 continue
             }
         }
         // Deadline reached without the file ending: mpv may not have finished writing the
         // PNG, so the frame on disk could be truncated. Report no frame (keeping any
-        // duration captured at `FILE_LOADED`) rather than risk decoding a partial image.
-        return (nil, duration)
+        // metadata captured at `FILE_LOADED`) rather than risk decoding a partial image.
+        return (nil, metadata)
     }
 
     /// The PNG mpv wrote, downscaled to `maxPixelSize` through the shared image path.

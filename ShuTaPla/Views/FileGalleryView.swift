@@ -53,7 +53,7 @@ private struct GalleryCell: View {
     let onCancelRename: () -> Void
 
     @Environment(ThumbnailService.self) private var thumbnails
-    @Environment(DurationService.self) private var durations
+    @Environment(MediaMetadataService.self) private var metadataService
     @State private var image: NSImage?
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
@@ -73,10 +73,11 @@ private struct GalleryCell: View {
         .task(id: thumbnailKey, priority: .utility) {
             // A previously generated thumbnail is served synchronously, so seen
             // cells don't flash a placeholder while scrolling; otherwise generate it
-            // off the main actor. Generation reports the video's length in the same
-            // result — the decode already determined it — so the badge appears with
-            // the thumbnail rather than after a second pass. The length is persisted
-            // on the model, which the badge reads directly.
+            // off the main actor. Generation reports the media's metadata in the same
+            // result — the decode already determined duration and dimensions, and the
+            // open read the file size — so the badge and cached shape appear with the
+            // thumbnail rather than after a second pass. It's folded onto the model,
+            // which the badge reads directly.
             if let cached = thumbnails.cachedThumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize) {
                 image = cached
             } else {
@@ -85,12 +86,14 @@ private struct GalleryCell: View {
                 // by the time generation lands; don't paint the stale image into it.
                 guard !Task.isCancelled else { return }
                 image = result.image
-                if let seconds = result.duration { file.duration = seconds }
+                file.merge(result.metadata)
             }
-            // A thumbnail served from cache (disk or memory) carries no length, so
-            // read it once if the model still lacks it. Images have no timeline.
-            if playlist.mediaType == .video, file.duration == nil {
-                _ = await durations.duration(for: file, in: playlist)
+            // A thumbnail served from cache (disk or memory) carries no decoded metadata,
+            // and a fresh decode fills only what its type carries; open the file once more
+            // for anything this type still needs (dimensions on a cache hit, size for a
+            // memory hit), matching what the list view reads.
+            if !file.hasCompleteMetadata(for: playlist.mediaType) {
+                _ = await metadataService.metadata(for: file, in: playlist)
             }
         }
     }
@@ -121,7 +124,7 @@ private struct GalleryCell: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
-                        .padding(5)
+                        .padding(2)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))

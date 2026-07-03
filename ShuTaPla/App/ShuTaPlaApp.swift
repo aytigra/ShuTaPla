@@ -17,10 +17,10 @@ struct ShuTaPlaApp: App {
     let modelContainer: ModelContainer
     @State private var appState: AppState
     @State private var thumbnailService = ThumbnailService()
-    @State private var durationService = DurationService()
+    @State private var metadataService = MediaMetadataService()
 
     init() {
-        let schema = Schema(versionedSchema: SchemaV3.self)
+        let schema = Schema(versionedSchema: SchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer
         do {
@@ -42,7 +42,7 @@ struct ShuTaPlaApp: App {
                 .environment(appState)
                 .environment(appState.coordinator)
                 .environment(thumbnailService)
-                .environment(durationService)
+                .environment(metadataService)
                 .frame(minWidth: 800, minHeight: 600)
                 .onAppear { appDelegate.appState = appState }
         }

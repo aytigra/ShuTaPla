@@ -19,8 +19,7 @@ struct FileRowView: View {
     let onCommitRename: () -> Void
     let onCancelRename: () -> Void
 
-    @Environment(DurationService.self) private var durations
-    @State private var duration: TimeInterval?
+    @Environment(MediaMetadataService.self) private var metadataService
 
     var body: some View {
         Group {
@@ -56,14 +55,14 @@ struct FileRowView: View {
             }
         }
         .contentShape(Rectangle())
-        // Length is read once and cached on the model, so it appears instantly on
-        // later displays and across launches. Video and audio have a timeline; images
-        // don't. A value already on the model is shown synchronously (see `durationColumn`);
-        // only a genuine miss awaits an extraction, so the column doesn't flash empty on
-        // scroll-in.
+        // Metadata (duration, dimensions, size) is read once and cached on the model, so it
+        // appears instantly on later displays and across launches. Images have no timeline but
+        // do carry dimensions and size, so every type opens once — only when a field this type
+        // needs is still missing, so a fully-cached row never re-opens and the length column
+        // (shown synchronously from the model) doesn't flash empty on scroll-in.
         .task(id: file.id) {
-            guard playlist.mediaType != .image, file.duration == nil else { return }
-            duration = await durations.duration(for: file, in: playlist)
+            guard !file.hasCompleteMetadata(for: playlist.mediaType) else { return }
+            _ = await metadataService.metadata(for: file, in: playlist)
         }
     }
 
@@ -109,7 +108,7 @@ struct FileRowView: View {
     /// A fixed-width trailing column so the value right-aligns and the tag chips of
     /// every row keep a common right edge whatever each duration's width.
     private var durationColumn: some View {
-        Text((duration ?? file.duration)?.formattedDuration ?? "")
+        Text(file.duration?.formattedDuration ?? "")
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .frame(width: 56, alignment: .trailing)

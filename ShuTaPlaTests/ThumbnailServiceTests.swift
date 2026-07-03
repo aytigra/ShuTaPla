@@ -107,6 +107,22 @@ struct ThumbnailServiceTests {
     }
 
     @Test
+    func imageRenderReportsSourcePixelDimensions() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "wide.png")
+        try writePNG(width: 200, height: 100, to: fileURL)
+
+        // The thumbnail is downscaled, but the reported dimensions are the source's true
+        // pixel size (read from its header) — the gallery byproduct the sink caches.
+        let rendered = await ThumbnailService.renderThumbnail(at: fileURL, isVideo: false, maxPixelSize: 64)
+        #expect(rendered.data != nil)
+        #expect(rendered.metadata.width == 200)
+        #expect(rendered.metadata.height == 100)
+        #expect(rendered.metadata.duration == nil)   // stills have no timeline
+    }
+
+    @Test
     func renderedThumbnailIsHeic() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

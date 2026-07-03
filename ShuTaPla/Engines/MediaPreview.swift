@@ -42,10 +42,14 @@ final class MediaPreview {
     var currentTime: TimeInterval { videoEngine?.currentTime ?? 0 }
     var duration: TimeInterval { videoEngine?.duration ?? 0 }
 
-    /// The previewed media's natural size, for the card's aspect ratio: an image's known
-    /// immediately, a video's only once mpv reports its display size. `nil` until known, so the
-    /// card waits for a real shape rather than appearing square and resizing.
+    /// The previewed media's natural size, for the card's aspect ratio. The model's cached
+    /// pixel size wins when known — present the instant the preview opens, so the card takes
+    /// its true shape with no wait. The live source is the fallback for the race where nothing
+    /// is cached yet: an image's decoded size, a video's mpv display size once it reports.
+    /// `nil` until known, so the card waits for a real shape rather than appearing square and
+    /// resizing.
     var contentSize: CGSize? {
+        if let cached = file?.pixelSize { return cached }
         switch mediaType {
         case .image: return image?.size
         case .video:

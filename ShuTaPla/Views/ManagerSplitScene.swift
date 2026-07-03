@@ -52,7 +52,7 @@ struct ManagerEnv {
     let appState: AppState
     let coordinator: PlaybackCoordinator
     let thumbnailService: ThumbnailService
-    let durationService: DurationService
+    let metadataService: MediaMetadataService
     let chrome: ManagerChrome
     let modelContainer: ModelContainer
 
@@ -63,7 +63,7 @@ struct ManagerEnv {
             .environment(appState)
             .environment(coordinator)
             .environment(thumbnailService)
-            .environment(durationService)
+            .environment(metadataService)
             .environment(chrome)
             .modelContainer(modelContainer)
     }

@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import CoreGraphics
 import SwiftData
 
 @Model
@@ -49,6 +50,20 @@ final class PlaylistFile {
     /// Total running time in seconds, extracted on first display and cached here.
     /// `nil` until known; always `nil` for image files, which have no timeline.
     var duration: TimeInterval?
+
+    /// Pixel dimensions, extracted on first display and cached here (mirror mpv
+    /// `dwidth`/`dheight` and rounded AVFoundation `naturalSize`). `nil` until known.
+    var width: Int?
+    var height: Int?
+
+    /// On-disk size in bytes, read on first display and cached here. `nil` until known.
+    var fileSizeBytes: Int?
+
+    /// Pixel dimensions as a size, available only once both `width` and `height` are known.
+    var pixelSize: CGSize? {
+        guard let width, let height else { return nil }
+        return CGSize(width: width, height: height)
+    }
 
     /// Shuffled order within the playlist.
     var sortOrder: Int = 0

@@ -63,15 +63,15 @@ struct MigrationTests {
             try v1.mainContext.save()
         }
 
-        // Reopen the same store through the migration plan into the current (V3) schema,
-        // exercising both lightweight stages (V1→V2→V3).
-        let schema = Schema(versionedSchema: SchemaV3.self)
-        let v3 = try ModelContainer(
+        // Reopen the same store through the migration plan into the current (V4) schema,
+        // exercising every lightweight stage (V1→V2→V3→V4).
+        let schema = Schema(versionedSchema: SchemaV4.self)
+        let current = try ModelContainer(
             for: schema,
             migrationPlan: AppMigrationPlan.self,
             configurations: [ModelConfiguration(schema: schema, url: store)]
         )
-        let context = v3.mainContext
+        let context = current.mainContext
 
         let playlists = try context.fetch(FetchDescriptor<Playlist>())
         #expect(playlists.count == 1)
@@ -94,6 +94,10 @@ struct MigrationTests {
         #expect(file.isSkipped == false)
         #expect(file.lastPosition == 12.5)
         #expect(file.duration == 30)
+        #expect(file.width == nil)                            // new columns start empty
+        #expect(file.height == nil)
+        #expect(file.fileSizeBytes == nil)
+        #expect(file.pixelSize == nil)
         #expect(file.sortOrder == 7)
         #expect(file.playlist?.id == playlist.id)
 
@@ -126,11 +130,50 @@ struct MigrationTests {
             migrationPlan: AppMigrationPlan.self,
             configurations: [ModelConfiguration(schema: schema, url: store)]
         )
-        let playlist = try #require(try v3.mainContext.fetch(FetchDescriptor<Playlist>()).first)
+        let playlist = try #require(try v3.mainContext.fetch(FetchDescriptor<SchemaV3.Playlist>()).first)
         #expect(playlist.name == "Beach")
         #expect(playlist.sortOrder == 1)
         #expect(playlist.unfilteredResumeSortOrder == nil)        // new column, empty
         #expect(playlist.savedSearches.first?.tags == ["x"])      // blob preserved
         #expect(playlist.savedSearches.first?.resumeSortOrder == 4)
+    }
+
+    /// The V3→V4 stage adds the nilable `width`/`height`/`fileSizeBytes` columns and leaves every
+    /// other row — including the cached `duration` — untouched. Also confirms the pinned `SchemaV3`
+    /// shape round-trips.
+    @Test func v3ToV4AddsMetadataColumnsAndPreservesRows() throws {
+        let (directory, store) = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            let v3Schema = Schema(versionedSchema: SchemaV3.self)
+            let v3 = try ModelContainer(for: v3Schema, configurations: [ModelConfiguration(schema: v3Schema, url: store)])
+            let playlist = SchemaV3.Playlist(
+                name: "Beach", folderBookmark: Data([0x09]), folderPath: "/b", mediaType: .video, sortOrder: 1
+            )
+            let file = SchemaV3.PlaylistFile(relativePath: "a.mp4", fileName: "a.mp4", sortOrder: 2)
+            file.duration = 42
+            file.lastPosition = 5
+            file.playlist = playlist
+            v3.mainContext.insert(playlist)
+            v3.mainContext.insert(file)
+            try v3.mainContext.save()
+        }
+
+        let schema = Schema(versionedSchema: SchemaV4.self)
+        let current = try ModelContainer(
+            for: schema,
+            migrationPlan: AppMigrationPlan.self,
+            configurations: [ModelConfiguration(schema: schema, url: store)]
+        )
+        let file = try #require(try current.mainContext.fetch(FetchDescriptor<PlaylistFile>()).first)
+        #expect(file.fileName == "a.mp4")
+        #expect(file.duration == 42)                              // cached column preserved
+        #expect(file.lastPosition == 5)
+        #expect(file.sortOrder == 2)
+        #expect(file.width == nil)                                // new columns start empty
+        #expect(file.height == nil)
+        #expect(file.fileSizeBytes == nil)
+        #expect(file.pixelSize == nil)
     }
 }

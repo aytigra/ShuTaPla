@@ -170,6 +170,26 @@ import SwiftData
         #expect(engine.videoSize.width == 0)
     }
 
+    @Test func videoContentSizePrefersCachedDimensions() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["v.mp4"], in: context)
+        let file = video.files[0]
+        file.width = 1920
+        file.height = 1080
+        try context.save()
+
+        let preview = makePreview(ScopedFolderAccess(bookmarkService: BookmarkService()))
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        // The model's cached shape is present the instant the preview opens — the card
+        // opens at the true aspect ratio with no wait for an mpv dwidth/dheight report.
+        #expect(preview.videoEngine?.videoSize == .zero)
+        #expect(preview.contentSize == CGSize(width: 1920, height: 1080))
+    }
+
     @Test func videoContentSizeAppearsOnceDimensionsAreKnown() throws {
         let container = try makeContainer()
         let context = container.mainContext

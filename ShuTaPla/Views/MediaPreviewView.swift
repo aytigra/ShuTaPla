@@ -8,10 +8,11 @@
 //  keyboard-only, routed by `HotkeyRouter`). Mounted inside the safe area by `RootView`, so
 //  it stops at the toolbar rather than drawing under the window chrome.
 //
-//  The card appears only once the media's `contentSize` is known — instant for an image,
-//  one beat later for a video (mpv reports `dwidth`/`dheight` after load) — so it fades in
-//  at its true shape rather than animating through a placeholder size. It reads the isolated
-//  `MediaPreview` engine, never the coordinator.
+//  The card appears only once the media's `contentSize` is known — so it fades in at its true
+//  shape rather than animating through a placeholder size. That size is a video's cached pixel
+//  dimensions or an image's decoded size (both known at or right after mount), or, on a
+//  first-ever preview of a video, mpv's `dwidth`/`dheight` a beat after load. It reads the
+//  isolated `MediaPreview` engine, never the coordinator.
 //
 
 import SwiftUI
@@ -45,8 +46,11 @@ struct MediaPreviewView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: cardSize)
-        .onChange(of: preview.contentSize) { _, size in
-            if let size { cardSize = size }   // latch the media's shape; never back to nil
+        .onChange(of: preview.contentSize, initial: true) { _, size in
+            // Latch the media's shape; never back to nil. `initial: true` because a video's
+            // cached pixel dimensions make `contentSize` known already at mount — without it the
+            // card would never appear for an already-sized preview, since no *change* follows.
+            if let size { cardSize = size }
         }
     }
 

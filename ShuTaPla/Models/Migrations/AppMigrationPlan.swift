@@ -14,7 +14,7 @@ import SwiftData
 
 enum AppMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [SchemaV1.self, SchemaV2.self, SchemaV3.self]
+        [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self]
     }
 
     static var stages: [MigrationStage] {
@@ -28,6 +28,9 @@ enum AppMigrationPlan: SchemaMigrationPlan {
             // Carries a `SchemaV2` store forward to `SchemaV3` by adding the nilable
             // `Playlist.unfilteredResumeSortOrder` column; every other row is preserved untouched.
             .lightweight(fromVersion: SchemaV2.self, toVersion: SchemaV3.self),
+            // Carries a `SchemaV3` store forward to `SchemaV4` by adding the nilable
+            // `PlaylistFile.width`/`height`/`fileSizeBytes` columns; every other row is preserved.
+            .lightweight(fromVersion: SchemaV3.self, toVersion: SchemaV4.self),
         ]
     }
 }

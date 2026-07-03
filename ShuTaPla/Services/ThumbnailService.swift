@@ -61,20 +61,20 @@ final class ThumbnailService {
 
     // MARK: - Public API
 
-    /// A thumbnail for `file`, generated on first request and cached thereafter,
-    /// paired with the video's running time when generation determined it. The image
-    /// is `nil` when the file can't be read or decoded (the caller shows a
-    /// placeholder); the duration is `nil` for images, and for a thumbnail served
-    /// from the on-disk cache (no decode ran to read it — the caller falls back to
-    /// the length persisted on the model). `maxPixelSize` is the longest edge in
-    /// pixels.
-    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> (image: NSImage?, duration: TimeInterval?) {
+    /// A thumbnail for `file`, generated on first request and cached thereafter, paired
+    /// with the metadata generation determined — duration and pixel dimensions for a fresh
+    /// video decode, dimensions for a fresh image, and the file's size whenever the file was
+    /// opened. The image is `nil` when the file can't be read or decoded (the caller shows a
+    /// placeholder); the metadata is empty for a thumbnail served from cache (no file open —
+    /// the caller falls back to the values persisted on the model). `maxPixelSize` is the
+    /// longest edge in pixels.
+    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> (image: NSImage?, metadata: MediaMetadata) {
         let bookmark = playlist.folderBookmark
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
-        if let cached = memory.object(forKey: memKey) { return (cached, nil) }
+        if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
 
         // Generation *and* decode happen off the main actor, so the cell receives a
         // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
@@ -85,10 +85,10 @@ final class ThumbnailService {
             maxPixelSize: maxPixelSize,
             cacheDirectory: cacheDirectory
         )
-        guard let boxed = produced.image else { return (nil, nil) }
+        guard let boxed = produced.image else { return (nil, produced.metadata) }
 
         memory.setObject(boxed.image, forKey: memKey, cost: Self.byteCost(of: boxed.image))
-        return (boxed.image, produced.duration)
+        return (boxed.image, produced.metadata)
     }
 
     /// Decoded byte size of an image, used as its cache cost: pixel area × 4 (RGBA).
@@ -170,46 +170,49 @@ final class ThumbnailService {
 
     // MARK: - Disk cache + generation
 
-    /// Returns the on-disk thumbnail if present; otherwise generates one, writes it
-    /// to the cache, and returns it. The disk-hit path skips generation, so it
-    /// reports no duration — a fresh generation reports the length its decode
-    /// determined (videos only), which the caller persists.
+    /// Returns the on-disk thumbnail if present; otherwise generates one, writes it to the
+    /// cache, and returns it. The file's size is read from the resolved URL either way — it
+    /// costs nothing beyond the open this path already makes. A fresh generation additionally
+    /// reports the duration and dimensions its decode determined; a disk-cache hit reports
+    /// only the size (no decode ran), and the caller fills the rest from the model.
     private nonisolated static func produceData(
         bookmark: Data,
         relativePath: String,
         isVideo: Bool,
         maxPixelSize: Int,
         cacheDirectory: URL
-    ) async -> (data: Data?, duration: TimeInterval?) {
+    ) async -> (data: Data?, metadata: MediaMetadata) {
         // One resolve + scoped-access session for the whole produce: derive the key
         // (which needs the on-disk modification date), check the disk cache, and render
         // on a miss — rather than resolving once to key and again to render.
         let produced = try? await BookmarkService.withResolvedFile(
             bookmark: bookmark, relativePath: relativePath
-        ) { fileURL -> (data: Data?, duration: TimeInterval?) in
+        ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
+            let fileSizeBytes = fileURL.fileSizeBytes
             let key = cacheKeyComponents(fileURL: fileURL, relativePath: relativePath, maxPixelSize: maxPixelSize)
             let diskURL = cacheDirectory.appending(path: "\(key).heic")
             if let data = try? Data(contentsOf: diskURL) {
-                if isDecodableImage(data) { return (data, nil) }
+                if isDecodableImage(data) { return (data, MediaMetadata(fileSizeBytes: fileSizeBytes)) }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
                 // forever and leave the cell stuck on a placeholder. Drop it and regenerate.
                 try? FileManager.default.removeItem(at: diskURL)
             }
 
-            let rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
-            guard let data = rendered.data else { return (nil, nil) }
+            var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
+            rendered.metadata.fileSizeBytes = fileSizeBytes
+            guard let data = rendered.data else { return (nil, rendered.metadata) }
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             try? data.write(to: diskURL)
-            return (data, rendered.duration)
+            return (data, rendered.metadata)
         }
-        return produced ?? (nil, nil)
+        return produced ?? (nil, MediaMetadata())
     }
 
     /// Like `produceData`, but additionally decodes the encoded bytes into a fully
     /// rasterized `NSImage` off the main actor. Wrapping the result lets it cross
     /// back to the main actor without a draw-time decode on the scroll path. Carries
-    /// the duration `produceData` reported through unchanged.
+    /// the metadata `produceData` reported through unchanged.
     @concurrent
     private nonisolated static func produceImage(
         bookmark: Data,
@@ -217,7 +220,7 @@ final class ThumbnailService {
         isVideo: Bool,
         maxPixelSize: Int,
         cacheDirectory: URL
-    ) async -> (image: SendableImage?, duration: TimeInterval?) {
+    ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
             bookmark: bookmark,
             relativePath: relativePath,
@@ -225,30 +228,33 @@ final class ThumbnailService {
             maxPixelSize: maxPixelSize,
             cacheDirectory: cacheDirectory
         )
-        guard let data = produced.data else { return (nil, nil) }
+        guard let data = produced.data else { return (nil, produced.metadata) }
 
         // `cgImage` forces the decode here, off-main; `NSImage(cgImage:)` then wraps
         // an already-decoded bitmap so no lazy decode happens when the cell draws.
-        guard let rep = NSBitmapImageRep(data: data), let cg = rep.cgImage else { return (nil, nil) }
-        return (SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))), produced.duration)
+        guard let rep = NSBitmapImageRep(data: data), let cg = rep.cgImage else { return (nil, produced.metadata) }
+        return (SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))), produced.metadata)
     }
 
     // MARK: - Generation
 
     /// Renders a thumbnail for a file on disk and encodes it as HEIC, reporting the
-    /// running time alongside it for videos (a frame decode determines it anyway).
-    /// Used by `produceData` and exercised directly by tests. `@concurrent` so the
-    /// CPU-bound encode is guaranteed off the main actor even for a caller already on it,
-    /// rather than relying on the one entry point that happens to hop.
+    /// media's metadata alongside it: duration and dimensions for a video (a frame decode
+    /// determines them anyway), pixel dimensions for a still (its header, no pixel decode).
+    /// File size is the caller's, so it's left `nil` here. Used by `produceData` and
+    /// exercised directly by tests. `@concurrent` so the CPU-bound encode is guaranteed off
+    /// the main actor even for a caller already on it, rather than relying on the one entry
+    /// point that happens to hop.
     @concurrent
-    nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, duration: TimeInterval?) {
+    nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, metadata: MediaMetadata) {
         if isVideo {
             let frame = await videoFrame(at: fileURL, maxPixelSize: maxPixelSize)
-            guard let cgImage = frame.image else { return (nil, nil) }
-            return (encodeHEIC(cgImage), frame.duration)
+            guard let cgImage = frame.image else { return (nil, frame.metadata) }
+            return (encodeHEIC(cgImage), frame.metadata)
         }
-        guard let cgImage = imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize) else { return (nil, nil) }
-        return (encodeHEIC(cgImage), nil)
+        guard let cgImage = imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize) else { return (nil, MediaMetadata()) }
+        let size = fileURL.imagePixelSize
+        return (encodeHEIC(cgImage), MediaMetadata(width: size?.width, height: size?.height))
     }
 
     /// Encodes a thumbnail as HEIC. HEVC intra-frame compression is several times
@@ -323,7 +329,7 @@ final class ThumbnailService {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    private nonisolated static func videoFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, duration: TimeInterval?) {
+    private nonisolated static func videoFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
         let frame = await avAssetFrame(at: url, maxPixelSize: maxPixelSize)
         if frame.image != nil { return frame }
         // AVFoundation can't open every container the player handles (notably webm
@@ -331,25 +337,26 @@ final class ThumbnailService {
         return await MPVThumbnailer.frame(at: url, maxPixelSize: maxPixelSize)
     }
 
-    /// A representative frame and the asset's duration in one open. The duration is
-    /// a moov-atom read independent of the frame, so it is loaded even when the frame
-    /// generation fails (an audio-only asset), and `nil` when AVFoundation can't read
-    /// it — the webm/mkv case, where `videoFrame` falls back to libmpv.
-    private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, duration: TimeInterval?) {
+    /// A representative frame and the asset's metadata — duration and display dimensions —
+    /// in one open. The metadata is a moov-atom read independent of the frame, so it is
+    /// loaded even when frame generation fails (an audio-only asset), and its fields are
+    /// `nil` when AVFoundation can't read them — the webm/mkv case, where `videoFrame`
+    /// falls back to libmpv.
+    private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
         generator.requestedTimeToleranceBefore = .positiveInfinity
         generator.requestedTimeToleranceAfter = .positiveInfinity
-        let seconds = (try? await asset.load(.duration)).map(CMTimeGetSeconds)
-        let duration = seconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        let duration = await asset.playableDuration()
+        let size = await asset.displayPixelSize()
         // Sample ~10% in (past the often-black opening), the same relative position the
         // libmpv fallback uses, so the same content yields a comparable thumbnail across
         // codecs. Fall back to 1s when the duration is unknown.
         let position = duration.map { $0 * 0.1 } ?? 1
         let time = CMTime(seconds: position, preferredTimescale: 600)
         let image = try? await generator.image(at: time).image
-        return (image, duration)
+        return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height))
     }
 }
