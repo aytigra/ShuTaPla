@@ -20,7 +20,7 @@ struct ShuTaPlaApp: App {
     @State private var metadataService = MediaMetadataService()
 
     init() {
-        let schema = Schema(versionedSchema: SchemaV4.self)
+        let schema = Schema(versionedSchema: SchemaV5.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer
         do {

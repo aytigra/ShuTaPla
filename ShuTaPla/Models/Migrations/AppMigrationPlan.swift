@@ -14,7 +14,7 @@ import SwiftData
 
 enum AppMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self]
+        [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, SchemaV5.self]
     }
 
     static var stages: [MigrationStage] {
@@ -31,6 +31,12 @@ enum AppMigrationPlan: SchemaMigrationPlan {
             // Carries a `SchemaV3` store forward to `SchemaV4` by adding the nilable
             // `PlaylistFile.width`/`height`/`fileSizeBytes` columns; every other row is preserved.
             .lightweight(fromVersion: SchemaV3.self, toVersion: SchemaV4.self),
+            // Carries a `SchemaV4` store forward to `SchemaV5` by adding the nilable
+            // `galleryMinItemWidth` field to the `Playlist.preferences` composite; every other row
+            // is preserved. (A single Codable struct property is a structured composite attribute,
+            // so a new member changes the schema and needs this stage — unlike a field on the
+            // `[SavedSearch]` array, which rides its JSON blob.)
+            .lightweight(fromVersion: SchemaV4.self, toVersion: SchemaV5.self),
         ]
     }
 }

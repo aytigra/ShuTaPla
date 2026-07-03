@@ -31,7 +31,7 @@ enum SchemaV3: VersionedSchema {
         var currentFileID: UUID?
         var playbackState: PlaybackState = PlaybackState.stopped
         var createdAt: Date = Date()
-        var preferences: PlaylistPreferences = PlaylistPreferences()
+        var preferences: LegacySchema.PlaylistPreferences = LegacySchema.PlaylistPreferences()
         var filterState: FilterState = FilterState()
         var savedSearches: [SavedSearch] = []
         var unfilteredResumeSortOrder: Int?

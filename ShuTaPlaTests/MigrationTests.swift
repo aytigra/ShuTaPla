@@ -63,9 +63,9 @@ struct MigrationTests {
             try v1.mainContext.save()
         }
 
-        // Reopen the same store through the migration plan into the current (V4) schema,
-        // exercising every lightweight stage (V1→V2→V3→V4).
-        let schema = Schema(versionedSchema: SchemaV4.self)
+        // Reopen the same store through the migration plan into the current (V5) schema,
+        // exercising every lightweight stage (V1→V2→V3→V4→V5).
+        let schema = Schema(versionedSchema: SchemaV5.self)
         let current = try ModelContainer(
             for: schema,
             migrationPlan: AppMigrationPlan.self,
@@ -160,7 +160,7 @@ struct MigrationTests {
             try v3.mainContext.save()
         }
 
-        let schema = Schema(versionedSchema: SchemaV4.self)
+        let schema = Schema(versionedSchema: SchemaV5.self)
         let current = try ModelContainer(
             for: schema,
             migrationPlan: AppMigrationPlan.self,
@@ -175,5 +175,41 @@ struct MigrationTests {
         #expect(file.height == nil)
         #expect(file.fileSizeBytes == nil)
         #expect(file.pixelSize == nil)
+    }
+
+    /// The V4→V5 stage adds the nilable `galleryMinItemWidth` field to the `Playlist.preferences`
+    /// composite and leaves every other row — including the rest of that composite — untouched.
+    /// Also confirms the pinned `SchemaV4` shape (six-field `preferences`) round-trips.
+    @Test func v4ToV5AddsGalleryWidthAndPreservesPreferences() throws {
+        let (directory, store) = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            let v4Schema = Schema(versionedSchema: SchemaV4.self)
+            let v4 = try ModelContainer(for: v4Schema, configurations: [ModelConfiguration(schema: v4Schema, url: store)])
+            let playlist = SchemaV4.Playlist(
+                name: "Beach", folderBookmark: Data([0x09]), folderPath: "/b", mediaType: .image, sortOrder: 1
+            )
+            var prefs = LegacySchema.PlaylistPreferences()
+            prefs.volume = 0.5
+            prefs.slideshowInterval = 7.5
+            prefs.viewMode = .gallery
+            playlist.preferences = prefs
+            v4.mainContext.insert(playlist)
+            try v4.mainContext.save()
+        }
+
+        let schema = Schema(versionedSchema: SchemaV5.self)
+        let current = try ModelContainer(
+            for: schema,
+            migrationPlan: AppMigrationPlan.self,
+            configurations: [ModelConfiguration(schema: schema, url: store)]
+        )
+        let playlist = try #require(try current.mainContext.fetch(FetchDescriptor<Playlist>()).first)
+        #expect(playlist.name == "Beach")
+        #expect(playlist.preferences.volume == 0.5)               // composite preserved
+        #expect(playlist.preferences.slideshowInterval == 7.5)
+        #expect(playlist.preferences.viewMode == .gallery)
+        #expect(playlist.preferences.galleryMinItemWidth == nil)  // new field starts empty
     }
 }

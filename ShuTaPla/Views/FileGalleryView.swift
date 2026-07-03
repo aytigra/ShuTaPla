@@ -60,12 +60,12 @@ private struct GalleryCell: View {
     private let maxPixelSize = AppConstants.galleryThumbnailPixelSize
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 3) {
             thumbnail
             caption
         }
-        .padding(6)
-        .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .padding(3)
+        .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         // Generation is deferrable background work, so it runs at `.utility` QoS
         // rather than the default user-initiated: the encoder blocks its worker
@@ -116,16 +116,17 @@ private struct GalleryCell: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // Metadata badges in three corners: dimensions top-right, size bottom-left,
+            // running time bottom-right. Each is shown only once its field is cached, and only
+            // for a type that carries it (images have no duration; audio has no gallery).
+            .overlay(alignment: .topTrailing) {
+                if let size = file.pixelSize { badge(size.dimensionsText) }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let bytes = file.fileSizeBytes { badge(bytes.formattedFileSize) }
+            }
             .overlay(alignment: .bottomTrailing) {
-                if let duration = file.duration {
-                    Text(duration.formattedDuration)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
-                        .padding(2)
-                }
+                if let duration = file.duration { badge(duration.formattedDuration) }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
             // The playback cursor is purple; a selected-but-not-current tile keeps the accent.
@@ -150,11 +151,25 @@ private struct GalleryCell: View {
         } else {
             Text(file.fileName)
                 .font(.caption)
-                .lineLimit(2)
+                // Always reserve two lines so a one-line name doesn't shrink the tile: every
+                // cell (and its selection highlight) keeps a common height regardless of name length.
+                .lineLimit(2, reservesSpace: true)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    /// One thumbnail corner badge: a dark rounded pill with a white monospaced caption,
+    /// inset from the tile edge. Shared by the dimensions, size, and duration badges.
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
+            .padding(2)
     }
 
     /// Purple for the playback cursor, accent for a selected non-current tile, none otherwise.

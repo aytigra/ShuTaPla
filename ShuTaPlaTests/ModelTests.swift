@@ -171,6 +171,7 @@ struct ModelTests {
         prefs.imageFitMode = .cover
         prefs.filePositionPersistence = true
         prefs.viewMode = .gallery
+        prefs.galleryMinItemWidth = 320
         playlist.preferences = prefs
         playlist.filterState = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .untagged)
         playlist.savedSearches = [SavedSearch(tags: ["x", "y"], mode: .and)]
@@ -187,6 +188,7 @@ struct ModelTests {
         #expect(stored.preferences.imageFitMode == .cover)
         #expect(stored.preferences.filePositionPersistence == true)
         #expect(stored.preferences.viewMode == .gallery)
+        #expect(stored.preferences.galleryMinItemWidth == 320)
         #expect(stored.filterState.selectedTags == ["a", "b"])
         #expect(stored.filterState.filterMode == .or)
         #expect(stored.filterState.serviceFilter == .untagged)

@@ -2,8 +2,9 @@
 //  FileRowView.swift
 //  ShuTaPla
 //
-//  One row in the Manager file list: filename and tag chips, with a selection
-//  highlight, and an inline rename field when this row is being renamed.
+//  One row in the Manager file list: the filename and a right-aligned metadata cluster
+//  (pixel dimensions, on-disk size, running time — each shown for the types that carry it),
+//  with a selection highlight and an inline rename field when this row is being renamed.
 //
 
 import SwiftUI
@@ -26,15 +27,10 @@ struct FileRowView: View {
             if isRenaming {
                 RenameFileField(text: $draftName, onCommit: onCommitRename, onCancel: onCancelRename)
             } else {
-                // Parse the filename's tags once: `tagNames` reparses on each read and
-                // `ViewThatFits` evaluates both candidate layouts, so binding it here avoids
-                // four parses per row per render.
-                let tagNames = file.tagNames
-                // One line while it fits; once the name, chips, and length can't share
-                // a row, the chips wrap onto their own line beneath the name.
-                ViewThatFits(in: .horizontal) {
-                    singleLine(tagNames: tagNames)
-                    stacked(tagNames: tagNames)
+                HStack(spacing: 12) {
+                    fileName
+                    Spacer(minLength: 8)
+                    metadataColumns
                 }
             }
         }
@@ -58,44 +54,11 @@ struct FileRowView: View {
         // Metadata (duration, dimensions, size) is read once and cached on the model, so it
         // appears instantly on later displays and across launches. Images have no timeline but
         // do carry dimensions and size, so every type opens once — only when a field this type
-        // needs is still missing, so a fully-cached row never re-opens and the length column
-        // (shown synchronously from the model) doesn't flash empty on scroll-in.
+        // needs is still missing, so a fully-cached row never re-opens and the columns (shown
+        // synchronously from the model) don't flash empty on scroll-in.
         .task(id: file.id) {
             guard !file.hasCompleteMetadata(for: playlist.mediaType) else { return }
             _ = await metadataService.metadata(for: file, in: playlist)
-        }
-    }
-
-    /// Name, chips, and length all on one row.
-    private func singleLine(tagNames: [String]) -> some View {
-        HStack(spacing: 8) {
-            fileName
-            Spacer(minLength: 8)
-            if !tagNames.isEmpty {
-                TagChips(tags: tagNames)
-            }
-            if playlist.mediaType != .image {
-                durationColumn
-            }
-        }
-    }
-
-    /// Name (and length) on top, chips wrapped onto a flow beneath — the fallback
-    /// when the row is too narrow for everything to sit on one line.
-    private func stacked(tagNames: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                fileName
-                Spacer(minLength: 8)
-                if playlist.mediaType != .image {
-                    durationColumn
-                }
-            }
-            if !tagNames.isEmpty {
-                FlowLayout(spacing: 4, lineSpacing: 4) {
-                    ForEach(tagNames, id: \.self) { TagChip(tag: $0) }
-                }
-            }
         }
     }
 
@@ -105,36 +68,27 @@ struct FileRowView: View {
             .truncationMode(.middle)
     }
 
-    /// A fixed-width trailing column so the value right-aligns and the tag chips of
-    /// every row keep a common right edge whatever each duration's width.
-    private var durationColumn: some View {
-        Text(file.duration?.formattedDuration ?? "")
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .frame(width: 56, alignment: .trailing)
-    }
-}
-
-/// Compact, read-only tag chips. Editing lives in the tag panel.
-private struct TagChips: View {
-    let tags: [String]
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(tags, id: \.self) { TagChip(tag: $0) }
+    /// The right-aligned metadata cluster: dimensions and size for the visual types, plus
+    /// running time for the timed ones. Each is a fixed-width column so values right-align and
+    /// rows keep common right edges whatever each value's width. Audio carries no pixel
+    /// dimensions; images no timeline — that column is dropped for the type that lacks it.
+    private var metadataColumns: some View {
+        HStack(spacing: 12) {
+            if playlist.mediaType != .audio {
+                column(file.pixelSize?.dimensionsText, width: 76)
+            }
+            column(file.fileSizeBytes?.formattedFileSize, width: 64)
+            if playlist.mediaType != .image {
+                column(file.duration?.formattedDuration, width: 56)
+            }
         }
     }
-}
 
-/// One read-only tag pill.
-private struct TagChip: View {
-    let tag: String
-
-    var body: some View {
-        Text(tag)
-            .font(.caption)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
+    /// One right-aligned, fixed-width metadata value — empty until its field is cached.
+    private func column(_ text: String?, width: CGFloat) -> some View {
+        Text(text ?? "")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: width, alignment: .trailing)
     }
 }

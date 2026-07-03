@@ -32,11 +32,11 @@ For video and image playlists, the file list can be shown as:
 - **List** (default).
 - **Gallery** with thumbnails.
 
-The choice is persisted per playlist. Audio playlists always use list view.
+The choice is persisted per playlist. Audio playlists always use list view. The gallery's tile width is adjustable per playlist: a **Gallery** slider in the playlist's Settings popover (image and video only) sets the minimum tile width from 100 to 600 points and the grid retiles live; the maximum tracks the minimum by a fixed ratio.
 
-For video and audio playlists, each file shows its running time: a right-aligned column in the list (after the tag chips, which keep a common right edge), and for video also a badge in the bottom-right corner of the gallery thumbnail. The length is read on first display and cached, so it appears instantly on later displays and across launches. Images have no timeline and show no length.
+Each file shows the metadata its type carries. In the list these are right-aligned monospaced columns after the filename, each fixed-width so rows share common right edges: **pixel dimensions** and **on-disk size** for every type, plus **running time** for video and audio. In the gallery they are badges on the thumbnail — dimensions top-right, size bottom-left, and running time bottom-right (video only). Images have no timeline; audio has no gallery.
 
-A file's pixel dimensions and on-disk size are read and cached the same way — off the main actor on first display, riding the file open that already happens for the running time (or, for images, a cheap header read), so no extra pass is needed. They too persist across launches. Their first use is the preview card, which opens at the media's true shape immediately once the dimensions are cached.
+Running time, pixel dimensions, and on-disk size are all read off the main actor on first display — riding the file open that already happens (or, for images, a cheap header read), so no extra pass is needed — then cached on the file, so they appear instantly on later displays and across launches. The cached dimensions also give the preview card its true shape immediately when it opens.
 
 ## File interactions
 

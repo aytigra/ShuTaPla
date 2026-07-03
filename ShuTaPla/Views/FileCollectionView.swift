@@ -22,9 +22,20 @@ nonisolated enum FileCollectionLayout {
     case gallery
 
     /// Gallery grid metrics for the `LazyVGrid` columns.
+    /// `galleryMinItemWidth` is the default adaptive minimum when a playlist hasn't chosen
+    /// its own; `galleryMaxRatio` sets the adaptive maximum as a multiple of the minimum, so
+    /// a wider minimum still leaves headroom for the grid to repack before adding a column.
     static let galleryMinItemWidth: CGFloat = 200
-    static let galleryMaxItemWidth: CGFloat = 360
+    static let galleryMaxRatio: CGFloat = 1.8
     static let gallerySpacing: CGFloat = 4
+
+    /// The adaptive grid's (minimum, maximum) tile widths for a playlist's chosen minimum.
+    /// A `nil` choice (never set) falls back to `galleryMinItemWidth`; the maximum is always
+    /// `galleryMaxRatio ×` the minimum.
+    static func gridMetrics(min chosen: Double?) -> (min: CGFloat, max: CGFloat) {
+        let minimum = chosen.map { CGFloat($0) } ?? galleryMinItemWidth
+        return (minimum, minimum * galleryMaxRatio)
+    }
 
     /// Derives the gallery's column count from the leading-edge x of every laid-out
     /// cell: cells in the same column share a leading edge, so the number of distinct
@@ -85,8 +96,9 @@ struct FileCollectionView<Cell: View>: View {
     @State private var skipSelectionScroll = false
 
     private var columns: [GridItem] {
-        [GridItem(
-            .adaptive(minimum: FileCollectionLayout.galleryMinItemWidth, maximum: FileCollectionLayout.galleryMaxItemWidth),
+        let metrics = FileCollectionLayout.gridMetrics(min: playlist.preferences.galleryMinItemWidth)
+        return [GridItem(
+            .adaptive(minimum: metrics.min, maximum: metrics.max),
             spacing: FileCollectionLayout.gallerySpacing
         )]
     }

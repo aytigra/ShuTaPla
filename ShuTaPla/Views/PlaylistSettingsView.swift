@@ -2,11 +2,12 @@
 //  PlaylistSettingsView.swift
 //  ShuTaPla
 //
-//  The per-playlist settings popover, raised from the center toolbar's Settings button. It
-//  surfaces the overrides a playlist can set against the global defaults: each is a picker
-//  whose first entry is "Default (…)", which clears the override (`nil`) so the playlist falls
-//  back to the live global value. Slideshow and fit-mode edits route through the coordinator so
-//  an active image channel reflects them immediately; the rest write straight to the model.
+//  The per-playlist settings popover, raised from the center toolbar's Settings button. Most
+//  controls are overrides against the global defaults: a picker whose first entry is "Default (…)"
+//  clears the override (`nil`) so the playlist falls back to the live global value. The gallery
+//  tile-width slider is a standalone per-playlist preference with no global default. Slideshow and
+//  fit-mode edits route through the coordinator so an active image channel reflects them
+//  immediately; the rest write straight to the model.
 //
 
 import SwiftUI
@@ -24,6 +25,7 @@ struct PlaylistSettingsView: View {
             case .image: imageSettings(global)
             case .video, .audio: timelineSettings(global)
             }
+            if playlist.mediaType != .audio { gallerySettings() }
         }
         .formStyle(.grouped)
         .frame(width: 320)
@@ -59,6 +61,33 @@ struct PlaylistSettingsView: View {
                 ForEach(ImageFitMode.allCases, id: \.self) { mode in
                     Text(mode.displayName).tag(ImageFitMode?.some(mode))
                 }
+            }
+        }
+    }
+
+    // MARK: - Gallery (image + video)
+
+    /// Sets the gallery's adaptive minimum tile width; the maximum tracks it by
+    /// `FileCollectionLayout.galleryMaxRatio`. The value shown is what the grid actually uses —
+    /// the default until the playlist chooses its own. Manager-only, so it writes straight to the
+    /// model with no coordinator involvement.
+    @ViewBuilder
+    private func gallerySettings() -> some View {
+        let width = FileCollectionLayout.gridMetrics(min: playlist.preferences.galleryMinItemWidth).min
+
+        Section("Gallery") {
+            LabeledContent("Tile width") {
+                Slider(
+                    value: Binding(
+                        get: { Double(width) },
+                        set: { playlist.preferences.galleryMinItemWidth = $0 }
+                    ),
+                    in: 100...600,
+                    step: 20
+                )
+                Text("\(Int(width)) px")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
         }
     }

@@ -34,4 +34,19 @@ import CoreGraphics
     @Test func oneCellIsOneColumn() {
         #expect(FileCollectionLayout.columnCount(fromCellMinXs: [12]) == 1)
     }
+
+    // MARK: - Adaptive grid metrics
+
+    @Test func nilMinFallsBackToDefault() {
+        let metrics = FileCollectionLayout.gridMetrics(min: nil)
+        #expect(metrics.min == FileCollectionLayout.galleryMinItemWidth)
+        #expect(metrics.max == FileCollectionLayout.galleryMinItemWidth * FileCollectionLayout.galleryMaxRatio)
+    }
+
+    @Test(arguments: [100.0, 200.0, 360.0, 600.0])
+    func maxIsRatioTimesChosenMin(_ chosen: Double) {
+        let metrics = FileCollectionLayout.gridMetrics(min: chosen)
+        #expect(metrics.min == CGFloat(chosen))
+        #expect(metrics.max == CGFloat(chosen) * FileCollectionLayout.galleryMaxRatio)
+    }
 }
