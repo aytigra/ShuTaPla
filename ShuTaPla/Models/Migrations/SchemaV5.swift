@@ -2,14 +2,15 @@
 //  SchemaV5.swift
 //  ShuTaPla
 //
-//  The current schema. Its models are the live top-level types.
+//  The current schema — the sole version. Its models are the live top-level types, so this
+//  version always tracks whatever they declare. Numbered 5 to match the `Schema.Version` already
+//  stamped in existing stores; adding the next version pins this shape and bumps to 6 (see
+//  `doc/versioning.md`).
 //
 
 import Foundation
 import SwiftData
 
-/// The current schema. Its models are the live top-level types, whose `Playlist.preferences`
-/// carries the `galleryMinItemWidth` field added to the `PlaylistPreferences` composite.
 enum SchemaV5: VersionedSchema {
     static let versionIdentifier = Schema.Version(5, 0, 0)
 

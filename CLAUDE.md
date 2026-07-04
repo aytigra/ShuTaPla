@@ -29,6 +29,8 @@ macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
 - `doc/features.md` — feature-spec entry point: overview, Terminology glossary, and a map of the per-topic chapters in `doc/features/` (load only the chapter you need)
 - `doc/architecture.md` — system design and architecture
+- `doc/versioning.md` — SwiftData schema versioning: **read before changing any `@Model`** — a missed migration compiles fine and crashes the app at launch
+- `doc/profiling.md` — how to record and read an Instruments trace (host Mac, SwiftUI template), including the single-instance traps
 
 ## Writing rules
 

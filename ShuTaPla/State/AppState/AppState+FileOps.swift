@@ -20,8 +20,9 @@ extension AppState {
     func renameFile(_ file: PlaylistFile, to newName: String) async -> String? {
         guard let playlist = file.playlist else { return "This file isn't in a playlist." }
         return await folderAccess.withAccess(to: playlist) { folderURL in
+            let before = file.tagFrequencyNames
             if let error = await applyRename(file, to: newName, in: folderURL) { return error }
-            modelContext.rebuildTagFrequency(of: playlist)
+            modelContext.applyTagFrequencyDelta(to: playlist, before: before, after: file.tagFrequencyNames)
             persistAndRefresh()
             return nil
         } ?? nil
@@ -29,7 +30,7 @@ extension AppState {
 
     /// Renames one file on disk and mirrors the result onto the model, with the
     /// playlist folder's scoped access already open. Returns a message on failure.
-    /// Callers rebuild the tag-frequency cache once after a batch.
+    /// Callers apply the resulting tag-frequency delta per file (the rename re-parses `tags`).
     private func applyRename(_ file: PlaylistFile, to newName: String, in folderURL: URL) async -> String? {
         let newURL: URL
         do {
@@ -71,10 +72,10 @@ extension AppState {
             for url in result.trashed {
                 guard let file = byURL[url] else { continue }
                 managerSelection.remove(file.id)
+                modelContext.applyTagFrequencyDelta(to: playlist, before: file.tagFrequencyNames, after: [])
                 file.playlist = nil
                 modelContext.delete(file)
             }
-            modelContext.rebuildTagFrequency(of: playlist)
             persistAndRefresh()
             // Advance whichever channel was playing this playlist off a trashed track, so the
             // engine never holds a file that's no longer in the playlist. Covers every delete
@@ -215,9 +216,9 @@ extension AppState {
         return error
     }
 
-    /// Applies a filename transform to a batch of files (one scoped-access session,
-    /// one tag-frequency rebuild). Invalid-tagging files are excluded; transforms
-    /// that leave a name unchanged are skipped so no needless disk renames happen.
+    /// Applies a filename transform to a batch of files in one scoped-access session, folding
+    /// each file's tag change into the frequency cache as a delta. Invalid-tagging files are
+    /// excluded; transforms that leave a name unchanged are skipped so no needless disk renames happen.
     private func editTags(_ files: [PlaylistFile], transform: (String) -> String) async -> String? {
         let editable = files.filter { $0.taggingStatus != .invalid }
         guard let playlist = editable.first?.playlist else { return nil }
@@ -226,11 +227,13 @@ extension AppState {
             for file in editable {
                 let newName = transform(file.fileName)
                 guard newName != file.fileName else { continue }
+                let before = file.tagFrequencyNames
                 if let error = await applyRename(file, to: newName, in: folderURL) {
                     firstError = firstError ?? error
+                    continue
                 }
+                modelContext.applyTagFrequencyDelta(to: playlist, before: before, after: file.tagFrequencyNames)
             }
-            modelContext.rebuildTagFrequency(of: playlist)
             persistAndRefresh()
             return firstError
         } ?? nil

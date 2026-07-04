@@ -65,6 +65,13 @@ final class PlaylistFile {
         return CGSize(width: width, height: height)
     }
 
+    /// The canonical tag display names this file contributes to its playlist's `tagFrequency`:
+    /// its tags' names, or none when skipped (the cache counts only playable files). An edit's
+    /// delta is the change in this set, applied by `ModelContext.applyTagFrequencyDelta`.
+    var tagFrequencyNames: Set<String> {
+        isSkipped ? [] : Set(tags.map(\.name))
+    }
+
     /// Shuffled order within the playlist.
     var sortOrder: Int = 0
 

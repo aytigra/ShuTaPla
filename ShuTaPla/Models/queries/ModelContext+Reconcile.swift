@@ -139,10 +139,24 @@ nonisolated extension ModelContext {
         return frequency
     }
 
-    /// Recomputes and stores a playlist's tag-frequency cache — the main-actor convenience for
-    /// paths that mutate tags on the main context (creation, rename, delete).
+    /// Recomputes and stores a playlist's tag-frequency cache — the rescan's authoritative
+    /// rebuild after it reconciles a folder's files.
     func rebuildTagFrequency(of playlist: Playlist) {
         playlist.tagFrequency = computeTagFrequency(of: playlist)
+    }
+
+    /// Applies one file's tag change to `playlist`'s frequency cache in place — the incremental
+    /// counterpart of a full `rebuildTagFrequency`, so editing a single file's tags doesn't
+    /// re-walk every file. `before`/`after` are that file's `tagFrequencyNames` around the edit
+    /// (empty for a skipped file, which the cache ignores). A count that reaches zero drops its
+    /// key, matching the full recompute, which never emits a zero. Precise counts aren't critical:
+    /// the rescan that runs on playlist switches rebuilds authoritatively.
+    func applyTagFrequencyDelta(to playlist: Playlist, before: Set<String>, after: Set<String>) {
+        for tag in after.subtracting(before) { playlist.tagFrequency[tag, default: 0] += 1 }
+        for tag in before.subtracting(after) {
+            let remaining = (playlist.tagFrequency[tag] ?? 0) - 1
+            playlist.tagFrequency[tag] = remaining > 0 ? remaining : nil
+        }
     }
 
     /// Re-reads `playlist` so the held instance reflects writes another context committed: a sibling

@@ -35,3 +35,6 @@ fastlane/test_output
 
 # NOTE: this project tracks its hand-maintained ShuTaPla.xcodeproj/project.pbxproj.
 # Do NOT add *.pbxproj or *.xcodeproj here — the repo needs them to open and build.
+
+# Profiling artefacts (large Instruments traces, machine/run specific)
+profiling/

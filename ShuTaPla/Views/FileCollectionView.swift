@@ -105,6 +105,10 @@ struct FileCollectionView<Cell: View>: View {
 
     var body: some View {
         ScrollViewReader { proxy in
+            // One fetch per render: `managerFileIDs` is a store query, and the ForEach and the
+            // empty-state overlay would each re-run it. Reading it into `sequenceVersion` here
+            // still registers the Observation dependency that drives re-renders.
+            let ids = visibleFileIDs
             ScrollView {
                 switch layout {
                 case .list:
@@ -113,7 +117,7 @@ struct FileCollectionView<Cell: View>: View {
                         // resolves just an on-screen identifier — the whole sequence is never
                         // materialized. The `Group` keeps one view per `ForEach` element however
                         // the resolve goes (a just-fetched identifier resolves in practice).
-                        ForEach(visibleFileIDs, id: \.self) { id in
+                        ForEach(ids, id: \.self) { id in
                             Group {
                                 if let file = appState.file(for: id) {
                                     item(file)
@@ -124,7 +128,7 @@ struct FileCollectionView<Cell: View>: View {
                     }
                 case .gallery:
                     LazyVGrid(columns: columns, spacing: FileCollectionLayout.gallerySpacing) {
-                        ForEach(visibleFileIDs, id: \.self) { id in
+                        ForEach(ids, id: \.self) { id in
                             Group {
                                 if let file = appState.file(for: id) {
                                     item(file)
@@ -152,7 +156,7 @@ struct FileCollectionView<Cell: View>: View {
             }
             .coordinateSpace(name: gridSpace)
             .overlay {
-                if visibleFileIDs.isEmpty {
+                if ids.isEmpty {
                     ContentUnavailableView("No Files", systemImage: "doc")
                 }
             }
