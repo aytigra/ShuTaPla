@@ -28,7 +28,7 @@ on launch, not a build failure.**
 ## What is a stored-shape change (needs a new version + stage)
 
 - Add, remove, or rename a **stored** property.
-- Add or remove `#Index`, `#Unique`, or `@Attribute(.unique)`.
+- Add or remove `#Unique` or `@Attribute(.unique)` — a uniqueness *constraint* is part of the hash.
 - Add or remove a **member of a Codable struct stored as a composite attribute** — a single Codable
   struct property (no `@Attribute`) is persisted as a *structured composite*, so its members are
   part of the entity hash.
@@ -40,6 +40,31 @@ on launch, not a build failure.**
 - Changing the contents/coding of a value that rides a **JSON blob** — e.g. a `[Codable]` array is
   stored as one opaque blob, so adding a field to its element shape isn't a schema column. Contrast
   with the composite-attribute case above: that distinction is the subtle one.
+- Adding or removing a fetch index (`#Index`) — but this one is a trap; see below.
+
+## The fetch-index trap: `#Index` never reaches an existing store on its own
+
+Fetch indexes (`#Index`) are **excluded from CoreData's entity version hash**. So adding one is a
+double-edged non-event:
+
+- It does **not** need a stage to *open* an existing store — the hash is unchanged, so the store
+  stays compatible and the app launches fine (no `loadIssue`, unlike a real stored-shape change).
+- But for the same reason CoreData sees the store as already matching the current model, so **no
+  migration runs and the index is never created**. A store built fresh (a new install) gets the
+  index; every store that already exists stays unindexed forever. A version bump with a lightweight
+  stage does *not* fix this — the hash still matches, so the stage is skipped (Apple WWDC 2017
+  Session 210). CoreData's own remedy, `versionHashModifier`, is not surfaced by SwiftData.
+
+**The fix: perturb the hash so a migration runs, and it reconciles every entity's indexes.** A
+running migration — triggered by *any* hash change, on *any* entity — rebuilds the destination
+schema and reconciles all declared indexes, not just the changed entity's. So the trigger can live
+on a **separate table**. `SchemaMarker` is exactly that: a permanent, empty `@Model` added in the
+same release as the index. Every pre-existing store lacks it, so the hash always mismatches → the
+lightweight stage always runs → the index is applied, regardless of which prior version the user
+came from (a direct old→new jump would otherwise short-circuit on the matching hash). Keep the
+marker forever — removing it re-opens the skip. It is the reusable lever for the next forgotten
+index: perturb it (add or rename a property) in that release. Column deletion, by contrast, *is* a
+supported lightweight change, so a throwaway column is never needed.
 
 ## Recipe: add the next version
 

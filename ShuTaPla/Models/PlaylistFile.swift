@@ -12,6 +12,21 @@ import SwiftData
 
 @Model
 final class PlaylistFile {
+    /// Indexes for the store-side sequence derivation (`ModelContext+Sequence.swift`). Every
+    /// list/playback fetch filters on the owning `playlist` **and** `isSkipped` (both equality),
+    /// then sorts by `sortOrder`; the triage filters and counts add `taggingStatusCode`. Leading
+    /// each compound with `(playlist, isSkipped)` before the `sortOrder` sort turns each query into
+    /// a contiguous, already-ordered index range with no per-row table lookups — `isSkipped` folded
+    /// in rather than left a residual (which would force a row fetch just to read the boolean).
+    /// `id` serves the single-file resolve. The tag filter joins the many-to-many junction, which no
+    /// fetch index can cover; `Tag.normalizedName`'s uniqueness index and the `(playlist, isSkipped)`
+    /// narrowing are what make it fast.
+    #Index<PlaylistFile>(
+        [\.playlist, \.isSkipped, \.sortOrder],
+        [\.playlist, \.isSkipped, \.taggingStatusCode, \.sortOrder],
+        [\.id]
+    )
+
     /// Stable identity. Survives Update prune/append (an index would not).
     var id: UUID = UUID()
 
