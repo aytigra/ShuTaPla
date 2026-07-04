@@ -1171,6 +1171,7 @@ struct AppStateTests {
         addFile("a2.mp4", order: 1, to: a, in: context)
         addFile("b1.mp4", order: 0, to: b, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
         appState.managedPlaylist = a
 
         // Repeated reads at the same version and playlist agree with the store derivation.

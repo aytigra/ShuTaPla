@@ -131,10 +131,12 @@ nonisolated extension ModelContext {
     }
 
     /// The per-playlist tag usage counts from its playable files — what the filter dropdown lists.
+    /// Sums each file's `tagFrequencyNames`, so the skip-exclusion and tag-name mapping live in one
+    /// place shared with the incremental `applyTagFrequencyDelta`.
     func computeTagFrequency(of playlist: Playlist) -> [String: Int] {
         var frequency: [String: Int] = [:]
-        for file in playlist.files where !file.isSkipped {
-            for tag in file.tags { frequency[tag.name, default: 0] += 1 }
+        for file in playlist.files {
+            for name in file.tagFrequencyNames { frequency[name, default: 0] += 1 }
         }
         return frequency
     }

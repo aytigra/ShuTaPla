@@ -267,7 +267,7 @@ Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine
 Views/
   Welcome/   WelcomeView
   Manager/   ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,
-             FileCollectionView, FileListView, FileGalleryView, FilterBar,
+             FileCollectionView, GalleryCell, FilterBar,
              PlaylistTagsView, TagSidebar
   Player/    PlayerView, VideoPlayerView, ImagePlayerView, PauseOverlay, PlaybackControlsBar
   Audio/     AudioInlet, AudioOverlay
