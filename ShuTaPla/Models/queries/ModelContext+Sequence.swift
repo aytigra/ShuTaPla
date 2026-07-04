@@ -54,6 +54,13 @@ extension ModelContext {
         count(playbackPredicate(for: playlist)) > 0
     }
 
+    /// The playlist's total file count, answered with a `fetchCount` — the sidebar row badge, so
+    /// the whole `files` relationship is never faulted just to read its length.
+    func fileCount(in playlist: Playlist) -> Int {
+        let pid = playlist.persistentModelID
+        return count(#Predicate { $0.playlist?.persistentModelID == pid })
+    }
+
     /// The three triage counts — untagged / invalid-tagging / skipped — for the center's notice
     /// bar, each a `fetchCount` over the scalar columns.
     func serviceFilterCounts(for playlist: Playlist) -> (untagged: Int, invalidTagging: Int, skipped: Int) {

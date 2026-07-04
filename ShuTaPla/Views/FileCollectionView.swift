@@ -6,10 +6,10 @@
 //  Both show the active scope's filtered files (`AppState.managerFileIDs`) with the same
 //  interactions — click / shift-click / cmd-click selection, double-click to play,
 //  inline rename, a per-item context menu, and keyboard-selection auto-scroll —
-//  differing only in layout (a divided `LazyVStack` of rows vs a `LazyVGrid` of
-//  thumbnail cells) and the cell view. The selection, rename, and scroll
-//  bookkeeping lives here once; `FileListView`/`FileGalleryView` supply the layout
-//  and cell.
+//  differing only in layout (a divided `LazyVStack` of `FileRowView`s vs a `LazyVGrid` of
+//  `GalleryCell` thumbnails), chosen by the `layout` parameter. One concrete view type
+//  regardless of layout, so switching presentation keeps this view's identity (and its
+//  scroll/selection `@State`) rather than tearing the whole browser down and rebuilding it.
 //
 
 import SwiftUI
@@ -74,12 +74,11 @@ struct FileCellConfiguration {
     let onCancelRename: () -> Void
 }
 
-struct FileCollectionView<Cell: View>: View {
+struct FileCollectionView: View {
     let playlist: Playlist
     let layout: FileCollectionLayout
     let confirmDelete: ([PlaylistFile]) -> Void
     let reportError: (String) -> Void
-    @ViewBuilder let cell: (FileCellConfiguration) -> Cell
 
     @Environment(AppState.self) private var appState
 
@@ -120,7 +119,19 @@ struct FileCollectionView<Cell: View>: View {
                         ForEach(ids, id: \.self) { id in
                             Group {
                                 if let file = appState.file(for: id) {
-                                    item(file)
+                                    item(file) { config in
+                                        FileRowView(
+                                            file: config.file,
+                                            playlist: config.playlist,
+                                            isSelected: config.isSelected,
+                                            isCurrent: config.isCurrent,
+                                            isRenaming: config.isRenaming,
+                                            isStripping: config.isStripping,
+                                            draftName: config.draftName,
+                                            onCommitRename: config.onCommitRename,
+                                            onCancelRename: config.onCancelRename
+                                        )
+                                    }
                                     Divider()
                                 }
                             }
@@ -131,7 +142,19 @@ struct FileCollectionView<Cell: View>: View {
                         ForEach(ids, id: \.self) { id in
                             Group {
                                 if let file = appState.file(for: id) {
-                                    item(file)
+                                    item(file) { config in
+                                        GalleryCell(
+                                            file: config.file,
+                                            playlist: config.playlist,
+                                            isSelected: config.isSelected,
+                                            isCurrent: config.isCurrent,
+                                            isRenaming: config.isRenaming,
+                                            isStripping: config.isStripping,
+                                            draftName: config.draftName,
+                                            onCommitRename: config.onCommitRename,
+                                            onCancelRename: config.onCancelRename
+                                        )
+                                    }
                                         // Pin each tile to the top of its grid row so cells with
                                         // one- and two-line captions line up at the thumbnail
                                         // rather than centering against each other.
@@ -191,9 +214,14 @@ struct FileCollectionView<Cell: View>: View {
         }
     }
 
-    /// One file's cell, wrapped with the shared tap (select / double-click to play)
-    /// and context menu. The layout positions it.
-    private func item(_ file: PlaylistFile) -> some View {
+    /// One file's cell — the layout supplies the concrete cell (`FileRowView`/`GalleryCell`)
+    /// through `cell`, and this wraps it with the shared tap (select / double-click to play)
+    /// and context menu. A generic *function*, so both layouts resolve within this one view
+    /// type. The layout positions it.
+    private func item<Cell: View>(
+        _ file: PlaylistFile,
+        @ViewBuilder cell: (FileCellConfiguration) -> Cell
+    ) -> some View {
         cell(FileCellConfiguration(
             file: file,
             playlist: playlist,

@@ -115,6 +115,22 @@ final class AppState {
     /// walk over the `files` relationship would be.
     var sequenceVersion = 0
 
+    /// One memoized file-ID sequence: the identifiers plus the `sequenceVersion` and source
+    /// playlist they were derived against, so `memoizedSequence` can reuse them while both match.
+    struct SequenceMemo {
+        var version: Int
+        var playlistID: PersistentIdentifier?
+        var ids: [PersistentIdentifier]
+    }
+
+    // Per-accessor memo slots for the whole-playlist sequence fetches in `AppState+Playback`
+    // (`managerFileIDs`, `audioChannelFileIDs`, `visualChannelFileIDs`). `@ObservationIgnored`:
+    // caching is not a tracked write — `sequenceVersion`, read inside `memoizedSequence`, is the
+    // Observation gate. Each accessor reads a single playlist per pass, so one slot each suffices.
+    @ObservationIgnored var managerFileIDsMemo: SequenceMemo?
+    @ObservationIgnored var audioChannelFileIDsMemo: SequenceMemo?
+    @ObservationIgnored var visualChannelFileIDsMemo: SequenceMemo?
+
     /// A user-facing message when persisting a mutation fails. Set by `persistAndRefresh` when the
     /// save throws; the failed edit is rolled back so it can't be flushed by a later save, and the
     /// store-side lists re-derive from the unchanged saved store. Presented by the app-root alert.
@@ -175,7 +191,7 @@ final class AppState {
     /// in batches), so their sidebar rows can show a destructive red spinner.
     var deletingPlaylistIDs: Set<UUID> = []
 
-    /// Live column count of the Manager gallery grid, reported by `FileGalleryView`
+    /// Live column count of the Manager gallery grid, reported by `FileCollectionView`
     /// as it lays out, so keyboard navigation can step in 2D. The list is one column.
     var fileGridColumns: Int = 1
 
@@ -232,6 +248,27 @@ final class AppState {
             saveError = Self.saveErrorText(error.localizedDescription)
         }
         sequenceVersion &+= 1
+    }
+
+    /// Returns the identifier sequence `compute(playlist)` memoized in `slot`, re-running the
+    /// store fetch only when a persisted mutation bumped `sequenceVersion` or the source playlist
+    /// changed — so repeated reads within one render pass reuse the last result instead of
+    /// re-fetching the whole sequence. Reading `sequenceVersion` here is the Observation dependency
+    /// that drives re-derivation, exactly as the bare `_ = sequenceVersion` gate did before, and it
+    /// is no staler: every mutation that changes a sequence bumps that version.
+    func memoizedSequence(
+        _ slot: inout SequenceMemo?,
+        for playlist: Playlist?,
+        compute: (Playlist) -> [PersistentIdentifier]
+    ) -> [PersistentIdentifier] {
+        _ = sequenceVersion
+        let id = playlist?.persistentModelID
+        if let slot, slot.version == sequenceVersion, slot.playlistID == id {
+            return slot.ids
+        }
+        let ids = playlist.map(compute) ?? []
+        slot = SequenceMemo(version: sequenceVersion, playlistID: id, ids: ids)
+        return ids
     }
 
     /// The user-facing message the app-root alert presents for a save failure, wrapping the

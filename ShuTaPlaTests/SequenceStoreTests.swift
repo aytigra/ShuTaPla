@@ -123,6 +123,18 @@ struct SequenceStoreTests {
             == context.playbackFiles(of: playlist).map(\.fileName))
         #expect(playlist.hasPlaybackFiles == context.hasPlaybackFiles(in: playlist))
         #expect(playlist.serviceFilterCounts == context.serviceFilterCounts(for: playlist))
+        #expect(playlist.fileCount == context.fileCount(in: playlist))
+    }
+
+    @Test func fileCountMatchesRelationshipCount() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // A `fetchCount` badge equals faulting the whole relationship — without materializing it.
+        // Counts every file regardless of triage/skip state (the row badge is the raw total).
+        #expect(context.fileCount(in: playlist) == 6)
+        #expect(context.fileCount(in: playlist) == playlist.files.count)
     }
 
     @Test func unsavedInsertIsNotYetVisible() throws {

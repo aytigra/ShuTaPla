@@ -118,7 +118,7 @@ struct LibrarySurface: View {
                 } else if appState.busyPlaylistIDs.contains(playlist.id) {
                     ProgressView().controlSize(.small)
                 } else {
-                    Text("\(playlist.files.count)")
+                    Text("\(playlist.fileCount)")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }

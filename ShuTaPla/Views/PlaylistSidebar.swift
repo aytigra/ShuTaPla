@@ -149,7 +149,7 @@ struct PlaylistSidebar: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Text("\(playlist.files.count)")
+                        Text("\(playlist.fileCount)")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }

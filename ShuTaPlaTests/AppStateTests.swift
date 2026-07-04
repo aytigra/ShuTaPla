@@ -868,6 +868,27 @@ struct AppStateTests {
         #expect(appState.scrollSelectionToken == tokenBefore + 1)   // list re-centers
     }
 
+    /// The contract TagSidebar's editor input depends on: the store-side `selectedManagerFiles()`
+    /// yields the selected files in display (sortOrder) order — equal to filtering the whole
+    /// `playlist.files` relationship and sorting it, the walk the sidebar used to do inline.
+    @Test func selectedManagerFilesMatchesFilteredRelationshipInDisplayOrder() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (playlist, files) = makeFilterPlaylist(count: 5, tags: [], in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        // A multi-file selection given out of display order.
+        appState.managerSelection = [files[3].id, files[1].id, files[4].id]
+
+        let relationshipWalk = playlist.files
+            .filter { appState.managerSelection.contains($0.id) }
+            .sorted { $0.sortOrder < $1.sortOrder }
+        #expect(appState.selectedManagerFiles().map(\.id) == relationshipWalk.map(\.id))
+        #expect(appState.selectedManagerFiles().map(\.id) == [files[1].id, files[3].id, files[4].id])
+    }
+
     // MARK: - Per-filter resume restore — live audio channel (Step 4)
     //
     // The restore's live branch on a real engine: a filter change on a *playing* audio playlist
@@ -1132,6 +1153,42 @@ struct AppStateTests {
         let ids = appState.managerFileIDs
         #expect(ids == context.displaySequence(of: playlist))
         #expect(ids.compactMap { appState.file(for: $0)?.fileName } == ["a.mp4", "b.mp4", "c.mp4"])
+    }
+
+    /// The memoized sequence accessors re-derive exactly when the store-side result can change:
+    /// a `sequenceVersion` bump (any persisted membership/order/filter mutation) or a switch of
+    /// the accessor's source playlist. Within one version-and-playlist they reuse the last result
+    /// instead of re-fetching. Passes on the un-memoized accessor too (which always refetches), so
+    /// it pins the contract the memoization must preserve.
+    @Test func sequenceAccessorsReDeriveOnVersionBumpAndPlaylistSwitch() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .video, sortOrder: 0)
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .video, sortOrder: 1)
+        context.insert(a)
+        context.insert(b)
+        addFile("a1.mp4", order: 0, to: a, in: context)
+        addFile("a2.mp4", order: 1, to: a, in: context)
+        addFile("b1.mp4", order: 0, to: b, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.managedPlaylist = a
+
+        // Repeated reads at the same version and playlist agree with the store derivation.
+        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4"])
+
+        // A saved insert visible only after a version bump (the mutation contract) re-derives.
+        addFile("a3.mp4", order: 2, to: a, in: context)
+        appState.sequenceVersion &+= 1
+        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4", "a3.mp4"])
+
+        // Switching the managed playlist re-derives without a version bump (keyed on identity)…
+        appState.managedPlaylist = b
+        #expect(appState.managerFiles.map(\.fileName) == ["b1.mp4"])
+
+        // …and switching back returns A's current sequence, not a stale slot.
+        appState.managedPlaylist = a
+        #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4", "a3.mp4"])
     }
 
     // MARK: - Filtering (Task 7)

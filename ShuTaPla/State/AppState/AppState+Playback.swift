@@ -18,8 +18,9 @@ extension AppState {
     /// The managed playlist's display-ordered file identifiers under its effective filter — the
     /// Manager center list/gallery, resolved row-by-row as it scrolls.
     var managerFileIDs: [PersistentIdentifier] {
-        _ = sequenceVersion
-        return managedPlaylist.map { modelContext.displaySequence(of: $0) } ?? []
+        memoizedSequence(&managerFileIDsMemo, for: managedPlaylist) {
+            modelContext.displaySequence(of: $0)
+        }
     }
 
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
@@ -44,8 +45,9 @@ extension AppState {
     /// is therefore empty. The service filter set in Manager still applies (e.g. Untagged
     /// narrows the channel to its untagged playable tracks).
     var audioChannelFileIDs: [PersistentIdentifier] {
-        _ = sequenceVersion
-        return audioChannelPlaylist.map { modelContext.playbackSequence(of: $0) } ?? []
+        memoizedSequence(&audioChannelFileIDsMemo, for: audioChannelPlaylist) {
+            modelContext.playbackSequence(of: $0)
+        }
     }
 
     /// The visual channel playlist's display-ordered file identifiers — the Visual
@@ -53,8 +55,9 @@ extension AppState {
     /// files under the Skipped filter), because the Visual Overlay is an editing surface
     /// where skipped rows are triaged and un-skipped.
     var visualChannelFileIDs: [PersistentIdentifier] {
-        _ = sequenceVersion
-        return coordinator.liveVisualPlaylist.map { modelContext.displaySequence(of: $0) } ?? []
+        memoizedSequence(&visualChannelFileIDsMemo, for: coordinator.liveVisualPlaylist) {
+            modelContext.displaySequence(of: $0)
+        }
     }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.

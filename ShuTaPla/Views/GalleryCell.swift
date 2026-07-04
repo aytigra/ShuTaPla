@@ -1,47 +1,17 @@
 //
-//  FileGalleryView.swift
+//  GalleryCell.swift
 //  ShuTaPla
 //
-//  The Manager center gallery: a `LazyVGrid` of thumbnail cells over the same
-//  filtered files as the list view (`AppState.managerFileIDs`). Selection, rename,
-//  scroll, and the context menu are handled by the shared `FileCollectionView`;
-//  this names the gallery presentation and supplies the cell. Each cell loads its
-//  thumbnail asynchronously and cancels the load when scrolled off-screen.
+//  One gallery tile in the Manager center: an async-loaded thumbnail with the filename
+//  (or an inline rename field) beneath it, plus a selection highlight and metadata badges.
+//  The gallery presentation of `FileCollectionView`; the list presentation's row is
+//  `FileRowView`.
 //
 
 import SwiftUI
 import AppKit
 
-struct FileGalleryView: View {
-    let playlist: Playlist
-    let confirmDelete: ([PlaylistFile]) -> Void
-    let reportError: (String) -> Void
-
-    var body: some View {
-        FileCollectionView(
-            playlist: playlist,
-            layout: .gallery,
-            confirmDelete: confirmDelete,
-            reportError: reportError
-        ) { config in
-            GalleryCell(
-                file: config.file,
-                playlist: config.playlist,
-                isSelected: config.isSelected,
-                isCurrent: config.isCurrent,
-                isRenaming: config.isRenaming,
-                isStripping: config.isStripping,
-                draftName: config.draftName,
-                onCommitRename: config.onCommitRename,
-                onCancelRename: config.onCancelRename
-            )
-        }
-    }
-}
-
-/// One gallery tile: an async-loaded thumbnail with the filename (or an inline
-/// rename field) beneath it, plus a selection highlight.
-private struct GalleryCell: View {
+struct GalleryCell: View {
     let file: PlaylistFile
     let playlist: Playlist
     let isSelected: Bool

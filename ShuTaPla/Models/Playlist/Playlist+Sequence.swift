@@ -29,6 +29,13 @@ extension Playlist {
         modelContext?.hasPlaybackFiles(in: self) ?? false
     }
 
+    /// The total file count for the sidebar row badge, answered with a `fetchCount` — never
+    /// faults the whole `files` relationship. Falls back to the in-memory relationship only
+    /// when detached from a context.
+    var fileCount: Int {
+        modelContext?.fileCount(in: self) ?? files.count
+    }
+
     /// The three triage counts — untagged / invalid-tagging / skipped — for the notice bar.
     var serviceFilterCounts: (untagged: Int, invalidTagging: Int, skipped: Int) {
         modelContext?.serviceFilterCounts(for: self) ?? (0, 0, 0)

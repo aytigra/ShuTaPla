@@ -45,16 +45,9 @@ struct TagSidebar: View {
                 FilterBar(playlist: playlist)
                     .zIndex(1)
                 Divider()
-                TagEditorView(playlist: playlist, files: selectedFiles(in: playlist))
+                TagEditorView(playlist: playlist, files: appState.selectedManagerFiles())
                 Spacer(minLength: 0)
             }
         }
-    }
-
-    /// The active scope's selected files within this playlist, in display order.
-    private func selectedFiles(in playlist: Playlist) -> [PlaylistFile] {
-        playlist.files
-            .filter { appState.managerSelection.contains($0.id) }
-            .sorted { $0.sortOrder < $1.sortOrder }
     }
 }

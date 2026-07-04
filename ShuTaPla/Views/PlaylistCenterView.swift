@@ -84,19 +84,16 @@ struct PlaylistCenterView: View {
     private func center(_ playlist: Playlist) -> some View {
         VStack(spacing: 0) {
             noticeBar(playlist)
-            if playlist.mediaType != .audio, playlist.preferences.viewMode == .gallery {
-                FileGalleryView(
-                    playlist: playlist,
-                    confirmDelete: { appState.requestManagerDelete($0) },
-                    reportError: { errorMessage = $0 }
-                )
-            } else {
-                FileListView(
-                    playlist: playlist,
-                    confirmDelete: { appState.requestManagerDelete($0) },
-                    reportError: { errorMessage = $0 }
-                )
-            }
+            // One view type across every scope switch: audio has no gallery, so it is always
+            // the list. Passing the presentation as `layout` (rather than picking between two
+            // view types) keeps the browser's identity and scroll/selection state when the
+            // scope changes between a gallery and a list playlist.
+            FileCollectionView(
+                playlist: playlist,
+                layout: playlist.mediaType != .audio && playlist.preferences.viewMode == .gallery ? .gallery : .list,
+                confirmDelete: { appState.requestManagerDelete($0) },
+                reportError: { errorMessage = $0 }
+            )
         }
     }
 
