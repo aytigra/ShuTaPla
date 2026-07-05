@@ -548,7 +548,6 @@ import SwiftData
 
         coordinator.play(audio)
         #expect(coordinator.audioCurrentFile?.id == tracks.first?.id)
-        #expect(coordinator.audioDuration >= 0)
     }
 
     @Test func reconcileAudioJumpsWhenCurrentTrackFilteredOut() throws {

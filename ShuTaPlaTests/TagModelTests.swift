@@ -54,8 +54,8 @@ struct TagModelTests {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
         context.insert(playlist)
 
-        let a = PlaylistFile(relativePath: "a.jpg", fileName: "a.jpg", taggingStatus: .valid, sortOrder: 0)
-        let b = PlaylistFile(relativePath: "b.jpg", fileName: "b.jpg", taggingStatus: .valid, sortOrder: 1)
+        let a = PlaylistFile(relativePath: "a [beach].jpg", fileName: "a [beach].jpg", taggingStatus: .valid, sortOrder: 0)
+        let b = PlaylistFile(relativePath: "b [beach].jpg", fileName: "b [beach].jpg", taggingStatus: .valid, sortOrder: 1)
         a.playlist = playlist; b.playlist = playlist
         context.insert(a); context.insert(b)
         a.tags = context.tags(named: ["beach"])
@@ -65,7 +65,7 @@ struct TagModelTests {
         // One shared Tag row, carrying both files via the inverse.
         let tags = try context.fetch(FetchDescriptor<Tag>())
         #expect(tags.count == 1)
-        #expect(Set(tags.first?.files.map(\.fileName) ?? []) == ["a.jpg", "b.jpg"])
+        #expect(Set(tags.first?.files.map(\.fileName) ?? []) == ["a [beach].jpg", "b [beach].jpg"])
         #expect(a.tags.map(\.name) == ["beach"])
     }
 

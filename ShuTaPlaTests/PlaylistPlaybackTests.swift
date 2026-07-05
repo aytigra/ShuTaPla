@@ -37,9 +37,9 @@ struct PlaylistPlaybackTests {
     private func seededPlaylist(in context: ModelContext) throws -> Playlist {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
-        addFile("tagged.mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("tagged [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
         addFile("untagged.mp4", status: .untagged, order: 1, to: playlist, in: context)
-        addFile("invalid.mp4", status: .invalid, order: 2, to: playlist, in: context)
+        addFile("invalid [ab].mp4", status: .invalid, order: 2, to: playlist, in: context)
         addFile("skip.jpg", status: .untagged, skipped: true, order: 3, to: playlist, in: context)
         try context.save()
         return playlist
@@ -50,8 +50,8 @@ struct PlaylistPlaybackTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged.mp4", "untagged.mp4", "invalid.mp4"])
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged.mp4", "untagged.mp4", "invalid.mp4"])
+        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4", "untagged.mp4", "invalid [ab].mp4"])
+        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4", "untagged.mp4", "invalid [ab].mp4"])
         #expect(context.hasPlaybackFiles(in: playlist))
     }
 
@@ -62,8 +62,8 @@ struct PlaylistPlaybackTests {
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
         try context.save()
 
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged.mp4"])
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged.mp4"])
+        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
+        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
         #expect(context.hasPlaybackFiles(in: playlist))
     }
 
@@ -87,7 +87,7 @@ struct PlaylistPlaybackTests {
         playlist.filterState.serviceFilter = .invalidTagging
         try context.save()
 
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["invalid.mp4"])
+        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["invalid [ab].mp4"])
         #expect(context.hasPlaybackFiles(in: playlist))
     }
 

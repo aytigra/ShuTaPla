@@ -44,7 +44,7 @@ struct SequenceStoreTests {
         addFile("b [beach sunny].jpg", tags: ["beach", "sunny"], status: .valid, order: 1, to: playlist, in: context)
         addFile("c [sunny].jpg", tags: ["sunny"], status: .valid, order: 2, to: playlist, in: context)
         addFile("untagged.jpg", status: .untagged, order: 3, to: playlist, in: context)
-        addFile("invalid.jpg", status: .invalid, order: 4, to: playlist, in: context)
+        addFile("invalid [ab].jpg", status: .invalid, order: 4, to: playlist, in: context)
         addFile("skip.txt", status: .untagged, skipped: true, order: 5, to: playlist, in: context)
         try context.save()
         return playlist
@@ -55,7 +55,7 @@ struct SequenceStoreTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        let nonSkipped = ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg", "untagged.jpg", "invalid.jpg"]
+        let nonSkipped = ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"]
         #expect(names(context.displaySequence(of: playlist), in: context) == nonSkipped)
         #expect(names(context.playbackSequence(of: playlist), in: context) == nonSkipped)
         #expect(context.hasPlaybackFiles(in: playlist))
@@ -79,8 +79,8 @@ struct SequenceStoreTests {
 
         playlist.filterState.serviceFilter = .invalidTagging
         try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == ["invalid.jpg"])
-        #expect(names(context.playbackSequence(of: playlist), in: context) == ["invalid.jpg"])
+        #expect(names(context.displaySequence(of: playlist), in: context) == ["invalid [ab].jpg"])
+        #expect(names(context.playbackSequence(of: playlist), in: context) == ["invalid [ab].jpg"])
         #expect(context.hasPlaybackFiles(in: playlist))
 
         playlist.filterState.serviceFilter = .skipped

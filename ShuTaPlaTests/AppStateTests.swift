@@ -30,10 +30,11 @@ private func makeTempDir() throws -> URL {
     return url
 }
 
-private func scanned(_ name: String, _ type: MediaType, tags: [String] = []) -> ScannedFile {
-    ScannedFile(
+private func scanned(_ name: String, _ type: MediaType) -> ScannedFile {
+    let (tagNames, taggingStatus) = TagParser.fields(for: name)
+    return ScannedFile(
         relativePath: name, fileName: name, mediaType: type, cloudStatus: .local,
-        tagNames: tags, taggingStatus: tags.isEmpty ? .untagged : .valid
+        tagNames: tagNames, taggingStatus: taggingStatus
     )
 }
 
@@ -230,7 +231,7 @@ struct AppStateTests {
         let container = try makeContainer()
         let context = container.mainContext
         let result = ScanResult(
-            files: [scanned("a.mp4", .video), scanned("b.mp4", .video, tags: ["beach"])],
+            files: [scanned("a.mp4", .video), scanned("b [beach].mp4", .video)],
             counts: [.video: 2],
             dominantType: .video
         )
@@ -389,7 +390,7 @@ struct AppStateTests {
         let container = try makeContainer()
         let context = container.mainContext
         let result = ScanResult(
-            files: [scanned("a.mp4", .video), scanned("b [beach].mp4", .video, tags: ["beach"])],
+            files: [scanned("a.mp4", .video), scanned("b [beach].mp4", .video)],
             counts: [.video: 2],
             dominantType: .video
         )
@@ -516,7 +517,7 @@ struct AppStateTests {
         )
         // The folder now holds the survivor b.mp4 and the new c.mp4 (tagged), with a.mp4 gone
         // (absent from the listing, so the reconcile prunes it).
-        let rescanResult = [scanned("b.mp4", .video), scanned("c.mp4", .video, tags: ["beach"])]
+        let rescanResult = [scanned("b.mp4", .video), scanned("c [beach].mp4", .video)]
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: result, rescanResult: rescanResult))
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -532,7 +533,7 @@ struct AppStateTests {
         await appState.update(playlist)
 
         let names = Set(storedFiles(of: playlist).map(\.fileName))
-        #expect(names == ["b.mp4", "c.mp4"])
+        #expect(names == ["b.mp4", "c [beach].mp4"])
         // The scan rebuilds tag counts on the actor's context; `applyScanResult` refaults the held
         // playlist, so its `tagFrequency` reflects the committed counts.
         #expect(playlist.tagFrequency["beach"] == 1)
@@ -757,8 +758,9 @@ struct AppStateTests {
     ) -> (Playlist, [PlaylistFile]) {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
         context.insert(playlist)
+        let suffix = tags.isEmpty ? "" : " [\(tags.joined(separator: " "))]"
         let files = (0..<count).map {
-            addFile("f\($0).jpg", tags: tags, status: tags.isEmpty ? .untagged : .valid,
+            addFile("f\($0)\(suffix).jpg", tags: tags, status: tags.isEmpty ? .untagged : .valid,
                     order: $0, to: playlist, in: context)
         }
         return (playlist, files)
@@ -767,9 +769,9 @@ struct AppStateTests {
     @Test func clearingFilterRestoresUnfilteredSlot() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["a"], in: context)
+        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 2
-        playlist.filterState = FilterState(selectedTags: ["a"], filterMode: .and)
+        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -783,13 +785,13 @@ struct AppStateTests {
     @Test func applyingSavedSearchRestoresItsSlot() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        // Only f0 and f2 carry "a", so the search's sequence is {f0, f2}.
+        // Only f0 and f2 carry "aaa", so the search's sequence is {f0, f2}.
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
         context.insert(playlist)
-        let files = ["a", "b", "a", "b"].enumerated().map { index, tag in
-            addFile("f\(index).jpg", tags: [tag], status: .valid, order: index, to: playlist, in: context)
+        let files = ["aaa", "bbb", "aaa", "bbb"].enumerated().map { index, tag in
+            addFile("f\(index) [\(tag)].jpg", tags: [tag], status: .valid, order: index, to: playlist, in: context)
         }
-        let search = SavedSearch(tags: ["a"], mode: .and, resumeSortOrder: 2)
+        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
         playlist.savedSearches = [search]
         playlist.currentFileID = files[0].id
         try context.save()
@@ -798,15 +800,15 @@ struct AppStateTests {
 
         appState.applySavedSearch(search, on: playlist)
 
-        #expect(playlist.currentFileID == files[2].id)   // first "a" file at-or-after order 2
+        #expect(playlist.currentFileID == files[2].id)   // first "aaa" file at-or-after order 2
     }
 
     @Test func restoreWrapsWhenStoredOrderPastSequence() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["a"], in: context)
+        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 99   // past the last file
-        playlist.filterState = FilterState(selectedTags: ["a"], filterMode: .and)
+        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
         playlist.currentFileID = files[1].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -820,13 +822,13 @@ struct AppStateTests {
     @Test func adHocFilterLeavesCursorUntouched() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["a"], in: context)
+        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.currentFileID = files[1].id   // unfiltered, no slot stored
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.toggleFilterTag("a", on: playlist)   // ad-hoc (no matching saved search)
+        appState.toggleFilterTag("aaa", on: playlist)   // ad-hoc (no matching saved search)
 
         #expect(playlist.activeResumeSlot == nil)
         #expect(playlist.currentFileID == files[1].id)   // still in the filtered set, cursor kept
@@ -835,7 +837,7 @@ struct AppStateTests {
     @Test func serviceFilterRestoresNothing() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["a"], in: context)
+        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 2   // the tag side has a slot; the service side must ignore it
         playlist.currentFileID = files[0].id
         try context.save()
@@ -850,9 +852,9 @@ struct AppStateTests {
     @Test func filterChangeRecentersManagedSelection() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["a"], in: context)
+        let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 2
-        playlist.filterState = FilterState(selectedTags: ["a"], filterMode: .and)
+        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -897,30 +899,35 @@ struct AppStateTests {
     // empty placeholders, so the channel never decodes — only the jump's bookkeeping is observed.
 
     /// A saved-and-inserted audio playlist over a real bookmarked folder of empty files, so the
-    /// coordinator's scoped access resolves and a live channel can start. f0…f3 carry `tags`.
+    /// coordinator's scoped access resolves and a live channel can start. File `i` is named for its
+    /// `tags[i]` (bracketed when tagged), and the on-disk fixtures match, so the seeded tags are
+    /// exactly what the name parses to. Returns the folder too, for cleanup.
     @MainActor
     private func makeAudioPlaylist(
-        tags: [[String]], folder: (url: URL, bookmark: Data), in context: ModelContext
-    ) -> (Playlist, [PlaylistFile]) {
+        tags: [[String]], in context: ModelContext
+    ) throws -> (folder: (url: URL, bookmark: Data), playlist: Playlist, files: [PlaylistFile]) {
+        let names = tags.enumerated().map { index, fileTags in
+            fileTags.isEmpty ? "f\(index).mp3" : "f\(index) [\(fileTags.joined(separator: " "))].mp3"
+        }
+        let folder = try makeBookmarkedFolder(names)
         let playlist = Playlist(name: "Tunes", folderBookmark: folder.bookmark,
                                 folderPath: folder.url.path(percentEncoded: false), mediaType: .audio)
         context.insert(playlist)
-        let files = tags.enumerated().map { index, fileTags in
-            addFile("f\(index).mp3", tags: fileTags, status: fileTags.isEmpty ? .untagged : .valid,
+        let files = zip(names, tags).enumerated().map { index, pair in
+            addFile(pair.0, tags: pair.1, status: pair.1.isEmpty ? .untagged : .valid,
                     order: index, to: playlist, in: context)
         }
-        return (playlist, files)
+        return (folder, playlist, files)
     }
 
     @Test func liveAudioJumpsToRestoredFileOnFilterChange() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let folder = try makeBookmarkedFolder(["f0.mp3", "f1.mp3", "f2.mp3", "f3.mp3"])
-        defer { try? FileManager.default.removeItem(at: folder.url) }
         // The search's sequence is {f1, f2}; resume order 2 lands on f2.
-        let (playlist, files) = makeAudioPlaylist(
-            tags: [["x"], ["a"], ["a"], ["x"]], folder: folder, in: context)
-        let search = SavedSearch(tags: ["a"], mode: .and, resumeSortOrder: 2)
+        let (folder, playlist, files) = try makeAudioPlaylist(
+            tags: [["xxx"], ["aaa"], ["aaa"], ["xxx"]], in: context)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
         playlist.savedSearches = [search]
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -939,11 +946,10 @@ struct AppStateTests {
     @Test func nonLiveAudioFilterChangeOnlyMovesCursor() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let folder = try makeBookmarkedFolder(["f0.mp3", "f1.mp3", "f2.mp3", "f3.mp3"])
+        let (folder, playlist, files) = try makeAudioPlaylist(
+            tags: [["xxx"], ["aaa"], ["aaa"], ["xxx"]], in: context)
         defer { try? FileManager.default.removeItem(at: folder.url) }
-        let (playlist, files) = makeAudioPlaylist(
-            tags: [["x"], ["a"], ["a"], ["x"]], folder: folder, in: context)
-        let search = SavedSearch(tags: ["a"], mode: .and, resumeSortOrder: 2)
+        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
         playlist.savedSearches = [search]
         playlist.currentFileID = files[0].id
         try context.save()
@@ -965,8 +971,8 @@ struct AppStateTests {
         let image = Playlist(name: "Pics", folderBookmark: folder.bookmark,
                              folderPath: folder.url.path(percentEncoded: false), mediaType: .image)
         context.insert(image)
-        let f0 = addFile("f0.jpg", tags: ["a"], status: .valid, order: 0, to: image, in: context)
-        addFile("f1.jpg", tags: ["a"], status: .valid, order: 1, to: image, in: context)
+        let f0 = addFile("f0.jpg", order: 0, to: image, in: context)
+        addFile("f1.jpg", order: 1, to: image, in: context)
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -1238,8 +1244,8 @@ struct AppStateTests {
         // The folder on disk still holds the same tagged filenames; the scan derives their tags
         // (off-main) and the apply re-mirrors them onto the empty relationship.
         let rescanResult = [
-            scanned("a [beach].jpg", .image, tags: ["beach"]),
-            scanned("b [beach sunny].jpg", .image, tags: ["beach", "sunny"]),
+            scanned("a [beach].jpg", .image),
+            scanned("b [beach sunny].jpg", .image),
             scanned("c.jpg", .image),
         ]
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanResult: rescanResult))
@@ -1278,13 +1284,13 @@ struct AppStateTests {
         )
         await appState.update(a)
 
-        func tagExists(_ normalized: String) -> Bool {
+        func tagExists(_ normalized: String) throws -> Bool {
             var descriptor = FetchDescriptor<ShuTaPla.Tag>(predicate: #Predicate { $0.normalizedName == normalized })
             descriptor.fetchLimit = 1
-            return ((try? context.fetch(descriptor))?.first) != nil
+            return try context.fetch(descriptor).first != nil
         }
-        #expect(!tagExists("gone"))     // dropped from every filename → cleaned up
-        #expect(tagExists("shared"))    // still carried by B's file → kept
+        #expect(try !tagExists("gone"))     // dropped from every filename → cleaned up
+        #expect(try tagExists("shared"))    // still carried by B's file → kept
     }
 
     @Test func serviceFilterOverridesAndRestoresTagFilter() async throws {
@@ -1542,7 +1548,7 @@ struct AppStateTests {
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         context.insert(playlist)
-        addFile("a.mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
 
@@ -1558,7 +1564,7 @@ struct AppStateTests {
         // Re-applying the older one recalls it and moves it to the top (no dupe).
         appState.applySavedSearch(SavedSearch(tags: ["beach"], mode: .and), on: playlist)
         #expect(playlist.filterState.selectedTags == ["beach"])
-        #expect(appState.managerFiles.map(\.fileName) == ["a.mp4"])
+        #expect(appState.managerFiles.map(\.fileName) == ["a [beach sun].mp4"])
         #expect(playlist.savedSearches.count == 2)
         #expect(playlist.savedSearches.first?.tags == ["beach"])
 
@@ -1762,8 +1768,8 @@ struct AppStateTests {
         let context = container.mainContext
         let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
         context.insert(audio)
-        addFile("1.mp3", tags: ["jazz", "mellow"], status: .valid, order: 0, to: audio, in: context)
-        addFile("2.mp3", tags: ["jazz"], status: .valid, order: 1, to: audio, in: context)
+        addFile("1 [jazz mellow].mp3", tags: ["jazz", "mellow"], status: .valid, order: 0, to: audio, in: context)
+        addFile("2 [jazz].mp3", tags: ["jazz"], status: .valid, order: 1, to: audio, in: context)
         addFile("3.mp3", order: 2, to: audio, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
@@ -1771,13 +1777,13 @@ struct AppStateTests {
         #expect(appState.audioChannelFiles.count == 3)
 
         appState.toggleFilterTag("jazz", on: audio)
-        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1 [jazz mellow].mp3", "2 [jazz].mp3"])
 
         appState.toggleFilterTag("mellow", on: audio)       // AND jazz + mellow
-        #expect(appState.audioChannelFiles.map(\.fileName) == ["1.mp3"])
+        #expect(appState.audioChannelFiles.map(\.fileName) == ["1 [jazz mellow].mp3"])
 
         appState.setFilterMode(.or, on: audio)              // jazz OR mellow
-        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1.mp3", "2.mp3"])
+        #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1 [jazz mellow].mp3", "2 [jazz].mp3"])
 
         appState.clearTagFilter(on: audio)
         #expect(appState.audioChannelFiles.count == 3)
@@ -2142,7 +2148,7 @@ struct AppStateTests {
         let context = container.mainContext
         let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
         context.insert(audio)
-        let tagged = addFile("1.mp3", tags: ["jazz"], status: .valid, order: 0, to: audio, in: context)
+        let tagged = addFile("1 [jazz].mp3", tags: ["jazz"], status: .valid, order: 0, to: audio, in: context)
         addFile("2.mp3", order: 1, to: audio, in: context)
         audio.currentFileID = tagged.id
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -2176,7 +2182,6 @@ struct AppStateTests {
         // playable, so they must not appear in it, and a skipped resume track must not resolve as
         // the current (transport) track. Under the Skipped filter nothing is playable, so the list
         // is empty.
-        #expect(appState.audioChannelFiles.allSatisfy { !$0.isSkipped })
         #expect(appState.audioChannelFiles.isEmpty)
         #expect(appState.currentAudioFile == nil)
     }
