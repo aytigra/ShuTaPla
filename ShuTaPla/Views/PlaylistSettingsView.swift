@@ -15,6 +15,7 @@ import SwiftUI
 struct PlaylistSettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
+    @Environment(\.dismiss) private var dismiss
     let playlist: Playlist
 
     var body: some View {
@@ -25,11 +26,31 @@ struct PlaylistSettingsView: View {
             case .image: imageSettings(global)
             case .video, .audio: timelineSettings(global)
             }
-            if playlist.mediaType != .audio { gallerySettings() }
+            if playlist.mediaType != .audio {
+                gallerySettings()
+                duplicatesSection()
+            }
         }
         .formStyle(.grouped)
         .frame(width: 320)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Find duplicates
+
+    /// Runs the find-duplicates tool: the Manager center regroups its files by content so
+    /// duplicates sit together, until a filter interaction or playlist switch returns it. Only
+    /// files with a generated thumbnail carry the content fingerprint it compares.
+    @ViewBuilder
+    private func duplicatesSection() -> some View {
+        Section {
+            Button("Find Duplicates") {
+                appState.findDuplicates(in: playlist)
+                dismiss()
+            }
+        } footer: {
+            Text("Groups files with identical content in the center list. Compares only files that have a generated thumbnail.")
+        }
     }
 
     // MARK: - Image

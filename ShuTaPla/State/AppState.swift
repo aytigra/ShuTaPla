@@ -98,6 +98,11 @@ final class AppState {
     /// The tag inspector reads this.
     var managerSelection: Set<UUID> = []
 
+    /// True while the Manager center shows the find-duplicates grouping instead of the ordinary
+    /// display sequence — a transient, runtime-only mode (never persisted). Set through
+    /// `setDuplicateSearch`; cleared by any filter edit and by a managed-playlist switch.
+    var duplicateSearchActive = false
+
     /// Bumped by `manage` to ask the file list to scroll its selection into view,
     /// even when the selection itself didn't change — so re-clicking the current
     /// playlist re-centers the playing file. The list observes the change only.

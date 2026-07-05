@@ -65,6 +65,7 @@ extension AppState {
     /// falls back to the reconcile (advance only if the current file left the set). The managed
     /// playlist re-centers its selection on the resulting cursor.
     private func filterChanged(on playlist: Playlist) {
+        if managedPlaylist === playlist { setDuplicateSearch(false) }   // filtering exits find-duplicates
         persistAndRefresh()   // the new filter must be in the store before the sequence/slot are read
 
         if let target = restoreTarget(for: playlist) {

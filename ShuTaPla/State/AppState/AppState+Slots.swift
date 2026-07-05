@@ -91,6 +91,7 @@ extension AppState {
     /// whole Manager binds to it. The one load step that makes a playlist managed; playback is a
     /// separate concern handled by the callers that start it.
     func setManaged(_ playlist: Playlist) {
+        setDuplicateSearch(false)   // find-duplicates is scoped to one managed playlist; a switch exits it
         remember(playlist)
         managedPlaylist = playlist
         managerScope = playlist.mediaType
@@ -102,6 +103,7 @@ extension AppState {
     /// managed playlist, so it clears and re-seeds on the new playlist's resume file.
     func switchScope(to scope: MediaType) {
         guard scope != managerScope else { return }
+        setDuplicateSearch(false)   // the mode is scoped to one managed playlist; a scope switch exits it
         managerScope = scope
         appStateModel.managerScopeRaw = scope.rawValue
         managedPlaylist = rememberedPlaylist(for: scope)

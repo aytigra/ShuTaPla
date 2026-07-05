@@ -1235,6 +1235,119 @@ struct AppStateTests {
         #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4", "a3.mp4"])
     }
 
+    // MARK: - Find duplicates (Stage 3)
+
+    /// `duplicateSequence` keeps only files whose fingerprint recurs (count ≥ 2), drops singletons
+    /// and never-thumbnailed (`nil`) files, and groups each duplicate set adjacently, ordered by
+    /// fingerprint.
+    @Test func duplicateSequenceGroupsRecurringFingerprintsAndDropsSingletons() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        addFile("a.jpg", order: 0, to: playlist, in: context).fingerprint = "fp1"
+        addFile("b.jpg", order: 1, to: playlist, in: context).fingerprint = "fp2"
+        addFile("c.jpg", order: 2, to: playlist, in: context).fingerprint = "fp1"   // pairs with a
+        addFile("d.jpg", order: 3, to: playlist, in: context)                       // nil → dropped
+        addFile("e.jpg", order: 4, to: playlist, in: context).fingerprint = "fp2"   // pairs with b
+        addFile("f.jpg", order: 5, to: playlist, in: context).fingerprint = "fp3"   // singleton → dropped
+        try context.save()
+
+        let names = context.duplicateSequence(of: playlist)
+            .compactMap { context.model(for: $0) as? PlaylistFile }.map(\.fileName)
+        #expect(names == ["a.jpg", "c.jpg", "b.jpg", "e.jpg"])
+    }
+
+    /// Entering the mode swaps `managerFileIDs` from the display sequence to the duplicate grouping,
+    /// clears the selection (made against the other sequence), and bumps the version so the list
+    /// re-derives; leaving restores the display sequence. A no-op call neither resets nor bumps.
+    @Test func duplicateSearchModeSwapsManagerSequenceAndResetsSelection() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context); a.fingerprint = "fp1"
+        let b = addFile("b.jpg", order: 1, to: playlist, in: context); b.fingerprint = "fp2"
+        addFile("c.jpg", order: 2, to: playlist, in: context).fingerprint = "fp1"   // pairs with a
+        addFile("d.jpg", order: 3, to: playlist, in: context)                       // nil → not a duplicate
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        appState.managerSelection = [a.id, b.id]
+
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
+        let versionBefore = appState.sequenceVersion
+
+        appState.setDuplicateSearch(true)
+        #expect(appState.duplicateSearchActive)
+        #expect(appState.managerSelection.isEmpty)                       // selection reset on entry
+        #expect(appState.sequenceVersion > versionBefore)                // re-derives the list
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "c.jpg"])   // only the fp1 pair
+
+        appState.setDuplicateSearch(false)
+        #expect(!appState.duplicateSearchActive)
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
+
+        // A no-op call (already inactive) leaves the selection and version untouched.
+        appState.managerSelection = [a.id]
+        let versionRest = appState.sequenceVersion
+        appState.setDuplicateSearch(false)
+        #expect(appState.managerSelection == [a.id])
+        #expect(appState.sequenceVersion == versionRest)
+    }
+
+    /// Deleting a duplicate while the mode is active recomputes the grouping *within* the mode: the
+    /// trashed file drops, and a fingerprint now down to a single copy stops recurring so its group
+    /// dissolves — without leaving the mode. The crux the tool exists for.
+    @Test func deletingInDuplicateModeRecomputesAndCollapsesWithoutExiting() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context); a.fingerprint = "AA"
+        addFile("b.jpg", order: 1, to: playlist, in: context).fingerprint = "AA"   // pairs with a
+        addFile("c.jpg", order: 2, to: playlist, in: context).fingerprint = "BB"
+        addFile("d.jpg", order: 3, to: playlist, in: context).fingerprint = "BB"   // pairs with c
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+
+        appState.setDuplicateSearch(true)
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
+
+        let error = await appState.deleteFiles([a])
+        #expect(error == nil)
+        #expect(appState.duplicateSearchActive)                          // still in the mode
+        #expect(appState.managerFiles.map(\.fileName) == ["c.jpg", "d.jpg"])   // AA collapsed to one → gone
+    }
+
+    /// A normal filter interaction returns the Manager center to the ordinary display sequence —
+    /// the documented way out of the mode (unlike a delete, which recomputes within it).
+    @Test func filterEditExitsDuplicateSearch() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        addFile("a.jpg", order: 0, to: playlist, in: context).fingerprint = "fp1"
+        addFile("b.jpg", order: 1, to: playlist, in: context).fingerprint = "fp1"
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        appState.setDuplicateSearch(true)
+        #expect(appState.duplicateSearchActive)
+
+        appState.clearTagFilter(on: playlist)   // any filter interaction returns to the ordinary view
+
+        #expect(!appState.duplicateSearchActive)
+        #expect(appState.managerFileIDs == context.displaySequence(of: playlist))
+    }
+
     // MARK: - Filtering (Task 7)
 
     @Test func tagFilterAppliesAndOrCorrectly() async throws {

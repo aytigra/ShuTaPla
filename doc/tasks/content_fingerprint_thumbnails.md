@@ -7,7 +7,7 @@ folder nesting. The persisted fingerprint then unlocks two follow-on features:
 explicit cache management (size / clear / orphan sweep, with the cache moved out
 of the OS-purged Caches directory) and a "has duplicates" service filter.
 
-Status: **Stages 1–2 implemented; Stages 3–6 planned.** Implemented one stage at a
+Status: **Stages 1–3 implemented; Stages 5–6 planned.** Implemented one stage at a
 time, in order; each stage is independently shippable and testable.
 
 ## Problem
@@ -231,16 +231,40 @@ disclaimer ("finds duplicates among thumbnailed files") sets the expectation.
 **It leaves the store-side predicates alone.** Rather than add an arm to the
 effective-filter machinery (`ModelContext+Sequence.swift`, whose every filter is
 one `#Predicate` sorted by `sortOrder` — neither a grouping pass nor a fingerprint
-sort fits), the tool overrides the Manager center's *memoized sequence*
-transiently. `managerFileIDs` (`AppState+Playback.swift:20`) is derived through
-`memoizedSequence` from `displaySequence(of:)`; the tool adds a runtime-only
-override holding a precomputed `[PersistentIdentifier]` — the playlist's files
-whose fingerprint recurs (count ≥ 2), grouped and ordered by fingerprint so
-duplicates sit adjacent. While the override is set, `managerFileIDs` returns it
-instead of the store sequence; clearing it (on dismiss, playlist switch, or a
-filter edit) falls straight back to `displaySequence`. No new column, no
-`FilterState` case, no persistence — a one-shot in-memory list computed from a
-`(id, fingerprint)` fetch.
+sort fits), the tool is a transient **mode** of the Manager center, not a separate
+surface: the center list *is* the duplicate view, fed a different sequence, so the
+existing selection model, list/gallery toggle, keyboard 2-D nav, and delete path
+are reused unchanged.
+
+`managerFileIDs` (`AppState+Playback.swift:20`) is derived through
+`memoizedSequence` from `displaySequence(of:)`. The tool adds a runtime-only flag
+`duplicateSearchActive`; while it is set, the memoized closure derives
+`duplicateSequence(of:)` — the playlist's files whose fingerprint recurs
+(count ≥ 2), grouped and ordered by fingerprint so duplicates sit adjacent —
+instead of `displaySequence`. Because it routes through the *same* memoization, it
+is **a live derivation, not a frozen snapshot**: it recomputes on every
+`sequenceVersion` bump, so deleting a duplicate is the tool working as intended —
+the bump re-derives the grouping, the trashed file drops out, and any fingerprint
+now down to a single copy stops recurring so its group dissolves on its own.
+
+Correctness details:
+
+- **Toggling the flag bumps `sequenceVersion`** (it is a membership change of the
+  center list), so the shared `managerFileIDsMemo` slot never serves a stale
+  other-mode result.
+- **Clearing is explicit and narrow.** The center `noticeBar` shows a "Showing
+  duplicates · Done" banner while active, whose Done button leaves the mode; the
+  filter-bar edits and playlist-switch paths also set `duplicateSearchActive =
+  false` (any normal filter interaction returns to the ordinary view).
+  `deleteFiles` does **not** touch the flag — it only bumps
+  the version — so a delete recomputes *within* duplicate mode instead of exiting
+  it. Delete and filter-edit both bump the version; only the filter-edit path
+  clears the flag, so they stay distinguishable.
+- **Selection is reset on entering and leaving the mode**, so a selection made
+  against one sequence doesn't linger into the other.
+
+No new column, no `FilterState` case, no persistence — a flag plus a
+`(id, fingerprint)` fetch grouped in Swift, invoked inside the memoized closure.
 
 ---
 
@@ -307,18 +331,42 @@ without persisting, would be half a change.)
 - Clear-orphans removes exactly the files whose key no live fingerprint produces
   and keeps the referenced ones (seed a fixture cache dir + a set of records).
 
-### Stage 3 — "Find duplicates" tool 
+### Stage 3 — "Find duplicates" tool
 
 A nearly-free extra over the persisted fingerprint, invoked from
-`PlaylistSettingsView` — not a service filter. Compute the playlist's files whose
-fingerprint recurs (count ≥ 2) from a `(id, fingerprint)` fetch, ordered by
-fingerprint so duplicates are adjacent, and hold the result as a runtime-only
-override of `managerFileIDs`; clear it on dismiss / playlist switch / filter edit.
-No `FilterState` case, no persistence, no change to `ModelContext+Sequence.swift`.
-Show a disclaimer that it compares only thumbnailed files. Test the grouping
-(which fingerprints recur), the fingerprint-ordered result, and that setting and
-clearing the override swaps the Manager sequence and restores it; the coverage
-limit is by design, not a gap to close.
+`PlaylistSettingsView` — not a service filter, but a transient **mode** of the
+Manager center (the center list, fed a different sequence; not a separate view).
+
+1. Add `duplicateSequence(of:)` — a `(id, fingerprint)` fetch over the playlist's
+   files, keeping only fingerprints that recur (count ≥ 2), ordered by fingerprint
+   so duplicates are adjacent. It lives beside the other sequence derivations but
+   groups in Swift rather than through a `#Predicate` (it doesn't fit
+   `ModelContext+Sequence.swift`'s one-predicate-sorted-by-`sortOrder` shape).
+2. Add a runtime-only `duplicateSearchActive` flag on `AppState`. While set,
+   `managerFileIDs`' memoized closure derives `duplicateSequence` instead of
+   `displaySequence`, so it recomputes on every `sequenceVersion` bump (a live
+   derivation, not a frozen list).
+3. Toggling the flag bumps `sequenceVersion` and resets `managerSelection`. The
+   filter-bar edits and playlist-switch paths clear the flag; `deleteFiles` does
+   not (so a delete recomputes within the mode and collapses resolved groups).
+4. Invoke it from `PlaylistSettingsView` (non-audio playlists) with a disclaimer
+   that it compares only thumbnailed files.
+5. Signal the mode and give an explicit exit: the center `noticeBar` shows a
+   "Showing duplicates · Done" banner while active (the Done button calls
+   `setDuplicateSearch(false)`), in place of the triage-count notices.
+
+**Tests (test-first):**
+- `duplicateSequence` keeps only recurring fingerprints (count ≥ 2) and drops
+  singletons and `nil`-fingerprint files.
+- The result is fingerprint-ordered so each duplicate group is adjacent.
+- Toggling `duplicateSearchActive` swaps `managerFileIDs` to the duplicate
+  sequence and clearing it restores `displaySequence`; toggling bumps the version
+  and resets the selection.
+- A delete inside the mode recomputes and collapses a pair (down to one copy) to
+  nothing **without** exiting the mode; a filter edit exits it.
+
+The coverage limit (only thumbnailed files carry a fingerprint) is by design, not
+a gap to close.
 
 ### Stage 5 — Update the primary docs
 

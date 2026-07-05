@@ -34,6 +34,31 @@ extension ModelContext {
         identifiers(matching: playbackPredicate(for: playlist))
     }
 
+    /// The playlist's *duplicate* files — those whose content fingerprint recurs (count ≥ 2) —
+    /// grouped by fingerprint so each duplicate set is adjacent, ordered by fingerprint. The
+    /// find-duplicates tool's sequence, swapped in for `displaySequence` while its mode is active.
+    /// The grouping is a pass in Swift, not a `#Predicate` sorted by `sortOrder`, so it sits here
+    /// rather than in the effective-filter machinery. Only the thumbnail producer fills a
+    /// fingerprint, so a file never shown in the gallery (and every file of a list-only audio
+    /// playlist) carries none and is absent by construction — the tool's documented coverage limit.
+    func duplicateSequence(of playlist: Playlist) -> [PersistentIdentifier] {
+        let pid = playlist.persistentModelID
+        var descriptor = FetchDescriptor<PlaylistFile>(
+            predicate: #Predicate { $0.playlist?.persistentModelID == pid && $0.fingerprint != nil },
+            sortBy: [SortDescriptor(\.fingerprint), SortDescriptor(\.sortOrder)]
+        )
+        descriptor.includePendingChanges = false
+        descriptor.propertiesToFetch = [\.fingerprint]
+        let files = (try? fetch(descriptor)) ?? []
+
+        var counts: [String: Int] = [:]
+        for file in files { counts[file.fingerprint ?? "", default: 0] += 1 }
+        return files.compactMap { file in
+            guard let fingerprint = file.fingerprint, counts[fingerprint, default: 0] >= 2 else { return nil }
+            return file.persistentModelID
+        }
+    }
+
     /// `displaySequence` resolved to models, in order — for callers that need the files
     /// themselves (the Manager and overlay lists, a reconcile that inspects the current file).
     /// This resolves every row, so a surface that shows only part of a large sequence should

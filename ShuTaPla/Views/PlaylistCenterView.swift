@@ -104,11 +104,39 @@ struct PlaylistCenterView: View {
 
     // MARK: - Counter notices
 
+    /// The find-duplicates banner while that mode is active, otherwise the triage counts.
+    @ViewBuilder
+    private func noticeBar(_ playlist: Playlist) -> some View {
+        let _ = appState.sequenceVersion   // re-derive the counts (or the mode) when the sequence changes
+        if appState.duplicateSearchActive {
+            duplicateNotice
+        } else {
+            serviceFilterNotices(playlist)
+        }
+    }
+
+    /// Signals the find-duplicates mode and gives an explicit way out; any filter interaction or
+    /// playlist switch also leaves it.
+    @ViewBuilder
+    private var duplicateNotice: some View {
+        HStack(spacing: 8) {
+            Label("Showing duplicates", systemImage: "square.on.square")
+            Spacer()
+            Button("Done") { appState.setDuplicateSearch(false) }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        Divider()
+    }
+
     /// Untagged / invalid-tagging / skipped counts. Each acts as a toggle for the
     /// matching service filter, which overrides the tag filter while active.
     @ViewBuilder
-    private func noticeBar(_ playlist: Playlist) -> some View {
-        let _ = appState.sequenceVersion   // re-derive the counts when membership or triage changes
+    private func serviceFilterNotices(_ playlist: Playlist) -> some View {
         let (untagged, invalid, skipped) = playlist.serviceFilterCounts
 
         if untagged > 0 || invalid > 0 || skipped > 0 {

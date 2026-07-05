@@ -82,7 +82,7 @@ extension AppState {
         // Manager mode) would otherwise leave the engine on files about to be deleted, and
         // its next advance would dereference a destroyed model.
         coordinator.stop(playlist)
-        if managedPlaylist === playlist { managedPlaylist = nil }
+        if managedPlaylist === playlist { setDuplicateSearch(false); managedPlaylist = nil }
         let mediaType = playlist.mediaType
         // A playlist can only sit in its own type's remembered slot, so clearing that one slot
         // covers every reference the delete must drop.

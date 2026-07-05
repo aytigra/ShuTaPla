@@ -16,11 +16,34 @@ extension AppState {
     // MARK: - Manager center list
 
     /// The managed playlist's display-ordered file identifiers under its effective filter — the
-    /// Manager center list/gallery, resolved row-by-row as it scrolls.
+    /// Manager center list/gallery, resolved row-by-row as it scrolls. In find-duplicates mode it
+    /// derives the duplicate grouping instead; routing through the same memoization keeps it a live
+    /// derivation, so a delete re-derives it and collapses a resolved group rather than going stale.
     var managerFileIDs: [PersistentIdentifier] {
         memoizedSequence(&managerFileIDsMemo, for: managedPlaylist) {
-            modelContext.displaySequence(of: $0)
+            duplicateSearchActive
+                ? modelContext.duplicateSequence(of: $0)
+                : modelContext.displaySequence(of: $0)
         }
+    }
+
+    /// Enters the find-duplicates mode of the Manager center for `playlist` (making it managed if
+    /// it isn't) — the buried tool raised from `PlaylistSettingsView`.
+    func findDuplicates(in playlist: Playlist) {
+        if managedPlaylist !== playlist { setManaged(playlist) }
+        setDuplicateSearch(true)
+    }
+
+    /// Enters or leaves the find-duplicates mode. A no-op when already in the requested state;
+    /// otherwise clears the selection (made against the other sequence) and bumps `sequenceVersion`
+    /// so `managerFileIDs` re-derives through the swapped closure. Filter edits and a managed
+    /// switch call this to leave; a delete only bumps the version, so it recomputes *within* the
+    /// mode and collapses a resolved group instead of exiting.
+    func setDuplicateSearch(_ active: Bool) {
+        guard active != duplicateSearchActive else { return }
+        duplicateSearchActive = active
+        managerSelection = []
+        sequenceVersion &+= 1
     }
 
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
