@@ -165,31 +165,50 @@ struct ThumbnailServiceTests {
         try writePNG(width: 32, height: 32, to: fileURL)
         let bookmark = try BookmarkService.makeBookmark(for: dir)
 
-        let key1 = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 128)
-        let key2 = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 128)
+        let key1 = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png")
+        let key2 = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png")
 
         #expect(key1 != nil)
         #expect(key1 == key2)
     }
 
+    /// The key is the content fingerprint, not a path/mtime hash: a modification-date bump with no
+    /// byte change leaves it identical (the stamp is gone), so an untouched file keeps its thumbnail.
     @Test
-    func cacheKeyChangesWhenModificationDateChanges() async throws {
+    func cacheKeyUnchangedByModificationDateAlone() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let fileURL = dir.appending(path: "img.png")
         try writePNG(width: 32, height: 32, to: fileURL)
         let bookmark = try BookmarkService.makeBookmark(for: dir)
 
-        let before = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 128)
+        let before = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png")
         try FileManager.default.setAttributes(
             [.modificationDate: Date(timeIntervalSinceReferenceDate: 1_000)],
             ofItemAtPath: fileURL.path
         )
-        let after = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 128)
+        let after = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png")
 
         #expect(before != nil)
-        #expect(after != nil)
-        #expect(before != after)
+        #expect(before == after)
+    }
+
+    /// The same bytes at two different relative paths key to the same cache entry — the cross-folder
+    /// sharing this whole feature targets. A second load hits the `.heic` the first wrote.
+    @Test
+    func sameBytesAtDifferentPathsShareCacheKey() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writePNG(width: 48, height: 24, to: dir.appending(path: "rooted.png"))
+        // Byte-for-byte copy at a different relative path (as if nested under another playlist).
+        try Data(contentsOf: dir.appending(path: "rooted.png"))
+            .write(to: dir.appending(path: "nested.png"))
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let rooted = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "rooted.png")
+        let nested = await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "nested.png")
+        #expect(rooted != nil)
+        #expect(rooted == nested)
     }
 
     @Test
@@ -209,7 +228,7 @@ struct ThumbnailServiceTests {
 
         // Replace the cached bytes with a different but still-decodable image: a true
         // cache hit returns these verbatim instead of regenerating from the source.
-        let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 64))
+        let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png"))
         let cacheFile = cacheDir.appending(path: "\(key).heic")
         let sentinelURL = dir.appending(path: "sentinel.png")
         try writePNG(width: 16, height: 16, to: sentinelURL)
@@ -232,7 +251,7 @@ struct ThumbnailServiceTests {
         let bookmark = try BookmarkService.makeBookmark(for: dir)
 
         let service = await ThumbnailService(cacheDirectory: cacheDir)
-        let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png", maxPixelSize: 64))
+        let key = try #require(await ThumbnailService.cacheKey(bookmark: bookmark, relativePath: "img.png"))
         let cacheFile = cacheDir.appending(path: "\(key).heic")
 
         // A 0-byte cache file (an interrupted prior write) reads successfully but can't
@@ -245,5 +264,56 @@ struct ThumbnailServiceTests {
         // The bad file is discarded and a real thumbnail regenerated from the source.
         #expect(!data.isEmpty)
         #expect(isISOMediaContainer(data))
+    }
+
+    /// A record that already carries the fingerprint supplies it, so the produce path forms the
+    /// very filename the first (computing) display wrote — the existing `.heic` is a hit, and there
+    /// is nothing new to report back for persistence (`metadata.fingerprint == nil`).
+    @MainActor @Test
+    func suppliedFingerprintReproducesTheComputedCacheEntry() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        // First display with no persisted fingerprint: computes it and writes the entry named by it.
+        #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+        let fp = try #require(fileURL.contentFingerprint())
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(fp).heic").path))
+
+        // A model that carries the fingerprint drives the entry point; the same name is formed and
+        // the existing `.heic` is served.
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp
+        let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image != nil)                 // disk hit via the supplied fingerprint
+        #expect(result.metadata.fingerprint == nil)  // supplied → nothing re-reported to persist
+    }
+
+    /// A file whose bytes can't be opened has no fingerprint, so the produce path forms no cache
+    /// name: it yields no thumbnail and writes nothing to the cache directory.
+    @Test
+    func unreadableFileYieldsNoThumbnailAndNoCacheEntry() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "locked.png")
+        try writePNG(width: 40, height: 40, to: fileURL)
+        // Strip read permission so the bytes can't be opened for fingerprinting (owner included).
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: fileURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        let data = await service.thumbnailData(bookmark: bookmark, relativePath: "locked.png", isVideo: false, maxPixelSize: 64)
+        #expect(data == nil)                                  // no fingerprint → no thumbnail
+        let entries = try FileManager.default.contentsOfDirectory(atPath: cacheDir.path)
+        #expect(entries.isEmpty)                              // the cache is untouched
     }
 }

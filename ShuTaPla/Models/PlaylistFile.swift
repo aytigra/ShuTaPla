@@ -74,6 +74,13 @@ final class PlaylistFile {
     /// On-disk size in bytes, read on first display and cached here. `nil` until known.
     var fileSizeBytes: Int?
 
+    /// Content-derived identity (`URL.contentFingerprint`): stable across rename/move and
+    /// independent of the referencing folder, so it keys the thumbnail cache and marks the
+    /// same media referenced by two playlists. Filled by the thumbnail producer on first
+    /// gallery display; stays `nil` for a file never thumbnailed (a list-only audio file, or
+    /// one never scrolled to).
+    var fingerprint: String?
+
     /// Pixel dimensions as a size, available only once both `width` and `height` are known.
     var pixelSize: CGSize? {
         guard let width, let height else { return nil }

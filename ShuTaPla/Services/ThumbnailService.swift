@@ -4,14 +4,19 @@
 //
 //  Async thumbnail generation for the gallery view. Images are thumbnailed with
 //  `CGImageSource`; videos with `AVAssetImageGenerator`. Results are cached in
-//  memory (`NSCache`) and on disk (Caches directory). The cache key is the file's
-//  relative path + on-disk modification date + requested size, so an edited file
-//  invalidates its stale thumbnail automatically.
+//  memory (`NSCache`) and on disk. The disk cache is keyed by the file's content
+//  fingerprint (`URL.contentFingerprint`), so the same media shares one thumbnail
+//  regardless of which folder or playlist references it, and a rename or move keeps
+//  the entry rather than orphaning it. The fingerprint carries its own invalidation:
+//  a content change yields a new fingerprint and a fresh entry.
 //
 //  Generation runs off the main actor: the public entry point reads the model on
-//  the main actor, then hands Sendable values (bookmark, relative path, size) to
-//  `nonisolated` workers that resolve the bookmark, read the file, and return HEIC
-//  `Data` that the main actor turns back into an `NSImage`.
+//  the main actor (including any persisted fingerprint), then hands Sendable values
+//  (bookmark, relative path, size, fingerprint) to `nonisolated` workers that resolve
+//  the bookmark, read the file, and return HEIC `Data` that the main actor turns back
+//  into an `NSImage`. A worker that had to compute the fingerprint itself (the record
+//  didn't carry one yet) reports it back in the returned `MediaMetadata`, so the
+//  gallery's merge persists it and later sessions supply it without the read.
 //
 //  The in-memory cache is bounded by the decoded byte size of its images, so
 //  scrolling a large playlist evicts the least-recently-used thumbnails once the
@@ -24,7 +29,6 @@ import AppKit
 import AVFoundation
 import ImageIO
 import UniformTypeIdentifiers
-import CryptoKit
 import Observation
 
 @MainActor
@@ -72,6 +76,7 @@ final class ThumbnailService {
         let bookmark = playlist.folderBookmark
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video
+        let fingerprint = file.fingerprint
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
         if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
@@ -83,6 +88,7 @@ final class ThumbnailService {
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
+            fingerprint: fingerprint,
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, produced.metadata) }
@@ -109,9 +115,10 @@ final class ThumbnailService {
 
     /// Cheap, disk-I/O-free key for the in-memory cache: playlist id + relative path +
     /// size. The playlist's stable id is collision-free (unlike a per-process
-    /// `hashValue`, which two folders' bookmarks can share and cross-paint). The on-disk
-    /// cache keys additionally by modification date; an in-memory entry is refreshed when
-    /// the file is renamed (its relative path changes) or on the next launch.
+    /// `hashValue`, which two folders' bookmarks can share and cross-paint). The disk
+    /// cache keys instead by content fingerprint (shared across folders); an in-memory
+    /// entry is refreshed when the file is renamed (its relative path changes) or on the
+    /// next launch.
     private func memoryKey(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSString {
         "\(playlist.id.uuidString)|\(file.relativePath)|\(maxPixelSize)" as NSString
     }
@@ -125,31 +132,35 @@ final class ThumbnailService {
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
+            fingerprint: nil,
             cacheDirectory: cacheDirectory
         ).data
     }
 
     // MARK: - Cache key
 
-    /// `<relativePath>|<modDate>|<size>` hashed to a filesystem-safe name. A
-    /// changed modification date yields a new key, invalidating the old thumbnail.
-    /// Returns `nil` when the file is gone. The produce path computes the key inline
-    /// (`cacheKeyComponents`) to resolve the bookmark only once; this entry point is
-    /// exercised directly by tests.
+    /// The disk-cache base name for a file addressed by bookmark + relative path: its content
+    /// fingerprint, which the `.heic` filename is formed from. Returns `nil` when the file can't
+    /// be read (and so can't be thumbnailed). The produce path derives the same name inline
+    /// (`cacheFilename`) to resolve the bookmark only once; this entry point is exercised by tests.
     @concurrent
-    nonisolated static func cacheKey(bookmark: Data, relativePath: String, maxPixelSize: Int) async -> String? {
+    nonisolated static func cacheKey(bookmark: Data, relativePath: String) async -> String? {
         try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
-            cacheKeyComponents(fileURL: fileURL, relativePath: relativePath, maxPixelSize: maxPixelSize)
+            fileURL.contentFingerprint()
         }
     }
 
-    /// The disk-cache key from an already-resolved file URL: relative path, on-disk
-    /// modification date, and size, hashed to a filesystem-safe name.
-    private nonisolated static func cacheKeyComponents(fileURL: URL, relativePath: String, maxPixelSize: Int) -> String {
-        let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate
-        let stamp = modDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "0"
-        return digest("\(relativePath)|\(stamp)|\(maxPixelSize)")
+    /// The cache filename for a file, and the fingerprint to persist when this path computed one
+    /// (`nil` when the caller supplied it, `nil` name-and-all when the file is unreadable). The
+    /// fingerprint is already a filesystem-safe hex string, so it *is* the name — no hashing.
+    private nonisolated static func cacheFilename(
+        fileURL: URL, fingerprint: String?
+    ) -> (name: String, computed: String?)? {
+        if let fingerprint {                              // supplied by the record — no read
+            return ("\(fingerprint).heic", nil)
+        }
+        guard let computed = fileURL.contentFingerprint() else { return nil }
+        return ("\(computed).heic", computed)             // first display — compute + report
     }
 
     /// Whether `data` decodes as a complete image, used to reject a 0-byte or truncated
@@ -164,35 +175,41 @@ final class ThumbnailService {
         return true
     }
 
-    private nonisolated static func digest(_ string: String) -> String {
-        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
     // MARK: - Disk cache + generation
 
     /// Returns the on-disk thumbnail if present; otherwise generates one, writes it to the
-    /// cache, and returns it. The file's size is read from the resolved URL either way — it
-    /// costs nothing beyond the open this path already makes. A fresh generation additionally
-    /// reports the duration and dimensions its decode determined; a disk-cache hit reports
-    /// only the size (no decode ran), and the caller fills the rest from the model.
+    /// cache, and returns it. The cache filename is the file's content fingerprint: supplied by
+    /// the record when it carries one (no read), otherwise computed here and reported back in the
+    /// metadata so the gallery merge persists it — on a disk-cache hit too, since the name that
+    /// found the `.heic` had to be formed from the fingerprint. The file's size is read from the
+    /// resolved URL either way. A fresh generation additionally reports the duration and dimensions
+    /// its decode determined; a disk-cache hit reports only size + fingerprint (no decode ran), and
+    /// the caller fills the rest from the model. An unreadable file has no fingerprint, so no cache
+    /// entry to name and no thumbnail — it touches the cache not at all.
     private nonisolated static func produceData(
         bookmark: Data,
         relativePath: String,
         isVideo: Bool,
         maxPixelSize: Int,
+        fingerprint: String?,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
-        // One resolve + scoped-access session for the whole produce: derive the key
-        // (which needs the on-disk modification date), check the disk cache, and render
-        // on a miss — rather than resolving once to key and again to render.
+        // One resolve + scoped-access session for the whole produce: form the cache name (which
+        // may compute the fingerprint), check the disk cache, and render on a miss — rather than
+        // resolving once to name and again to render.
         let produced = try? await BookmarkService.withResolvedFile(
             bookmark: bookmark, relativePath: relativePath
         ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
             let fileSizeBytes = fileURL.fileSizeBytes
-            let key = cacheKeyComponents(fileURL: fileURL, relativePath: relativePath, maxPixelSize: maxPixelSize)
-            let diskURL = cacheDirectory.appending(path: "\(key).heic")
+            guard let named = cacheFilename(fileURL: fileURL, fingerprint: fingerprint) else {
+                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes))
+            }
+            // Report a fingerprint only when this path computed one (`nil` when supplied), so the
+            // merge fills a `nil` record and leaves a set one untouched.
+            let hitMetadata = MediaMetadata(fileSizeBytes: fileSizeBytes, fingerprint: named.computed)
+            let diskURL = cacheDirectory.appending(path: named.name)
             if let data = try? Data(contentsOf: diskURL) {
-                if isDecodableImage(data) { return (data, MediaMetadata(fileSizeBytes: fileSizeBytes)) }
+                if isDecodableImage(data) { return (data, hitMetadata) }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
                 // forever and leave the cell stuck on a placeholder. Drop it and regenerate.
@@ -201,6 +218,7 @@ final class ThumbnailService {
 
             var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             rendered.metadata.fileSizeBytes = fileSizeBytes
+            rendered.metadata.fingerprint = named.computed
             guard let data = rendered.data else { return (nil, rendered.metadata) }
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             try? data.write(to: diskURL)
@@ -219,6 +237,7 @@ final class ThumbnailService {
         relativePath: String,
         isVideo: Bool,
         maxPixelSize: Int,
+        fingerprint: String?,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
@@ -226,6 +245,7 @@ final class ThumbnailService {
             relativePath: relativePath,
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
+            fingerprint: fingerprint,
             cacheDirectory: cacheDirectory
         )
         guard let data = produced.data else { return (nil, produced.metadata) }

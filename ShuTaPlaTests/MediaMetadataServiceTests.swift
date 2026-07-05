@@ -118,13 +118,20 @@ import UniformTypeIdentifiers
         let file = PlaylistFile(relativePath: "a.mp4", fileName: "a.mp4")
         file.duration = 10          // already known — must survive the merge
         file.width = 1920
+        file.fingerprint = "keepme" // already known — must survive the merge
 
-        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048))
+        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048, fingerprint: "other"))
 
         #expect(file.duration == 10)          // untouched
         #expect(file.width == 1920)           // untouched
         #expect(file.height == 480)           // filled
         #expect(file.fileSizeBytes == 2048)   // filled
+        #expect(file.fingerprint == "keepme") // untouched
+
+        // A record with no fingerprint yet takes the merged one — the first-display path persisting.
+        let fresh = PlaylistFile(relativePath: "b.mp4", fileName: "b.mp4")
+        fresh.merge(MediaMetadata(fingerprint: "abc"))
+        #expect(fresh.fingerprint == "abc")
     }
 
     // MARK: - The completeness guard

@@ -18,12 +18,18 @@ nonisolated struct MediaMetadata: Sendable {
     var width: Int?
     var height: Int?
     var fileSizeBytes: Int?
+
+    /// Content fingerprint, filled only by the thumbnail producer (the one path that keys the
+    /// cache by it). The list-mode extractor never sets it, so it stays `nil` there — like
+    /// `duration` for an image.
+    var fingerprint: String?
 }
 
 extension PlaylistFile {
     /// The metadata currently cached on the model.
     var cachedMetadata: MediaMetadata {
-        MediaMetadata(duration: duration, width: width, height: height, fileSizeBytes: fileSizeBytes)
+        MediaMetadata(duration: duration, width: width, height: height, fileSizeBytes: fileSizeBytes,
+                      fingerprint: fingerprint)
     }
 
     /// Fills each cached field still `nil` on the model from `metadata`, leaving known
@@ -33,6 +39,7 @@ extension PlaylistFile {
         if width == nil { width = metadata.width }
         if height == nil { height = metadata.height }
         if fileSizeBytes == nil { fileSizeBytes = metadata.fileSizeBytes }
+        if fingerprint == nil { fingerprint = metadata.fingerprint }
     }
 
     /// Whether every field this file's type can carry is already cached, so re-extracting
