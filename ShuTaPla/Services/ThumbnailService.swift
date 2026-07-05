@@ -53,8 +53,12 @@ final class ThumbnailService {
         if let cacheDirectory {
             self.cacheDirectory = cacheDirectory
         } else {
+            // Application Support, not Caches: the OS purges the Caches directory under disk
+            // pressure with no regard for what's still referenced, discarding thumbnails the
+            // user is actively viewing. Application Support is ours to manage (size / clear /
+            // orphan-sweep below), so the cache persists until we evict it.
             let base = FileManager.default
-                .urls(for: .cachesDirectory, in: .userDomainMask).first
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
             let bundleID = Bundle.main.bundleIdentifier ?? "ShuTaPla"
             self.cacheDirectory = base
@@ -135,6 +139,66 @@ final class ThumbnailService {
             fingerprint: nil,
             cacheDirectory: cacheDirectory
         ).data
+    }
+
+    // MARK: - Cache management
+
+    /// Total bytes the cache occupies on disk — the sum of its `.heic` thumbnails. Read off
+    /// the main actor, since a large cache is a directory enumeration.
+    func cacheSize() async -> Int {
+        await Self.cacheSize(in: cacheDirectory)
+    }
+
+    /// Removes every generated thumbnail, emptying the cache directory (the directory itself is
+    /// recreated by the next produce).
+    func clearCache() async {
+        await Self.clearCache(in: cacheDirectory)
+    }
+
+    /// Removes the cached thumbnails no live record references — a `.heic` whose base name (a
+    /// fingerprint) is absent from `liveFingerprints`, which the caller gathers from every
+    /// persisted `PlaylistFile.fingerprint` (this service holds no model context). Reports the
+    /// number removed and their total bytes, measured as it sweeps: pre-measuring the orphans
+    /// would mean a redundant second pass, and the sweep is the slow part regardless.
+    func clearOrphans(liveFingerprints: Set<String>) async -> (removed: Int, bytes: Int) {
+        await Self.clearOrphans(in: cacheDirectory, liveFingerprints: liveFingerprints)
+    }
+
+    /// The `.heic` thumbnails in `directory`; an absent or empty directory yields none. Any
+    /// non-`.heic` entry is ignored, so a size or sweep counts only thumbnails we wrote.
+    private nonisolated static func heicFiles(in directory: URL) -> [URL] {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return entries.filter { $0.pathExtension == "heic" }
+    }
+
+    @concurrent
+    private nonisolated static func cacheSize(in directory: URL) async -> Int {
+        heicFiles(in: directory).reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
+    }
+
+    @concurrent
+    private nonisolated static func clearCache(in directory: URL) async {
+        for file in heicFiles(in: directory) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    @concurrent
+    private nonisolated static func clearOrphans(
+        in directory: URL, liveFingerprints: Set<String>
+    ) async -> (removed: Int, bytes: Int) {
+        var removed = 0
+        var bytes = 0
+        for file in heicFiles(in: directory)
+        where !liveFingerprints.contains(file.deletingPathExtension().lastPathComponent) {
+            let size = file.fileSizeBytes ?? 0
+            if (try? FileManager.default.removeItem(at: file)) != nil {
+                removed += 1
+                bytes += size
+            }
+        }
+        return (removed, bytes)
     }
 
     // MARK: - Cache key

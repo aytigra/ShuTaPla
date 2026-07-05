@@ -313,4 +313,17 @@ final class AppState {
         let visible = Set(managerFileIDs)
         return selectedManagerFiles().filter { visible.contains($0.persistentModelID) }
     }
+
+    /// Every content fingerprint across all files — the live keys the thumbnail cache's orphan
+    /// sweep must keep. Files never thumbnailed carry no fingerprint and are skipped by the
+    /// predicate; the set is what the sweep intersects against the `.heic` names. Pending changes
+    /// are included (the default): the gallery merges a fingerprint onto a record on first display
+    /// and lets autosave flush it, so a just-viewed file's key is live before it reaches the store —
+    /// excluding pending changes here would sweep away the thumbnails of files shown this session.
+    func liveThumbnailFingerprints() -> Set<String> {
+        var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.fingerprint != nil })
+        descriptor.propertiesToFetch = [\.fingerprint]
+        let files = (try? modelContext.fetch(descriptor)) ?? []
+        return Set(files.compactMap(\.fingerprint))
+    }
 }

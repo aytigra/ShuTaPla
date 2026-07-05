@@ -316,4 +316,55 @@ struct ThumbnailServiceTests {
         let entries = try FileManager.default.contentsOfDirectory(atPath: cacheDir.path)
         #expect(entries.isEmpty)                              // the cache is untouched
     }
+
+    // MARK: - Cache management
+
+    /// The reported size sums the `.heic` thumbnails and nothing else — a stray non-`.heic`
+    /// file in the directory doesn't inflate it.
+    @Test
+    func cacheSizeSumsOnlyHeicFiles() async throws {
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
+        try Data(count: 250).write(to: cacheDir.appending(path: "bbb.heic"))
+        try Data(count: 999).write(to: cacheDir.appending(path: "notes.txt"))
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await service.cacheSize() == 350)
+    }
+
+    /// Clear-all empties the cache: every thumbnail is gone and the reported size drops to zero.
+    @Test
+    func clearCacheEmptiesTheDirectory() async throws {
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
+        try Data(count: 100).write(to: cacheDir.appending(path: "bbb.heic"))
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        await service.clearCache()
+
+        #expect(await service.cacheSize() == 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
+    }
+
+    /// Clear-orphans removes exactly the thumbnails whose fingerprint no live record carries and
+    /// keeps the referenced ones, reporting the count and total bytes it freed.
+    @Test
+    func clearOrphansRemovesUnreferencedKeepsReferenced() async throws {
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
+        try Data(count: 500).write(to: cacheDir.appending(path: "bbb.heic"))   // orphan
+        try Data(count: 100).write(to: cacheDir.appending(path: "ccc.heic"))
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        let result = await service.clearOrphans(liveFingerprints: ["aaa", "ccc"])
+
+        #expect(result.removed == 1)
+        #expect(result.bytes == 500)
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "aaa.heic").path))
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "ccc.heic").path))
+        #expect(!FileManager.default.fileExists(atPath: cacheDir.appending(path: "bbb.heic").path))
+    }
 }

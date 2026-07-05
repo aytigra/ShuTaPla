@@ -120,6 +120,43 @@ struct AppStateTests {
         #expect(appState.mode == .manager)
     }
 
+    /// `liveThumbnailFingerprints` gathers every persisted fingerprint, skips files never
+    /// thumbnailed (`fingerprint == nil`), and dedupes one shared across two files — the live
+    /// key set the cache's orphan sweep protects.
+    @Test func liveThumbnailFingerprintsGathersPersistedOnesOnly() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        addFile("a.jpg", order: 0, to: playlist, in: context).fingerprint = "fp1"
+        addFile("b.jpg", order: 1, to: playlist, in: context).fingerprint = "fp2"
+        addFile("c.jpg", order: 2, to: playlist, in: context)                       // never thumbnailed → nil
+        addFile("d.jpg", order: 3, to: playlist, in: context).fingerprint = "fp1"   // duplicate key
+        try context.save()
+
+        #expect(appState.liveThumbnailFingerprints() == ["fp1", "fp2"])
+    }
+
+    /// A fingerprint merged onto a record but not yet saved is still live: the gallery merges it
+    /// on first display and relies on autosave to flush, so the orphan sweep must see pending
+    /// changes — otherwise it deletes the thumbnails of files just viewed this session.
+    @Test func liveThumbnailFingerprintsIncludesUnsavedMerges() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "a.jpg", fileName: "a.jpg", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        file.fingerprint = "fp-pending"       // merged on display, not yet saved
+
+        #expect(appState.liveThumbnailFingerprints().contains("fp-pending"))
+    }
+
     // MARK: - Launch reconstruction & lifecycle (Task 16)
 
     /// A real temp folder holding the named (empty) files, with a bookmark, so a reconstructed

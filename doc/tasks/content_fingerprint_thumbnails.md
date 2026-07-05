@@ -7,7 +7,7 @@ folder nesting. The persisted fingerprint then unlocks two follow-on features:
 explicit cache management (size / clear / orphan sweep, with the cache moved out
 of the OS-purged Caches directory) and a "has duplicates" service filter.
 
-Status: **Stage 1 implemented; Stages 2–6 planned.** Implemented one stage at a
+Status: **Stages 1–2 implemented; Stages 3–6 planned.** Implemented one stage at a
 time, in order; each stage is independently shippable and testable.
 
 ## Problem
