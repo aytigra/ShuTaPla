@@ -23,13 +23,19 @@ nonisolated struct MediaMetadata: Sendable {
     /// cache by it). The list-mode extractor never sets it, so it stays `nil` there — like
     /// `duration` for an image.
     var fingerprint: String?
+
+    /// On-disk modification date, filled only by the thumbnail producer alongside `fingerprint`.
+    /// Half of the staleness gate ("re-examine this file?"): a change here or in `fileSizeBytes`
+    /// triggers a fingerprint recompute. Travels with `fingerprint` because the gate needs a prior
+    /// fingerprint to invalidate, so a file first seen in list mode carries neither.
+    var lastModified: Date?
 }
 
 extension PlaylistFile {
     /// The metadata currently cached on the model.
     var cachedMetadata: MediaMetadata {
         MediaMetadata(duration: duration, width: width, height: height, fileSizeBytes: fileSizeBytes,
-                      fingerprint: fingerprint)
+                      fingerprint: fingerprint, lastModified: lastModified)
     }
 
     /// Folds `metadata` onto the model, coalescing non-`nil` fields: a freshly-read value overwrites
@@ -43,6 +49,7 @@ extension PlaylistFile {
         if let height = metadata.height { self.height = height }
         if let fileSizeBytes = metadata.fileSizeBytes { self.fileSizeBytes = fileSizeBytes }
         if let fingerprint = metadata.fingerprint { self.fingerprint = fingerprint }
+        if let lastModified = metadata.lastModified { self.lastModified = lastModified }
     }
 
     /// Whether every field this file's type can carry is already cached, so re-extracting

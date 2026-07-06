@@ -12,6 +12,9 @@
 //  - V6→V7 adds PlaylistFile's additive optional `fingerprint` column. The column change flips the
 //    hash on its own, so the lightweight stage runs; existing rows survive and open with
 //    `fingerprint == nil`, repopulating on next display.
+//  - V7→V8 adds PlaylistFile's additive optional `lastModified` column (the mtime half of the
+//    thumbnail staleness gate) the same way; existing rows survive, keep their `fingerprint`, and
+//    open with `lastModified == nil`.
 //
 //  Each test lays down a store at the pinned pre-change shape, releases that container so it
 //  flushes and closes the SQLite file, then reopens the same URL through the migration plan and
@@ -191,5 +194,53 @@ struct SchemaIndexMigrationTests {
         #expect(scalarInt(atStore: url,
             query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZFINGERPRINT IS NOT NULL") == 0,
                 "migrated rows open with fingerprint == nil")
+    }
+
+    /// A V7 store migrates to V8, keeping its rows (and their `fingerprint` values) and gaining
+    /// PlaylistFile's `lastModified` column, which every migrated row opens with as `nil` (it
+    /// repopulates when the thumbnail producer next examines the file). Written at the pinned
+    /// pre-`lastModified` shape, then reopened through SchemaV8 + `AppMigrationPlan`.
+    @Test func migratingAV7StoreAddsTheLastModifiedColumn() throws {
+        let url = URL.temporaryDirectory.appending(path: "schema-mtime-\(UUID().uuidString).store")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Phase 1 — write at the pre-`lastModified` shape (with fingerprints set), then release.
+        do {
+            let schema = Schema(versionedSchema: SchemaV7.self)
+            let container = try ModelContainer(
+                for: schema, migrationPlan: nil,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+            let context = container.mainContext
+            let playlist = SchemaV7.Playlist(
+                name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+            context.insert(playlist)
+            for (i, name) in ["a.jpg", "b.jpg"].enumerated() {
+                let file = SchemaV7.PlaylistFile(relativePath: name, fileName: name, sortOrder: i)
+                file.fingerprint = "fp\(i)"
+                file.playlist = playlist
+                context.insert(file)
+            }
+            try context.save()
+        }
+        #expect(!hasColumn(atStore: url, table: "ZPLAYLISTFILE", column: "ZLASTMODIFIED"),
+                "the V7 store has no lastModified column")
+
+        // Phase 2 — reopen through V8 + the plan, then release so the store flushes before reads.
+        do {
+            let schema = Schema(versionedSchema: SchemaV8.self)
+            _ = try ModelContainer(
+                for: schema, migrationPlan: AppMigrationPlan.self,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+        }
+        #expect(hasColumn(atStore: url, table: "ZPLAYLISTFILE", column: "ZLASTMODIFIED"),
+                "the V7→V8 migration adds the lastModified column")
+        #expect(rowCount(atStore: url, table: "ZPLAYLISTFILE") == 2, "every row survives")
+        #expect(orderedFileNames(atStore: url) == ["a.jpg", "b.jpg"], "scalar data survives in order")
+        #expect(scalarInt(atStore: url,
+            query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZLASTMODIFIED IS NOT NULL") == 0,
+                "migrated rows open with lastModified == nil")
+        #expect(scalarInt(atStore: url,
+            query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZFINGERPRINT IS NOT NULL") == 2,
+                "the fingerprint survives the migration")
     }
 }

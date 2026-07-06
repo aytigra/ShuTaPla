@@ -372,6 +372,110 @@ struct ThumbnailServiceTests {
         #expect(file.height == 8)
     }
 
+    /// A benign modification-date bump — the file touched but its bytes unchanged — fires the
+    /// staleness gate, which recomputes the fingerprint, finds it unchanged, and so *serves the
+    /// cached `.heic`* rather than re-rendering. The record's stale mtime is refreshed (so the gate
+    /// stops firing) while the cached duration/dimensions are preserved (no decode ran).
+    @MainActor @Test
+    func benignModificationDateBumpServesCachedThumbnail() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        // First display: computes fp0, writes fp0.heic. Capture the record's cached facts.
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let fp0 = try #require(fileURL.contentFingerprint())
+        let size = try #require(fileURL.fileSizeBytes)
+        let originalMtime = try #require(fileURL.contentModificationDate)
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+
+        // Touch the file's mtime with no byte change: the fingerprint is unchanged, only mtime moved.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: fileURL.path)
+        let newMtime = try #require(fileURL.contentModificationDate)
+        #expect(newMtime != originalMtime)
+        #expect(fileURL.contentFingerprint() == fp0)
+
+        // A record carrying the pre-touch mtime drives the entry point (a fresh service so the produce
+        // path runs, not an in-memory hit). It also carries a prior decode's dimensions.
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp0
+        file.fileSizeBytes = size
+        file.lastModified = originalMtime
+        file.width = 80
+        file.height = 80
+        let service2 = ThumbnailService(cacheDirectory: cacheDir)
+        let result = await service2.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+
+        #expect(result.image != nil)
+        #expect(result.metadata.fingerprint == fp0)        // recomputed, unchanged
+        #expect(result.metadata.width == nil)              // no fresh decode → the cached `.heic` was served
+        #expect(result.metadata.lastModified == newMtime)  // the stale mtime is refreshed
+
+        // The merge refreshes the mtime so the gate stops firing, and preserves the cached dimensions.
+        file.merge(result.metadata)
+        #expect(file.lastModified == newMtime)
+        #expect(file.width == 80)
+    }
+
+    /// A same-size in-place edit the filesize gate can't see — the byte count is unchanged — is caught
+    /// by the modification-date gate: the mtime bump recomputes the fingerprint, which *moves*, so a
+    /// fresh render runs and the new fingerprint + fresh dimensions + refreshed mtime are reported.
+    @MainActor @Test
+    func sameSizeContentChangeIsCaughtByModificationDateGate() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        // First display of the original 80×80 content: computes fp0, writes fp0.heic.
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let fp0 = try #require(fileURL.contentFingerprint())
+        let size = try #require(fileURL.fileSizeBytes)
+        let originalMtime = try #require(fileURL.contentModificationDate)
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+
+        // Rewrite the file with different content at the *same byte size*: an 8×8 PNG padded with
+        // trailing bytes (which PNG decoders ignore) up to the original length. The size gate can't
+        // see this; only the mtime moves.
+        let smallURL = dir.appending(path: "small.png")
+        try writePNG(width: 8, height: 8, to: smallURL)
+        var bytes = try Data(contentsOf: smallURL)
+        bytes.append(Data(count: size - bytes.count))
+        try bytes.write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: fileURL.path)
+        let newFp = try #require(fileURL.contentFingerprint())
+        let newMtime = try #require(fileURL.contentModificationDate)
+        #expect(newFp != fp0)
+        #expect(fileURL.fileSizeBytes == size)   // unchanged byte size — invisible to the filesize gate
+        #expect(newMtime != originalMtime)
+
+        // A record carrying the stale fingerprint, the (unchanged) size, and the pre-edit mtime.
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp0
+        file.fileSizeBytes = size
+        file.lastModified = originalMtime
+        let service2 = ThumbnailService(cacheDirectory: cacheDir)
+        let result = await service2.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+
+        #expect(result.image != nil)
+        #expect(result.metadata.fingerprint == newFp)      // recomputed from the current bytes
+        #expect(result.metadata.width == 8)                // a fresh decode ran (a hit reports nil)
+        #expect(result.metadata.height == 8)
+        #expect(result.metadata.lastModified == newMtime)
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(newFp).heic").path))
+    }
+
     /// A file whose bytes open (so a fingerprint *can* be computed) but don't decode into an image
     /// persists no fingerprint: the produce path yields no thumbnail and reports `fingerprint == nil`,
     /// so a corrupt / 0-byte file never collapses into a bogus duplicate group.

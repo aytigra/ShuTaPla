@@ -119,24 +119,33 @@ import UniformTypeIdentifiers
         file.duration = 10
         file.width = 1920
         file.fingerprint = "old"
+        file.lastModified = Date(timeIntervalSince1970: 1)
 
         // A bundle carrying every field (a fresh render / size-mismatch re-derivation) overwrites —
         // a freshly-read value always wins over a stale cached one.
-        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048, fingerprint: "new"))
+        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048,
+                                 fingerprint: "new", lastModified: Date(timeIntervalSince1970: 2)))
         #expect(file.duration == 99)          // overwritten by the fresh read
         #expect(file.width == 640)            // overwritten
         #expect(file.height == 480)           // filled
         #expect(file.fileSizeBytes == 2048)   // filled
         #expect(file.fingerprint == "new")    // overwritten
+        #expect(file.lastModified == Date(timeIntervalSince1970: 2))   // overwritten
 
-        // A partial bundle (a disk-cache hit: size + fingerprint, no decode) leaves the decoded
-        // fields intact — a `nil` means "not read", never erases what's cached.
-        file.merge(MediaMetadata(fileSizeBytes: 4096, fingerprint: "newer"))
+        // A partial bundle (a disk-cache hit: size + fingerprint + mtime, no decode) leaves the
+        // decoded fields intact — a `nil` means "not read", never erases what's cached.
+        file.merge(MediaMetadata(fileSizeBytes: 4096, fingerprint: "newer",
+                                 lastModified: Date(timeIntervalSince1970: 3)))
         #expect(file.duration == 99)          // nil incoming → untouched
         #expect(file.width == 640)            // untouched
         #expect(file.height == 480)           // untouched
         #expect(file.fileSizeBytes == 4096)   // overwritten
         #expect(file.fingerprint == "newer")  // overwritten
+        #expect(file.lastModified == Date(timeIntervalSince1970: 3))   // overwritten
+
+        // A bundle that didn't read the mtime (`nil`) leaves the cached one intact.
+        file.merge(MediaMetadata(width: 100))
+        #expect(file.lastModified == Date(timeIntervalSince1970: 3))   // nil incoming → untouched
     }
 
     // MARK: - The completeness guard

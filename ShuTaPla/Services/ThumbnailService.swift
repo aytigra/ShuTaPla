@@ -89,6 +89,7 @@ final class ThumbnailService {
         let isVideo = playlist.mediaType == .video
         let fingerprint = file.fingerprint
         let recordFileSize = file.fileSizeBytes
+        let recordLastModified = file.lastModified
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
         if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
@@ -102,6 +103,7 @@ final class ThumbnailService {
             maxPixelSize: maxPixelSize,
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
+            recordLastModified: recordLastModified,
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, produced.metadata) }
@@ -147,6 +149,7 @@ final class ThumbnailService {
             maxPixelSize: maxPixelSize,
             fingerprint: nil,
             recordFileSize: nil,
+            recordLastModified: nil,
             cacheDirectory: cacheDirectory
         ).data
     }
@@ -270,11 +273,12 @@ final class ThumbnailService {
     /// cache, and returns it. The cache filename is the file's content fingerprint: supplied by
     /// the record when it carries one (no read), otherwise computed here and reported back in the
     /// metadata so the gallery merge persists it — on a disk-cache hit too, since the name that
-    /// found the `.heic` had to be formed from the fingerprint. The file's size is read from the
-    /// resolved URL either way. A fresh generation additionally reports the duration and dimensions
-    /// its decode determined; a disk-cache hit reports only size + fingerprint (no decode ran), and
-    /// the caller fills the rest from the model. An unreadable file has no fingerprint, so no cache
-    /// entry to name and no thumbnail — it touches the cache not at all.
+    /// found the `.heic` had to be formed from the fingerprint. The file's size and modification date
+    /// are read from the resolved URL either way and reported back, so the record's staleness gate
+    /// stays current. A fresh generation additionally reports the duration and dimensions its decode
+    /// determined; a disk-cache hit reports no decode facts, and the caller keeps the model's. An
+    /// unreadable file has no fingerprint, so no cache entry to name and no thumbnail — it touches
+    /// the cache not at all.
     private nonisolated static func produceData(
         bookmark: Data,
         relativePath: String,
@@ -282,6 +286,7 @@ final class ThumbnailService {
         maxPixelSize: Int,
         fingerprint: String?,
         recordFileSize: Int?,
+        recordLastModified: Date?,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
         // One resolve + scoped-access session for the whole produce: form the cache name (which
@@ -291,20 +296,30 @@ final class ThumbnailService {
             bookmark: bookmark, relativePath: relativePath
         ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
             let fileSizeBytes = fileURL.fileSizeBytes
-            // A supplied fingerprint whose on-disk size no longer matches the record's cached size
-            // means the bytes changed (remove-sound, or a different file at the same path): discard
-            // it, recompute from the current bytes, and re-render rather than serve the stale `.heic`
-            // — so duration/dimensions are re-derived too. Size-gated, so an unchanged file pays
-            // nothing extra and still takes the disk-cache hit below.
-            let sizeChanged = fingerprint != nil && recordFileSize != nil && fileSizeBytes != recordFileSize
-            guard let named = cacheFilename(fileURL: fileURL, fingerprint: sizeChanged ? nil : fingerprint) else {
-                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes))
+            let lastModified = fileURL.contentModificationDate
+            // Staleness gate: a supplied fingerprint whose on-disk size *or* mtime no longer matches
+            // the record's cached values means the file may have changed in place (remove-sound, an
+            // edit, or a different file at the same path). Recompute the fingerprint from the current
+            // bytes to decide — comparing against a value the record actually holds, so an unset
+            // size/mtime (a pre-mtime row) doesn't fire the gate but is backfilled by the reported
+            // metadata below.
+            let gateFired = fingerprint != nil
+                && ((recordFileSize != nil && fileSizeBytes != recordFileSize)
+                    || (recordLastModified != nil && lastModified != recordLastModified))
+            guard let named = cacheFilename(fileURL: fileURL, fingerprint: gateFired ? nil : fingerprint) else {
+                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified))
             }
+            // The gate fired but the recomputed fingerprint still matches the supplied one → the
+            // content is the same (a benign touch: copy, re-download of identical bytes). Only a
+            // genuine fingerprint move forces a fresh render past the disk hit.
+            let contentChanged = gateFired && named.computed != fingerprint
             // Report a fingerprint only when this path computed one (`nil` when supplied), so the
-            // merge fills a `nil` record and leaves a matching one untouched.
-            let hitMetadata = MediaMetadata(fileSizeBytes: fileSizeBytes, fingerprint: named.computed)
+            // merge fills a `nil` record and leaves a matching one untouched. Size and mtime are
+            // always reported, refreshing a stale/absent staleness value so the gate stops re-firing.
+            let hitMetadata = MediaMetadata(
+                fileSizeBytes: fileSizeBytes, fingerprint: named.computed, lastModified: lastModified)
             let diskURL = cacheDirectory.appending(path: named.name)
-            if !sizeChanged, let data = try? Data(contentsOf: diskURL) {
+            if !contentChanged, let data = try? Data(contentsOf: diskURL) {
                 if isDecodableImage(data) { return (data, hitMetadata) }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
@@ -314,6 +329,7 @@ final class ThumbnailService {
 
             var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             rendered.metadata.fileSizeBytes = fileSizeBytes
+            rendered.metadata.lastModified = lastModified
             // A file that opens (so a fingerprint could be computed) but fails to render persists no
             // fingerprint: set it only past this guard, so a corrupt / 0-byte file never keys the
             // cache or collapses into a bogus duplicate group.
@@ -338,6 +354,7 @@ final class ThumbnailService {
         maxPixelSize: Int,
         fingerprint: String?,
         recordFileSize: Int?,
+        recordLastModified: Date?,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
@@ -347,6 +364,7 @@ final class ThumbnailService {
             maxPixelSize: maxPixelSize,
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
+            recordLastModified: recordLastModified,
             cacheDirectory: cacheDirectory
         )
         guard let data = produced.data else { return (nil, produced.metadata) }

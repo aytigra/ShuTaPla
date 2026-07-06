@@ -18,6 +18,12 @@ extension URL {
         (try? resourceValues(forKeys: [.fileSizeKey]))?.fileSize
     }
 
+    /// On-disk modification date, or `nil` when it can't be read. The cheap "look again" signal the
+    /// thumbnail producer's staleness gate reads alongside `fileSizeBytes`: any in-place edit bumps it.
+    nonisolated var contentModificationDate: Date? {
+        (try? resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
     /// The pixel dimensions of the image at this URL, read from its header
     /// (`CGImageSource` properties, decoding no pixels), or `nil` when they can't be read.
     nonisolated var imagePixelSize: (width: Int, height: Int)? {

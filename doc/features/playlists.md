@@ -42,7 +42,7 @@ Each playlist stores:
 - Default slideshow interval (initially 10 s).
 - Default file-position persistence — the fallback for the per-playlist setting when a playlist hasn't overridden it (initially off). See [File-position persistence](#file-position-persistence).
 - Default image fit mode (initially Fit).
-- **Thumbnail cache** — shows the gallery thumbnail cache's current on-disk size, with **Remove Orphans** (deletes only cached thumbnails no playlist file still references) and **Clear All** (empties the cache). The cache is shared across playlists — the same file thumbnailed under two playlists is stored once — and persists across launches, so clearing it only forces regeneration on the next view.
+- **Thumbnail cache** — shows the gallery thumbnail cache's current on-disk size (colored when it exceeds 1 GB), with **Remove Orphans** (keeps only the thumbnails a playlist file still references, sweeping every unreferenced thumbnail and any stray file) and **Clear All** (empties the whole cache folder). The cache is shared across playlists — the same file thumbnailed under two playlists is stored once — and persists across launches, so clearing it only forces regeneration on the next view. It has no automatic eviction; when it grows past 1 GB a banner appears in the Manager center (see [Manager mode](manager-mode.md)) that opens these controls, nudging a manual clear.
 
 ### Reshuffle vs. Update
 

@@ -81,6 +81,12 @@ final class PlaylistFile {
     /// one never scrolled to).
     var fingerprint: String?
 
+    /// On-disk modification date at the time the thumbnail producer last examined the file, cached
+    /// alongside `fingerprint`. The staleness gate re-examines the file when this or `fileSizeBytes`
+    /// drifts from disk; the `fingerprint` then decides whether the content actually changed. `nil`
+    /// until first thumbnailed (a list-only audio file, or one never scrolled to, carries neither).
+    var lastModified: Date?
+
     /// Pixel dimensions as a size, available only once both `width` and `height` are known.
     var pixelSize: CGSize? {
         guard let width, let height else { return nil }

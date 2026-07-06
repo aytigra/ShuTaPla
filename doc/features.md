@@ -52,7 +52,7 @@ Capitalized terms below are used precisely throughout this document.
 |---------|--------|
 | [Files and formats](features/files-and-formats.md) | Supported video/image/audio formats; skipped files; cloud / offline file handling and prefetch. |
 | [Playlists, creation, and switching](features/playlists.md) | First launch; creating playlists (folder classification, dominance, Mixed prompt); what a playlist stores; global settings; Reshuffle vs. Update; playback order/wrap-around; the Stopped/Playing/Paused state machine and transitions; concurrent playlists; Player-mode quick switching. |
-| [Manager mode](features/manager-mode.md) | The Stopped-state windowed view: Scopes, toolbar/panel layout, list/gallery view modes, the find-duplicates tool, file interactions (select, play, multi-select, rename, Remove Audio), and playlist-wide tag operations. |
+| [Manager mode](features/manager-mode.md) | The Stopped-state windowed view: Scopes, toolbar/panel layout, list/gallery view modes, the find-duplicates tool, the thumbnail-cache-pressure banner, file interactions (select, play, multi-select, rename, Remove Audio), and playlist-wide tag operations. |
 | [Tag system](features/tags.md) | Tag syntax in filenames; invalid tagging; the known-tags cache; the Tag Editor UI; tag-input hotkeys; on-disk rename semantics and graceful failure. |
 | [Filtering and search](features/filtering.md) | Per-playlist tag filter (AND/OR); the three Service Filters; how filtering affects playback; filter persistence and saved-search history. |
 | [Playback controls](features/playback-controls.md) | `[esc]` priority chain; Player- and Manager-mode hotkey tables and Key Context; overlay exclusivity/dismissal rules; the Pause Overlay; Suppression vs. per-playlist pause. |

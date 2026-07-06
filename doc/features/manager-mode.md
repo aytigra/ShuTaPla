@@ -42,6 +42,10 @@ Running time, pixel dimensions, and on-disk size are all read off the main actor
 
 **Find Duplicates**, a simple tool in the playlist's Settings popover (image and video), regroups the center list so files with identical content sit together: it keeps only files whose content recurs and orders them so each duplicate group is adjacent, leaving the extras to be compared and Deleted with the ordinary list/gallery, selection, and delete controls. It is not a Service Filter — it doesn't combine with the tag or triage filters and not persisted. A banner across the top of the center marks the mode and offers **Done**; any filter interaction or a playlist switch also leaves it, restoring the normal file list. Deleting a duplicate recomputes the grouping in place, so a group that drops to a single remaining copy dissolves on its own. It compares only files that have a generated thumbnail — the content fingerprint it groups by is produced when a thumbnail is — so files never shown in the gallery, and audio playlists (list-only, no gallery), are outside its reach; a disclaimer in the popover sets that expectation.
 
+## Cache-pressure banner
+
+The gallery thumbnail cache has no automatic eviction, so when it grows past 1 GB an orange **"App cache > 1Gb!"** banner appears at the top of the center — the same notice strip the Find Duplicates banner uses. Clicking it opens Settings, where the cache size / Remove Orphans / Clear All controls live (see [Global settings](playlists.md#global-settings)). The check rides the ordinary playlist scan (which runs on select and re-click), so the banner clears on the next scan or immediately after a clear/orphan sweep drops the cache back under the threshold.
+
 ## File interactions
 
 - **Click** — select a file (also focuses it for the tag panel).
