@@ -7,8 +7,9 @@ folder nesting. The persisted fingerprint then unlocks two follow-on features:
 explicit cache management (size / clear / orphan sweep, with the cache moved out
 of the OS-purged Caches directory) and a "has duplicates" service filter.
 
-Status: **Stages 1–3 implemented; Stages 5–6 planned.** Implemented one stage at a
-time, in order; each stage is independently shippable and testable.
+Status: **Stages 1–6, 8 implemented; Stage 7 (modification-date invalidation
+gate) planned.** Implemented one stage at a time; each stage is independently
+shippable and testable.
 
 ## Problem
 
@@ -51,47 +52,6 @@ A full hash of a multi-GB video is too expensive to run on a scan. The standard
 compromise is a windowed fingerprint: the byte size plus a SHA-256 over the head
 and tail windows of the file. Two reads of a fixed window, regardless of file
 size, and collision-resistant enough for "is this the same media file."
-
-Per the project convention (reusable operations on standard types go in
-`Extensions/`), this lands as `Extensions/URL+Fingerprint.swift`:
-
-```swift
-import Foundation
-import CryptoKit
-
-extension URL {
-    /// A cheap, content-derived identity for a media file: stable across rename,
-    /// move, and copy, and independent of which folder (or playlist) references
-    /// it. Hashes the byte size together with the head and tail windows of the
-    /// file — enough to distinguish files without reading gigabytes of video.
-    /// `nil` when the file can't be opened.
-    nonisolated func contentFingerprint(windowBytes: Int = 64 * 1024) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: self) else { return nil }
-        defer { try? handle.close() }
-
-        let size = (try? handle.seekToEnd()) ?? 0
-        var hasher = SHA256()
-        // Size first, so two files sharing a head/tail window (padding, shared
-        // container header) but differing in length still diverge.
-        hasher.update(data: withUnsafeBytes(of: size.littleEndian) { Data($0) })
-
-        try? handle.seek(toOffset: 0)
-        if let head = try? handle.read(upToCount: windowBytes) {
-            hasher.update(data: head)
-        }
-        // Tail window only when the file is larger than one window — otherwise
-        // the head already covered the whole file.
-        if size > UInt64(windowBytes) {
-            try? handle.seek(toOffset: size - UInt64(windowBytes))
-            if let tail = try? handle.read(upToCount: windowBytes) {
-                hasher.update(data: tail)
-            }
-        }
-
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-}
-```
 
 The fingerprint changes whenever the content changes, so it carries its own
 invalidation — the modification-date stamp can be dropped from the cache key.
@@ -163,19 +123,6 @@ which does hold the model:
   (the cell shows its placeholder), so an unreadable file touches the cache not at
   all and can't collide with anything.
 
-```swift
-/// The cache filename for a file, and the fingerprint to persist when this path
-/// computed one (`nil` when the caller supplied it, or the file is unreadable).
-private nonisolated static func cacheFilename(
-    fileURL: URL, fingerprint: String?
-) -> (name: String, computed: String?)? {
-    if let fingerprint {                              // supplied by the record — no read
-        return ("\(fingerprint).heic", nil)
-    }
-    guard let computed = fileURL.contentFingerprint() else { return nil }
-    return ("\(computed).heic", computed)             // first display — compute + report
-}
-```
 
 Re-keying needs no separate migration: existing `.heic` files will be cleaned out 
 manually and new durable thumbnails will be generated in dedicated app folder.
@@ -203,11 +150,15 @@ Two problems the fingerprint enables solving together:
 Move the cache into the app's Application Support folder so it is under our
 control, and add an explicit management UI:
 
-- **Cache size** — sum of all files in the dedicated cache directory.
-- **Clear all** — remove the directory's contents.
-- **Clear orphans** — remove only `.heic` files whose key is not referenced by any
-  live record. A single query for all `PlaylistFile.fingerprint` values 
-  and intersection against existing `.heic` file names.
+The cache folder is ours and single-writer, so it legitimately holds *only*
+live-referenced `.heic` thumbnails — the three operations agree on that invariant:
+
+- **Cache size** — the whole directory's footprint.
+- **Clear all** — remove the directory's entire contents.
+- **Clear orphans** — reduce the directory to that legitimate set: remove every
+  `.heic` whose fingerprint no live record references, plus any stray non-`.heic`
+  file. Live fingerprints come from a single query for all `PlaylistFile.fingerprint`
+  values; everything else in the folder is swept.
 
 A background task can run the orphan sweep periodically; storing the fingerprint
 on the record is what lets it enumerate live keys without opening any file.
@@ -268,133 +219,170 @@ No new column, no `FilterState` case, no persistence — a flag plus a
 
 ---
 
-## Implementation plan
+## Fingerprint invalidation & review fixes
 
-Each stage is implemented on its own, test-first, and confirmed with the user
-before the next begins. Stage 1 is the core; 2–4 are the follow-ons the persisted
-fingerprint unlocks and can be scheduled independently; 5–6 are the doc and
-housekeeping wrap-up. Each code stage updates the doc-comments of the files it
-touches as part of the change (per the writing rules) — Stage 5 is the separate
-pass over the standalone primary docs, once the shape is final.
+Once a fingerprint is persisted, nothing re-validates it: the produce path trusts
+the record's fingerprint verbatim and `merge` only fills a `nil` field, so an
+in-place content change (in practice **remove-sound**, which rewrites the file)
+would serve the old identity forever — quietly breaking the "a content change
+yields a new fingerprint" invariant this design rests on. This stage restores a
+cheap, generic invalidation, plus three smaller fixes surfaced in review.
 
-### Stage 1 — Fingerprint the thumbnail cache + persist on the record (schema V7)
+1. **Filesize-gated invalidation → full re-derivation.** Thread the record's cached
+   `fileSizeBytes` into the produce path (`thumbnail(for:in:maxPixelSize:)` →
+   `produceImage` → `produceData`). `produceData` already reads the on-disk size;
+   when a fingerprint is *supplied* but the on-disk size differs from the record's
+   cached size, the bytes changed (in practice remove-sound, or a different file at
+   the same path), so every cached fact is suspect. Treat it as a hard
+   invalidation: discard the supplied fingerprint, recompute from the current bytes,
+   and **re-render rather than serve a `.heic`** — so `duration`/`width`/`height` are
+   re-derived from a fresh decode, not left over from the old file. Size-gated, so
+   the hot path pays nothing extra and a same-size hit still skips the read and
+   re-renders nothing. Generic: any in-place edit that changes the file size —
+   remove-sound included — is caught on the next produce, with **no** special-case in
+   the strip path. It self-heals on the next in-memory miss (a thumbnail keyed by
+   relative path isn't re-validated while resident; acceptable — no synchronous key
+   can detect a byte change without statting on the scroll path, which is exactly
+   what the move off the modification-date key dropped).
+2. **Coalesce-non-nil merge.** For the re-derivation to persist, `PlaylistFile.merge`
+   overwrites each field whenever the incoming metadata carries a non-`nil` value and
+   leaves it untouched when the incoming value is `nil` (`if let v = metadata.duration
+   { duration = v }`, and so for every field) — one uniform rule, not a per-field
+   split. A freshly-read value always wins; a field a producer didn't determine never
+   erases what's cached. This is safe because `nil` in the bundle means "this producer
+   didn't read this field," not "the value is nil": a disk-cache *hit* reports
+   `duration`/`width`/`height` as `nil` (no decode ran) and so leaves a prior decode
+   intact, while a fresh render (first display or a size-mismatch re-derivation)
+   reports all of them and fully refreshes the record. It replaces the former
+   fill-only rule, which could let neither a recompute overwrite a stale
+   fingerprint/size nor a changed file's stale duration/dimensions.
+3. **No fingerprint for a thumbnail-less file (review #3).** In `produceData`, set
+   `rendered.metadata.fingerprint` only *after* the `guard let data = rendered.data`,
+   so a file that opens but fails to render (corrupt, 0-byte) never persists a
+   fingerprint. Makes the Find Duplicates disclaimer ("compares only thumbnailed
+   files") true and stops every 0-byte file collapsing into one duplicate group.
+4. **Flush before Find Duplicates (review #5).** `findDuplicates(in:)` calls
+   `persistAndRefresh()` before `setDuplicateSearch(true)`, so fingerprints merged
+   while scrolling are saved before `duplicateSequence`'s `includePendingChanges:
+   false` fetch runs (otherwise a just-viewed file's fingerprint is invisible to
+   the grouping).
+5. **Cache-size notice (review #2).** In `SettingsView`'s "Thumbnail cache"
+   section, show a warning line when `cacheSize` exceeds 1 GB. The disk cache has
+   no automatic eviction by design; the notice nudges a manual clear.
 
-The fingerprint, the cache re-key, and its persistence land together: the
-thumbnail produce path needs the fingerprint to key the cache, computes it there,
-and reports it back to persist. (Computing it without keying on it, or keying
-without persisting, would be half a change.)
-
-1. Add `Extensions/URL+Fingerprint.swift` (`contentFingerprint(windowBytes:)`).
-2. Add `fingerprint: String?` to `MediaMetadata`, to `PlaylistFile`, and to
-   `PlaylistFile.merge(_:)`. Leave `hasCompleteMetadata(for:)` and
-   `MediaMetadataService` untouched (the list path never fills it).
-3. Thread `file.fingerprint` from `thumbnail(for:in:maxPixelSize:)` down through
-   `produceImage` → `produceData` to the filename computation. Replace
-   `cacheKeyComponents` with the `cacheFilename` helper above (supplied fp → name,
-   no read; absent → compute, name, and report for persistence; unreadable → no
-   name, no thumbnail); the fingerprint *is* the name, so delete the now-unused
-   `digest` helper and drop the modification-date stamp. Have `produceData` fold
-   the computed fingerprint into the `MediaMetadata` it returns, so the existing
-   `GalleryCell` merge persists it. Update the `cacheKey` test seam accordingly.
-4. Schema V7 (`doc/versioning.md` recipe): freeze the current shape into
-   `SchemaV6` as pinned `@Model` copies of the **Playlist ↔ PlaylistFile ↔ Tag**
-   relationship component (pin the whole component together;
-   AppStateModel / GlobalSettings / SchemaMarker carry no reference into it and
-   keep the live types); create `SchemaV7` referencing the live types; make the
-   live `PlaylistFile` change; register V7 + a `.lightweight` V6→V7 stage in
-   `AppMigrationPlan`; point `ShuTaPlaApp` at `SchemaV7`.
-
-**Tests (test-first):**
-- Fingerprint is stable across a rename (same bytes → same fingerprint) and
-  across the same content at two different relative paths.
-- Content change (or a size change with an identical window) yields a different
-  fingerprint; the size-first update guards the shared-window case.
-- Unreadable file → `contentFingerprint` is `nil`; the produce path yields no
-  thumbnail and touches no cache entry.
-- The same bytes at two different relative paths produce the **same** cache
-  filename → a second load is a disk hit (the cross-folder sharing this targets).
-- A supplied (persisted) fingerprint yields the same filename as the computed one
-  and performs no file read; `merge` fills a `nil` fingerprint and leaves a set
-  one untouched.
-- Migration test: a V6 store's rows survive V6→V7 and open with
-  `fingerprint == nil`, repopulating on next display (per the versioning recipe).
-
-### Stage 2 — Move cache to app folder + management UI
-
-1. Point `ThumbnailService`'s default cache directory at Application Support.
-2. Add cache-size, clear-all, and clear-orphans operations (no pre-calculation of orphaned size because it is slow, after running orphan search and cleanup report to user number of removed files and total size).
-3. Surface them in `SettingsView` (a new "Thumbnail cache" section).
-
-**Tests (test-first):**
-- Size sums only `.heic` files.
-- Clear-all empties the directory.
-- Clear-orphans removes exactly the files whose key no live fingerprint produces
-  and keeps the referenced ones (seed a fixture cache dir + a set of records).
-
-### Stage 3 — "Find duplicates" tool
-
-A nearly-free extra over the persisted fingerprint, invoked from
-`PlaylistSettingsView` — not a service filter, but a transient **mode** of the
-Manager center (the center list, fed a different sequence; not a separate view).
-
-1. Add `duplicateSequence(of:)` — a `(id, fingerprint)` fetch over the playlist's
-   files, keeping only fingerprints that recur (count ≥ 2), ordered by fingerprint
-   so duplicates are adjacent. It lives beside the other sequence derivations but
-   groups in Swift rather than through a `#Predicate` (it doesn't fit
-   `ModelContext+Sequence.swift`'s one-predicate-sorted-by-`sortOrder` shape).
-2. Add a runtime-only `duplicateSearchActive` flag on `AppState`. While set,
-   `managerFileIDs`' memoized closure derives `duplicateSequence` instead of
-   `displaySequence`, so it recomputes on every `sequenceVersion` bump (a live
-   derivation, not a frozen list).
-3. Toggling the flag bumps `sequenceVersion` and resets `managerSelection`. The
-   filter-bar edits and playlist-switch paths clear the flag; `deleteFiles` does
-   not (so a delete recomputes within the mode and collapses resolved groups).
-4. Invoke it from `PlaylistSettingsView` (non-audio playlists) with a disclaimer
-   that it compares only thumbnailed files.
-5. Signal the mode and give an explicit exit: the center `noticeBar` shows a
-   "Showing duplicates · Done" banner while active (the Done button calls
-   `setDuplicateSearch(false)`), in place of the triage-count notices.
+Considered and declined: invalidating the in-memory entry on strip (the frame is
+unchanged — nothing to gain); clearing the in-memory cache on clear / clear-orphans
+(those buttons free disk space, not individual thumbnails); pre-clearing the
+fingerprint in the strip path (the filesize check subsumes it); a two-tier merge
+(authoritative for fingerprint/size, fill-only for the rest) — the uniform
+coalesce-non-nil rule is simpler and, on a size-mismatch re-render, refreshes the
+stale duration/dimensions too. A same-size in-place edit is not detected — an
+accepted rarity, consistent with the deliberate move off the modification-date key.
 
 **Tests (test-first):**
-- `duplicateSequence` keeps only recurring fingerprints (count ≥ 2) and drops
-  singletons and `nil`-fingerprint files.
-- The result is fingerprint-ordered so each duplicate group is adjacent.
-- Toggling `duplicateSearchActive` swaps `managerFileIDs` to the duplicate
-  sequence and clearing it restores `displaySequence`; toggling bumps the version
-  and resets the selection.
-- A delete inside the mode recomputes and collapses a pair (down to one copy) to
-  nothing **without** exiting the mode; a filter edit exits it.
+- Supplied fingerprint + unchanged on-disk size → no read, supplied name reused,
+  nothing reported to persist (the existing disk-hit test still holds).
+- Supplied fingerprint + changed on-disk size → full re-derivation: the new
+  fingerprint names the entry and is reported back; a fresh decode reports the new
+  duration/dimensions; the disk `.heic` under the new name is re-rendered, not
+  served; `merge` overwrites the stale fingerprint, size, and dimensions.
+- `merge` coalesces non-`nil`: an incoming non-`nil` value overwrites, an incoming
+  `nil` leaves the field untouched (update the existing merge and list-healing tests
+  to the coalesce semantics).
+- A file that opens but fails to render persists no fingerprint (image `nil`,
+  `metadata.fingerprint == nil`); two 0-byte files are not grouped as duplicates.
+- `findDuplicates(in:)` saves first: a fingerprint merged but unsaved is visible to
+  the mode's fetch.
+- Cache-size notice appears above the 1 GB threshold and not below (logic-level if
+  the view seam allows; otherwise a manual check).
 
-The coverage limit (only thumbnailed files carry a fingerprint) is by design, not
-a gap to close.
+---
 
-### Stage 5 — Update the primary docs
+## Stage 7 — Modification-date invalidation gate
 
-Once the shape is final, revise the standalone primary docs to describe the code
-as it then stands (per the writing rules — no change-narration):
+The filesize gate (Stage 4, section 1) misses an in-place edit that preserves the
+byte size **and** both 64 KB fingerprint windows but changes the middle — the
+windowed fingerprint can't see it, and size alone doesn't move. `mtime` is the
+cheap universal "look again" signal: any in-place edit bumps it. Split the two
+roles the record already conflates:
 
-- `doc/architecture.md` — the thumbnail cache's fingerprint keying and its
-  Application Support location.
-- `doc/features.md` + the relevant `doc/features/` chapter — the cache-management
-  settings and the find-duplicates tool, if those stages shipped.
+- **Staleness trigger** ("re-examine this file?"): the on-disk `fileSize` **or**
+  `contentModificationDate` differs from the record's cached values.
+- **Identity** ("same content?"): the fingerprint (size ‖ head ‖ tail) — unchanged.
 
-(The per-file doc-comments — e.g. `ThumbnailService.swift`'s header, which today
-still says "cached … on disk (Caches directory)" and keyed "by relative path +
-modification date" — are corrected within the code stages that change them, not
-here.)
+Design:
 
-### Stage 6 — Clean up stale on-disk thumbnails and container debris
+- New stored `lastModified: Date?` on `PlaylistFile`, carried in `MediaMetadata`
+  and set by the **thumbnail producer only**, alongside `fingerprint` — a file
+  first seen in list mode has neither until it is thumbnailed, and the gate needs a
+  prior fingerprint to invalidate, so the two always travel together. `merge`
+  coalesces it like every other field. The thumbnail producer already stats the
+  file for its size, so reading the mtime is free.
+- **SwiftData stored-shape change** → new `SchemaVN` + pinned prior + lightweight
+  stage (see `doc/versioning.md`; same shape as the fingerprint column in Stage 1).
+  Recomputable, never migrated as data — existing rows start `lastModified == nil`.
+- Thread the record's cached `lastModified` into the produce path beside
+  `recordFileSize`. In `produceData`, the **gate fires** when a fingerprint is
+  supplied and either the on-disk size or the on-disk mtime differs from the
+  record's. When it fires, **recompute the fingerprint** from current bytes:
+  - If it **equals** the supplied one (a benign mtime bump — touch, copy,
+    re-download of identical bytes), the content is the same: serve the cached
+    `.heic`, and report `fingerprint` + `fileSizeBytes` + `lastModified` so the
+    record's stale mtime refreshes and the gate stops re-firing.
+    `duration`/`width`/`height` stay `nil` (preserved).
+  - If it **differs**, the content changed: force a fresh render (skip the disk
+    hit) and report the new fingerprint plus fresh `duration`/`width`/`height` +
+    size + mtime — a full re-derivation.
+- This **generalizes and replaces Stage 4's size-only rule.** "Size mismatch →
+  always re-render" becomes "gate fires → recompute → re-render only if the
+  fingerprint moved." A size change still forces a re-render (size is hashed into
+  the fingerprint, so it always moves it), so Stage 4's behavior is preserved as a
+  special case, while benign mtime bumps no longer waste a decode.
+- Unchanged: the fast path (neither size nor mtime moved → supplied fingerprint,
+  disk hit, no read); the in-memory `NSCache` self-healing limitation (a resident
+  thumbnail isn't re-validated while it stays in memory).
 
-One-time housekeeping on the two app containers, once Stage 2 has moved the cache
-to Application Support (so the old location is truly dead):
+Tests (test-first):
+- Same size, changed mtime, **unchanged** bytes → fingerprint recomputed and equal
+  → cached `.heic` served (no re-render), record's `lastModified` refreshed,
+  `duration` preserved.
+- Same size, changed mtime, **changed** middle bytes → fingerprint differs → fresh
+  render, new fingerprint + refreshed duration/dimensions reported.
+- Changed size → still a full re-derivation (the Stage 4 test continues to hold
+  under the generalized rule).
+- Neither size nor mtime changed → fast path, no read, supplied name reused.
+- Migration: existing rows load with `lastModified == nil` and populate on next
+  display.
 
-- **Old thumbnail caches** under the Caches directory of both containers:
-  - `~/Library/Containers/com.aytigra.ShuTaPla/Data/Library/Caches/com.aytigra.ShuTaPla/Thumbnails`
-  - `~/Library/Containers/com.aytigra.ShuTaPla.debug/Data/Library/Caches/com.aytigra.ShuTaPla.debug/Thumbnails`
-- **Coverage/profiling temp debris** — the hundreds of
-  `UUID-PID-timestamp` folders directly under each container's `Data/`, holding
-  `.profraw` (LLVM coverage) files or empty. Accumulated one-or-more per test/app
-  run and never reaped; not app data. Safe to delete wholesale.
+## Stage 8 — Cache-pressure banner
 
-This is a manual/one-shot cleanup, not app code — the store and (post-move) the
-live thumbnails are untouched. Left last so it runs against the final layout.
+The Stage 4 cache-size notice lives in Settings, which the user may never open.
+Surface it where it's seen, driven off the existing playlist scan — no new
+cache-scan cadence and no running byte counter.
+
+- **Flag from the playlist scan.** `AppState.update(_:)` (the background re-scan
+  that fires on every playlist select/re-click, already off the main actor)
+  `await`s `ThumbnailService.defaultCacheSize()` — the off-main folder-size sum —
+  and publishes an `@AppStorage("thumbnailCacheOverLimit")` bool via
+  `ThumbnailService.publishCachePressure(bytes:)` (`bytes >
+  AppConstants.thumbnailCacheWarningBytes`). Scans are infrequent and already
+  off-main, so this piggybacks with no new cadence; `@AppStorage` updates SwiftUI
+  reactively. **Settings republishes the flag after a clear/orphan sweep** (through
+  the same helper), so a sweep that drops the cache back under the threshold clears
+  the banner promptly rather than leaving it stale until the next scan.
+- **Banner in the notice strip.** `PlaylistCenterView.noticeBar` gains an orange
+  row shown when the flag is set — copy **"App cache > 1Gb!"** — presented as a
+  `SettingsLink` so a click opens the Settings scene (nothing else in the app opens
+  Settings today). It sits alongside the existing duplicate / service-filter notices.
+- **Settings inline (supersedes Stage 4 item 5's Label).** Drop the separate
+  caution `Label`; instead color the existing "Cache size" value orange when its
+  freshly-read size is over the limit. A small pure
+  `SettingsView.cacheOverLimit(bytes:) -> Bool` keeps the threshold in one place and
+  stays unit-testable; the Stage 4 `cacheSizeWarning(bytes:) -> String?` and its
+  test are replaced by it.
+
+Tests (test-first):
+- `cacheOverLimit(bytes:)` is false at/below the threshold and while loading
+  (`nil`), true above.
+- `update(_:)` sets the `@AppStorage` flag from the scanned size (logic-level via a
+  seam if practical; otherwise a manual check of the banner).

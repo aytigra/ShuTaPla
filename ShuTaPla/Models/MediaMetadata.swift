@@ -32,14 +32,17 @@ extension PlaylistFile {
                       fingerprint: fingerprint)
     }
 
-    /// Fills each cached field still `nil` on the model from `metadata`, leaving known
-    /// values untouched — so a list open and a gallery decode never fight over the same row.
+    /// Folds `metadata` onto the model, coalescing non-`nil` fields: a freshly-read value overwrites
+    /// what's cached, while a field the producer didn't read (`nil`) leaves the cached value intact.
+    /// `nil` means "not read", never "the value is nil" — so a disk-cache hit (which reports only
+    /// size + fingerprint, no decode) preserves a prior duration/dimensions, while a fresh render or
+    /// a size-mismatch re-derivation refreshes every stale field on the record.
     func merge(_ metadata: MediaMetadata) {
-        if duration == nil { duration = metadata.duration }
-        if width == nil { width = metadata.width }
-        if height == nil { height = metadata.height }
-        if fileSizeBytes == nil { fileSizeBytes = metadata.fileSizeBytes }
-        if fingerprint == nil { fingerprint = metadata.fingerprint }
+        if let duration = metadata.duration { self.duration = duration }
+        if let width = metadata.width { self.width = width }
+        if let height = metadata.height { self.height = height }
+        if let fileSizeBytes = metadata.fileSizeBytes { self.fileSizeBytes = fileSizeBytes }
+        if let fingerprint = metadata.fingerprint { self.fingerprint = fingerprint }
     }
 
     /// Whether every field this file's type can carry is already cached, so re-extracting

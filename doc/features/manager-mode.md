@@ -38,6 +38,10 @@ Each file shows the metadata its type carries. In the list these are right-align
 
 Running time, pixel dimensions, and on-disk size are all read off the main actor on first display — riding the file open that already happens (or, for images, a cheap header read), so no extra pass is needed — then cached on the file, so they appear instantly on later displays and across launches. The cached dimensions also give the preview card its true shape immediately when it opens.
 
+## Find duplicates
+
+**Find Duplicates**, a simple tool in the playlist's Settings popover (image and video), regroups the center list so files with identical content sit together: it keeps only files whose content recurs and orders them so each duplicate group is adjacent, leaving the extras to be compared and Deleted with the ordinary list/gallery, selection, and delete controls. It is not a Service Filter — it doesn't combine with the tag or triage filters and not persisted. A banner across the top of the center marks the mode and offers **Done**; any filter interaction or a playlist switch also leaves it, restoring the normal file list. Deleting a duplicate recomputes the grouping in place, so a group that drops to a single remaining copy dissolves on its own. It compares only files that have a generated thumbnail — the content fingerprint it groups by is produced when a thumbnail is — so files never shown in the gallery, and audio playlists (list-only, no gallery), are outside its reach; a disclaimer in the popover sets that expectation.
+
 ## File interactions
 
 - **Click** — select a file (also focuses it for the tag panel).

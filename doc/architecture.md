@@ -56,7 +56,7 @@ Playlist                     — name, folderBookmark (security-scoped), folderP
  ├── tagFrequency: [String: Int]         — per-playlist tag usage counts (drives dropdown order)
  └── files: [PlaylistFile]
       └── relativePath, fileName, tags: [Tag] (many-to-many), taggingStatusCode (scalar),
-          isSkipped, lastPosition?, duration?, sortOrder (shuffled order)
+          isSkipped, lastPosition?, duration?, fingerprint? (content hash), sortOrder (shuffled order)
 
 Tag                          — normalizedName (lowercased, @Attribute(.unique)),
                                name (first-seen casing), files: [PlaylistFile] (inverse)
@@ -124,7 +124,7 @@ Services hold UI-independent logic, are injected into state objects (not views),
 
 - **PlaybackEngines** — `VideoPlaybackEngine` and `AudioPlaybackEngine` each own one `MPVClient`; `ImagePlaybackEngine` is a timer-based slideshow driver with no mpv. Each is `@MainActor @Observable`, exposing time/duration/isPlaying/isLooping for direct SwiftUI observation. Each `AsyncStream<MPVEvent>` has exactly one consumer — the owning engine — which updates its own observable state on `MainActor`; the coordinator observes those. On `eof-reached`, looping replays via mpv's `loop-file`, otherwise the engine advances to the next file in `sortOrder` (the coordinator decides the target).
 
-- **ThumbnailService** (`@MainActor @Observable`) — lazy thumbnails over a two-tier cache (in-memory `NSCache` over an on-disk PNG cache keyed by `relativePath + mod-date + size`). The `@MainActor` entry reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoded off-main so scrolling never blocks on a draw-time decode). A synchronous `cachedThumbnail` lookup avoids a placeholder flash for already-cached cells. Image frames come from `CGImageSource`; video frames from `AVAssetImageGenerator`, **falling back to `MPVThumbnailer`** for containers AVFoundation can't demux (webm/mkv). Generation also carries the file's running **duration** back with the frame, so the gallery's length badge appears with the thumbnail rather than as a second pass.
+- **ThumbnailService** (`@MainActor @Observable`) — lazy thumbnails over a two-tier cache: an in-memory `NSCache` (keyed by playlist id + relative path) over an on-disk HEIC cache **keyed by the file's content fingerprint** (`URL.contentFingerprint` — the byte size plus a SHA-256 over the head/tail windows), so the same media shares one generated thumbnail across every folder or playlist that references it, and a rename or move keeps the entry instead of orphaning it. The fingerprint carries its own invalidation (a content change yields a new one); it is computed on the first cold load and **persisted back on the `PlaylistFile`** (folded through the `MediaMetadata` merge) so later sessions supply it without re-reading the file. The disk cache lives under **Application Support**, not the OS-purged Caches directory, so it survives disk pressure and its size / clear-all / clear-orphans management is the app's own; the persisted fingerprint is what lets the orphan sweep enumerate live keys without opening any file. The `@MainActor` entry reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoded off-main so scrolling never blocks on a draw-time decode). A synchronous `cachedThumbnail` lookup avoids a placeholder flash for already-cached cells. Image frames come from `CGImageSource`; video frames from `AVAssetImageGenerator`, **falling back to `MPVThumbnailer`** for containers AVFoundation can't demux (webm/mkv). Generation also carries the file's running **duration** back with the frame, so the gallery's length badge appears with the thumbnail rather than as a second pass.
 
 - **MPVThumbnailer** — stateless libmpv fallback. Each call spins a short-lived windowless mpv instance (`vo=image`), seeks 10% in, writes one PNG, and tears down — owning a fresh handle, never touching the playback engines' `MPVClient`. Calls are serialized on one background-QoS queue with a per-call deadline. Also exposes `duration(at:)` (loads just far enough to read the demuxer's duration, decoding nothing).
 
@@ -228,7 +228,7 @@ Results from background work are delivered back to `MainActor` to touch SwiftDat
 | File position within file | SwiftData (`PlaylistFile`) | Always for the live Visual/Audio Channel Playlists (lifecycle resume, cleared on Stop); for any other entry into a file only when `filePositionPersistence` is on |
 | Window frame | SwiftData (`AppStateModel`) | On move/resize (debounced) |
 | Security-scoped bookmarks | SwiftData (`Playlist`) | On creation |
-| Thumbnail cache | File system (Caches dir) | On generation |
+| Thumbnail cache | File system (Application Support) | On generation |
 
 Launch reconstructs the runtime objects from persisted state (Playing playlists resume, Paused stay paused — relaunch behaves like reopening the window). On a file mutation against a stale bookmark, `AppState.beginFolderAccess(to:)` prompts to relocate the folder and refreshes the bookmark.
 
@@ -274,7 +274,7 @@ Views/
   Shared/    TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
              HoverZone, ControlButtonStyle, FileSelection, FileRowView
   Settings/  SettingsView
-Extensions/  URL+MediaType, Array+Move, NSWindow+Fullscreen
+Extensions/  URL+MediaType, URL+Fingerprint, Array+Move, NSWindow+Fullscreen
 Resources/   Assets.xcassets
 ```
 

@@ -114,24 +114,29 @@ import UniformTypeIdentifiers
 
     // MARK: - The merge sink
 
-    @MainActor @Test func mergeFillsOnlyNilFields() throws {
+    @MainActor @Test func mergeCoalescesNonNilFields() throws {
         let file = PlaylistFile(relativePath: "a.mp4", fileName: "a.mp4")
-        file.duration = 10          // already known — must survive the merge
+        file.duration = 10
         file.width = 1920
-        file.fingerprint = "keepme" // already known — must survive the merge
+        file.fingerprint = "old"
 
-        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048, fingerprint: "other"))
-
-        #expect(file.duration == 10)          // untouched
-        #expect(file.width == 1920)           // untouched
+        // A bundle carrying every field (a fresh render / size-mismatch re-derivation) overwrites —
+        // a freshly-read value always wins over a stale cached one.
+        file.merge(MediaMetadata(duration: 99, width: 640, height: 480, fileSizeBytes: 2048, fingerprint: "new"))
+        #expect(file.duration == 99)          // overwritten by the fresh read
+        #expect(file.width == 640)            // overwritten
         #expect(file.height == 480)           // filled
         #expect(file.fileSizeBytes == 2048)   // filled
-        #expect(file.fingerprint == "keepme") // untouched
+        #expect(file.fingerprint == "new")    // overwritten
 
-        // A record with no fingerprint yet takes the merged one — the first-display path persisting.
-        let fresh = PlaylistFile(relativePath: "b.mp4", fileName: "b.mp4")
-        fresh.merge(MediaMetadata(fingerprint: "abc"))
-        #expect(fresh.fingerprint == "abc")
+        // A partial bundle (a disk-cache hit: size + fingerprint, no decode) leaves the decoded
+        // fields intact — a `nil` means "not read", never erases what's cached.
+        file.merge(MediaMetadata(fileSizeBytes: 4096, fingerprint: "newer"))
+        #expect(file.duration == 99)          // nil incoming → untouched
+        #expect(file.width == 640)            // untouched
+        #expect(file.height == 480)           // untouched
+        #expect(file.fileSizeBytes == 4096)   // overwritten
+        #expect(file.fingerprint == "newer")  // overwritten
     }
 
     // MARK: - The completeness guard
@@ -208,9 +213,10 @@ import UniformTypeIdentifiers
         _ = container
     }
 
-    // Incidental healing: a file already carrying its duration but missing the newer
-    // fields fills the gaps on its next display, without disturbing the known value.
-    @MainActor @Test func healsMissingFieldsOnDisplay() async throws {
+    // A file carrying a partial bundle fills its missing fields on its next display; because a
+    // freshly-read value wins (coalesce-non-nil merge), its pre-existing duration is refreshed from
+    // the file too, rather than a stale seeded value surviving.
+    @MainActor @Test func fillsGapsAndRefreshesOnDisplay() async throws {
         let container = try makeContainer()
         let context = container.mainContext
 
@@ -219,14 +225,15 @@ import UniformTypeIdentifiers
         let bookmark = try BookmarkService.makeBookmark(for: dir)
         let playlist = Playlist(name: "V", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
         let file = PlaylistFile(relativePath: url.lastPathComponent, fileName: url.lastPathComponent)
-        file.duration = 7          // a pre-existing cached length, dimensions/size still nil
+        file.duration = 7          // a seeded (stale) length, dimensions/size still nil → incomplete
         file.playlist = playlist
         playlist.files = [file]
         context.insert(playlist)
 
         _ = await MediaMetadataService().metadata(for: file, in: playlist)
-        #expect(file.duration == 7)                       // untouched
-        #expect(try #require(file.width) > 0)             // healed
+        #expect(try #require(file.duration) > 0)          // refreshed from the file (not the seeded 7)
+        #expect(file.duration != 7)
+        #expect(try #require(file.width) > 0)             // filled
         #expect(try #require(file.height) > 0)
         #expect(try #require(file.fileSizeBytes) > 0)
 

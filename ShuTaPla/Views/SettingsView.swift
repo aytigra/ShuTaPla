@@ -48,7 +48,10 @@ struct SettingsView: View {
             }
 
             Section {
-                LabeledContent("Cache size", value: cacheSize?.formattedFileSize ?? "—")
+                LabeledContent("Cache size") {
+                    Text(cacheSize?.formattedFileSize ?? "—")
+                        .foregroundStyle(AppConstants.cacheOverLimit(bytes: cacheSize) ? .orange : .primary)
+                }
                 HStack {
                     Button("Remove Orphans") { run { await removeOrphans() } }
                     Button("Clear All", role: .destructive) { run { await clearAll() } }
@@ -60,7 +63,7 @@ struct SettingsView: View {
             } header: {
                 Text("Thumbnail cache")
             } footer: {
-                Text("“Remove Orphans” deletes only thumbnails no playlist file references anymore.")
+                Text("“Remove Orphans” deletes cached thumbnails no playlist file still references, plus any stray files.")
             }
         }
         .formStyle(.grouped)
@@ -71,18 +74,26 @@ struct SettingsView: View {
         // and refresh the size in case the cache changed while the panel was closed.
         .task {
             lastResult = nil
-            cacheSize = await thumbnails.cacheSize()
+            await refreshSize()
         }
     }
 
-    /// Runs a cache operation with the buttons disabled, then refreshes the displayed size.
+    /// Runs a cache operation with the buttons disabled, then refreshes the size and pressure flag.
     private func run(_ operation: @escaping () async -> Void) {
         Task {
             isWorking = true
             await operation()
-            cacheSize = await thumbnails.cacheSize()
+            await refreshSize()
             isWorking = false
         }
+    }
+
+    /// Re-reads the cache size for the readout and republishes the pressure flag, so both the
+    /// Settings value and the Manager banner reflect the footprint after a clear/orphan sweep.
+    private func refreshSize() async {
+        let bytes = await thumbnails.cacheSize()
+        cacheSize = bytes
+        ThumbnailService.publishCachePressure(bytes: bytes)
     }
 
     private func clearAll() async {
@@ -92,7 +103,7 @@ struct SettingsView: View {
 
     private func removeOrphans() async {
         let result = await thumbnails.clearOrphans(liveFingerprints: appState.liveThumbnailFingerprints())
-        let count = result.removed.pluralized(one: "1 thumbnail", many: "\(result.removed) thumbnails")
+        let count = result.removed.pluralized(one: "1 item", many: "\(result.removed) items")
         lastResult = "Removed \(count) (\(result.bytes.formattedFileSize))."
     }
 }

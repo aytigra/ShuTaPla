@@ -317,29 +317,111 @@ struct ThumbnailServiceTests {
         #expect(entries.isEmpty)                              // the cache is untouched
     }
 
+    /// A supplied fingerprint whose on-disk size no longer matches the record's cached size means the
+    /// bytes changed: the produce path discards it, recomputes from the current bytes, and re-renders
+    /// rather than serving the old `.heic` — so the new fingerprint, the new size, *and* the new
+    /// dimensions are reported back for the merge to persist.
+    @MainActor @Test
+    func sizeMismatchForcesRecomputeAndFullReRender() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        // First display of the original 80×80 content: computes fingerprint fp0 and writes fp0.heic.
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let fp0 = try #require(fileURL.contentFingerprint())
+        let oldSize = try #require(fileURL.fileSizeBytes)
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(fp0).heic").path))
+
+        // The file is rewritten in place with different content *and* a different byte size.
+        try writePNG(width: 8, height: 8, to: fileURL)
+        let newFp = try #require(fileURL.contentFingerprint())
+        let newSize = try #require(fileURL.fileSizeBytes)
+        #expect(newFp != fp0)
+        #expect(newSize != oldSize)
+
+        // A record still carrying the stale fingerprint + size drives the entry point (a fresh
+        // service so no in-memory hit hides the produce path).
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp0
+        file.fileSizeBytes = oldSize
+        let service2 = ThumbnailService(cacheDirectory: cacheDir)
+        let result = await service2.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+
+        #expect(result.image != nil)
+        #expect(result.metadata.fingerprint == newFp)     // recomputed from the current bytes
+        #expect(result.metadata.fingerprint != fp0)
+        #expect(result.metadata.fileSizeBytes == newSize)
+        #expect(result.metadata.width == 8)               // a fresh decode ran (a hit reports nil)
+        #expect(result.metadata.height == 8)
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(newFp).heic").path))
+
+        // The merge folds the fresh facts over the stale ones.
+        file.width = 80
+        file.height = 80
+        file.merge(result.metadata)
+        #expect(file.fingerprint == newFp)
+        #expect(file.fileSizeBytes == newSize)
+        #expect(file.width == 8)
+        #expect(file.height == 8)
+    }
+
+    /// A file whose bytes open (so a fingerprint *can* be computed) but don't decode into an image
+    /// persists no fingerprint: the produce path yields no thumbnail and reports `fingerprint == nil`,
+    /// so a corrupt / 0-byte file never collapses into a bogus duplicate group.
+    @MainActor @Test
+    func renderFailurePersistsNoFingerprint() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        // Readable bytes that are not a decodable image: `contentFingerprint` succeeds, the render fails.
+        let fileURL = dir.appending(path: "broken.png")
+        try Data(count: 4096).write(to: fileURL)
+        #expect(fileURL.contentFingerprint() != nil)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "broken.png", fileName: "broken.png")
+        let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+
+        #expect(result.image == nil)                    // nothing decoded
+        #expect(result.metadata.fingerprint == nil)     // so no fingerprint is persisted
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
+    }
+
     // MARK: - Cache management
 
-    /// The reported size sums the `.heic` thumbnails and nothing else — a stray non-`.heic`
-    /// file in the directory doesn't inflate it.
+    /// The reported size is the whole directory's footprint — the single-writer cache folder holds
+    /// only what we wrote, so a stray non-`.heic` file counts toward it too.
     @Test
-    func cacheSizeSumsOnlyHeicFiles() async throws {
+    func cacheSizeSumsWholeDirectory() async throws {
         let cacheDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: cacheDir) }
         try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
         try Data(count: 250).write(to: cacheDir.appending(path: "bbb.heic"))
-        try Data(count: 999).write(to: cacheDir.appending(path: "notes.txt"))
+        try Data(count: 999).write(to: cacheDir.appending(path: "notes.txt"))   // stray
 
         let service = await ThumbnailService(cacheDirectory: cacheDir)
-        #expect(await service.cacheSize() == 350)
+        #expect(await service.cacheSize() == 1349)
     }
 
-    /// Clear-all empties the cache: every thumbnail is gone and the reported size drops to zero.
+    /// Clear-all empties the whole cache directory — every thumbnail and any stray file — and the
+    /// reported size drops to zero.
     @Test
     func clearCacheEmptiesTheDirectory() async throws {
         let cacheDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: cacheDir) }
         try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
         try Data(count: 100).write(to: cacheDir.appending(path: "bbb.heic"))
+        try Data(count: 999).write(to: cacheDir.appending(path: "notes.txt"))   // stray
 
         let service = await ThumbnailService(cacheDirectory: cacheDir)
         await service.clearCache()
@@ -348,23 +430,26 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
     }
 
-    /// Clear-orphans removes exactly the thumbnails whose fingerprint no live record carries and
-    /// keeps the referenced ones, reporting the count and total bytes it freed.
+    /// Clear-orphans keeps exactly the `.heic` thumbnails a live record still references and
+    /// removes everything else — an unreferenced thumbnail *and* any stray non-`.heic` file —
+    /// reporting the count and total bytes it freed.
     @Test
-    func clearOrphansRemovesUnreferencedKeepsReferenced() async throws {
+    func clearOrphansRemovesUnreferencedAndStrayKeepsReferenced() async throws {
         let cacheDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: cacheDir) }
         try Data(count: 100).write(to: cacheDir.appending(path: "aaa.heic"))
-        try Data(count: 500).write(to: cacheDir.appending(path: "bbb.heic"))   // orphan
+        try Data(count: 500).write(to: cacheDir.appending(path: "bbb.heic"))    // orphan
         try Data(count: 100).write(to: cacheDir.appending(path: "ccc.heic"))
+        try Data(count: 999).write(to: cacheDir.appending(path: "notes.txt"))   // stray
 
         let service = await ThumbnailService(cacheDirectory: cacheDir)
         let result = await service.clearOrphans(liveFingerprints: ["aaa", "ccc"])
 
-        #expect(result.removed == 1)
-        #expect(result.bytes == 500)
+        #expect(result.removed == 2)
+        #expect(result.bytes == 1499)
         #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "aaa.heic").path))
         #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "ccc.heic").path))
         #expect(!FileManager.default.fileExists(atPath: cacheDir.appending(path: "bbb.heic").path))
+        #expect(!FileManager.default.fileExists(atPath: cacheDir.appending(path: "notes.txt").path))
     }
 }

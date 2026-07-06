@@ -31,6 +31,10 @@ extension AppState {
     /// it isn't) — the buried tool raised from `PlaylistSettingsView`.
     func findDuplicates(in playlist: Playlist) {
         if managedPlaylist !== playlist { setManaged(playlist) }
+        // Flush fingerprints merged onto records while scrolling (relying on autosave) before the
+        // mode's `duplicateSequence` fetch, which ignores pending changes — otherwise a just-viewed
+        // pair would be invisible to the grouping.
+        persistAndRefresh()
         setDuplicateSearch(true)
     }
 

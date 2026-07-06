@@ -1348,6 +1348,30 @@ struct AppStateTests {
         #expect(appState.managerFileIDs == context.displaySequence(of: playlist))
     }
 
+    /// `findDuplicates` saves before entering the mode: fingerprints merged onto records while
+    /// scrolling (and not yet flushed by autosave) must be visible to `duplicateSequence`, whose
+    /// fetch ignores pending changes — otherwise a just-viewed pair would be invisible to the tool.
+    @Test func findDuplicatesFlushesPendingFingerprintsBeforeEntering() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context)
+        let b = addFile("b.jpg", order: 1, to: playlist, in: context)
+        try context.save()   // saved with no fingerprints
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist   // pre-managed, so findDuplicates skips setManaged
+
+        // Two matching fingerprints merged on display but not yet saved.
+        a.fingerprint = "dup"
+        b.fingerprint = "dup"
+
+        appState.findDuplicates(in: playlist)
+        #expect(appState.duplicateSearchActive)
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg"])   // the flushed pair is visible
+    }
+
     // MARK: - Filtering (Task 7)
 
     @Test func tagFilterAppliesAndOrCorrectly() async throws {

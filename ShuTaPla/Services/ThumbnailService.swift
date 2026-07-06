@@ -50,21 +50,28 @@ final class ThumbnailService {
 
     init(cacheDirectory: URL? = nil) {
         memory.totalCostLimit = Self.cacheByteBudget
-        if let cacheDirectory {
-            self.cacheDirectory = cacheDirectory
-        } else {
-            // Application Support, not Caches: the OS purges the Caches directory under disk
-            // pressure with no regard for what's still referenced, discarding thumbnails the
-            // user is actively viewing. Application Support is ours to manage (size / clear /
-            // orphan-sweep below), so the cache persists until we evict it.
-            let base = FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.temporaryDirectory
-            let bundleID = Bundle.main.bundleIdentifier ?? "ShuTaPla"
-            self.cacheDirectory = base
-                .appending(path: bundleID, directoryHint: .isDirectory)
-                .appending(path: "Thumbnails", directoryHint: .isDirectory)
-        }
+        self.cacheDirectory = cacheDirectory ?? Self.defaultCacheDirectory
+    }
+
+    /// The app's on-disk thumbnail directory. Application Support, not Caches: the OS purges the
+    /// Caches directory under disk pressure with no regard for what's still referenced, discarding
+    /// thumbnails the user is actively viewing. Application Support is ours to manage (size / clear
+    /// / orphan-sweep below), so the cache persists until we evict it. `static` so the playlist
+    /// scan can measure its size (`defaultCacheSize`) without holding the main-actor service.
+    nonisolated static var defaultCacheDirectory: URL {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let bundleID = Bundle.main.bundleIdentifier ?? "ShuTaPla"
+        return base
+            .appending(path: bundleID, directoryHint: .isDirectory)
+            .appending(path: "Thumbnails", directoryHint: .isDirectory)
+    }
+
+    /// Total bytes the app's default cache occupies — the size read the playlist scan uses to
+    /// refresh the cache-pressure flag, off the main actor and without a service instance.
+    nonisolated static func defaultCacheSize() async -> Int {
+        await cacheSize(in: defaultCacheDirectory)
     }
 
     // MARK: - Public API
@@ -81,6 +88,7 @@ final class ThumbnailService {
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video
         let fingerprint = file.fingerprint
+        let recordFileSize = file.fileSizeBytes
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
         if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
@@ -93,6 +101,7 @@ final class ThumbnailService {
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
             fingerprint: fingerprint,
+            recordFileSize: recordFileSize,
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, produced.metadata) }
@@ -137,49 +146,58 @@ final class ThumbnailService {
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
             fingerprint: nil,
+            recordFileSize: nil,
             cacheDirectory: cacheDirectory
         ).data
     }
 
     // MARK: - Cache management
 
-    /// Total bytes the cache occupies on disk — the sum of its `.heic` thumbnails. Read off
-    /// the main actor, since a large cache is a directory enumeration.
+    /// Total bytes the cache occupies on disk — the whole directory's footprint. Read off the
+    /// main actor, since a large cache is a directory enumeration.
     func cacheSize() async -> Int {
         await Self.cacheSize(in: cacheDirectory)
     }
 
-    /// Removes every generated thumbnail, emptying the cache directory (the directory itself is
-    /// recreated by the next produce).
+    /// Empties the cache directory — every generated thumbnail and any stray file (the directory
+    /// itself is recreated by the next produce).
     func clearCache() async {
         await Self.clearCache(in: cacheDirectory)
     }
 
-    /// Removes the cached thumbnails no live record references — a `.heic` whose base name (a
-    /// fingerprint) is absent from `liveFingerprints`, which the caller gathers from every
-    /// persisted `PlaylistFile.fingerprint` (this service holds no model context). Reports the
-    /// number removed and their total bytes, measured as it sweeps: pre-measuring the orphans
-    /// would mean a redundant second pass, and the sweep is the slow part regardless.
+    /// Removes everything the cache shouldn't hold — a `.heic` whose base name (a fingerprint) is
+    /// absent from `liveFingerprints`, plus any stray non-`.heic` file — keeping only the live
+    /// thumbnails. `liveFingerprints` is gathered from every persisted `PlaylistFile.fingerprint`
+    /// (this service holds no model context). Reports the number removed and their total bytes,
+    /// measured as it sweeps: pre-measuring would mean a redundant second pass, and the sweep is
+    /// the slow part regardless.
     func clearOrphans(liveFingerprints: Set<String>) async -> (removed: Int, bytes: Int) {
         await Self.clearOrphans(in: cacheDirectory, liveFingerprints: liveFingerprints)
     }
 
-    /// The `.heic` thumbnails in `directory`; an absent or empty directory yields none. Any
-    /// non-`.heic` entry is ignored, so a size or sweep counts only thumbnails we wrote.
-    private nonisolated static func heicFiles(in directory: URL) -> [URL] {
-        let entries = (try? FileManager.default.contentsOfDirectory(
+    /// Every entry in `directory`; an absent or empty directory yields none. The cache folder is
+    /// ours and single-writer, so its whole contents *are* the cache: a size counts them all and a
+    /// clear removes them all. Only the orphan sweep discriminates, keeping the live `.heic` set.
+    private nonisolated static func cacheEntries(in directory: URL) -> [URL] {
+        (try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-        return entries.filter { $0.pathExtension == "heic" }
+    }
+
+    /// A file the orphan sweep keeps: a `.heic` thumbnail whose fingerprint (its base name) a live
+    /// record still references. Everything else — an unreferenced thumbnail or any stray file —
+    /// is swept, since nothing legitimate is ever left in the cache folder but referenced thumbnails.
+    private nonisolated static func isLiveThumbnail(_ file: URL, in liveFingerprints: Set<String>) -> Bool {
+        file.pathExtension == "heic" && liveFingerprints.contains(file.deletingPathExtension().lastPathComponent)
     }
 
     @concurrent
     private nonisolated static func cacheSize(in directory: URL) async -> Int {
-        heicFiles(in: directory).reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
+        cacheEntries(in: directory).reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
     }
 
     @concurrent
     private nonisolated static func clearCache(in directory: URL) async {
-        for file in heicFiles(in: directory) {
+        for file in cacheEntries(in: directory) {
             try? FileManager.default.removeItem(at: file)
         }
     }
@@ -190,8 +208,7 @@ final class ThumbnailService {
     ) async -> (removed: Int, bytes: Int) {
         var removed = 0
         var bytes = 0
-        for file in heicFiles(in: directory)
-        where !liveFingerprints.contains(file.deletingPathExtension().lastPathComponent) {
+        for file in cacheEntries(in: directory) where !isLiveThumbnail(file, in: liveFingerprints) {
             let size = file.fileSizeBytes ?? 0
             if (try? FileManager.default.removeItem(at: file)) != nil {
                 removed += 1
@@ -199,6 +216,14 @@ final class ThumbnailService {
             }
         }
         return (removed, bytes)
+    }
+
+    /// Writes the cache-pressure flag the Manager notice-strip banner reads. Called from the
+    /// playlist scan and after a clear/orphan sweep, so the banner reflects the current footprint
+    /// (and clears promptly once a sweep drops the cache back under the threshold).
+    nonisolated static func publishCachePressure(bytes: Int) {
+        UserDefaults.standard.set(
+            AppConstants.cacheOverLimit(bytes: bytes), forKey: AppConstants.thumbnailCacheOverLimitKey)
     }
 
     // MARK: - Cache key
@@ -256,6 +281,7 @@ final class ThumbnailService {
         isVideo: Bool,
         maxPixelSize: Int,
         fingerprint: String?,
+        recordFileSize: Int?,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
         // One resolve + scoped-access session for the whole produce: form the cache name (which
@@ -265,14 +291,20 @@ final class ThumbnailService {
             bookmark: bookmark, relativePath: relativePath
         ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
             let fileSizeBytes = fileURL.fileSizeBytes
-            guard let named = cacheFilename(fileURL: fileURL, fingerprint: fingerprint) else {
+            // A supplied fingerprint whose on-disk size no longer matches the record's cached size
+            // means the bytes changed (remove-sound, or a different file at the same path): discard
+            // it, recompute from the current bytes, and re-render rather than serve the stale `.heic`
+            // — so duration/dimensions are re-derived too. Size-gated, so an unchanged file pays
+            // nothing extra and still takes the disk-cache hit below.
+            let sizeChanged = fingerprint != nil && recordFileSize != nil && fileSizeBytes != recordFileSize
+            guard let named = cacheFilename(fileURL: fileURL, fingerprint: sizeChanged ? nil : fingerprint) else {
                 return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes))
             }
             // Report a fingerprint only when this path computed one (`nil` when supplied), so the
-            // merge fills a `nil` record and leaves a set one untouched.
+            // merge fills a `nil` record and leaves a matching one untouched.
             let hitMetadata = MediaMetadata(fileSizeBytes: fileSizeBytes, fingerprint: named.computed)
             let diskURL = cacheDirectory.appending(path: named.name)
-            if let data = try? Data(contentsOf: diskURL) {
+            if !sizeChanged, let data = try? Data(contentsOf: diskURL) {
                 if isDecodableImage(data) { return (data, hitMetadata) }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
@@ -282,8 +314,11 @@ final class ThumbnailService {
 
             var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             rendered.metadata.fileSizeBytes = fileSizeBytes
-            rendered.metadata.fingerprint = named.computed
+            // A file that opens (so a fingerprint could be computed) but fails to render persists no
+            // fingerprint: set it only past this guard, so a corrupt / 0-byte file never keys the
+            // cache or collapses into a bogus duplicate group.
             guard let data = rendered.data else { return (nil, rendered.metadata) }
+            rendered.metadata.fingerprint = named.computed
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             try? data.write(to: diskURL)
             return (data, rendered.metadata)
@@ -302,6 +337,7 @@ final class ThumbnailService {
         isVideo: Bool,
         maxPixelSize: Int,
         fingerprint: String?,
+        recordFileSize: Int?,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
@@ -310,6 +346,7 @@ final class ThumbnailService {
             isVideo: isVideo,
             maxPixelSize: maxPixelSize,
             fingerprint: fingerprint,
+            recordFileSize: recordFileSize,
             cacheDirectory: cacheDirectory
         )
         guard let data = produced.data else { return (nil, produced.metadata) }

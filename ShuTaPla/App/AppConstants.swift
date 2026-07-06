@@ -25,6 +25,24 @@ nonisolated enum AppConstants {
     /// in-memory cache budget around this, so the two stay coupled through one value.
     static let galleryThumbnailPixelSize = 440
 
+    /// Disk-cache size past which the app flags cache pressure — the Settings size readout turns
+    /// orange and the Manager notice strip shows a banner. The thumbnail cache has no automatic
+    /// eviction (it's ours to manage, not the OS Caches directory), so the caution nudges a manual
+    /// clear before it grows without bound.
+    static let thumbnailCacheWarningBytes = 1024 * 1024 * 1024   // 1 GB
+
+    /// `UserDefaults` key for the cache-over-limit flag the playlist scan refreshes and the
+    /// Manager banner reads via `@AppStorage`.
+    static let thumbnailCacheOverLimitKey = "thumbnailCacheOverLimit"
+
+    /// Whether a measured cache size warrants the caution — the one predicate the Settings readout
+    /// and the notice-strip banner share. `false` while the size is still loading (`nil`) and at or
+    /// below the threshold.
+    static func cacheOverLimit(bytes: Int?) -> Bool {
+        guard let bytes else { return false }
+        return bytes > thumbnailCacheWarningBytes
+    }
+
     /// Opacity of the accent-tinted selection highlight behind a selected row/cell,
     /// shared by every list/grid so the selection reads consistently across them.
     static let selectionHighlightOpacity = 0.22

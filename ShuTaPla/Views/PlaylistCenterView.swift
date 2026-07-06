@@ -16,6 +16,10 @@ struct PlaylistCenterView: View {
 
     @State private var errorMessage: String?
 
+    /// Set by the playlist scan when the on-disk thumbnail cache exceeds the caution threshold;
+    /// drives the notice-strip cache-pressure banner.
+    @AppStorage(AppConstants.thumbnailCacheOverLimitKey) private var cacheOverLimit = false
+
     var body: some View {
         Group {
             if let playlist = appState.managedPlaylist {
@@ -108,11 +112,28 @@ struct PlaylistCenterView: View {
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
         let _ = appState.sequenceVersion   // re-derive the counts (or the mode) when the sequence changes
+        if cacheOverLimit { cacheBanner }
         if appState.duplicateSearchActive {
             duplicateNotice
         } else {
             serviceFilterNotices(playlist)
         }
+    }
+
+    /// Shown while the on-disk thumbnail cache is over the caution threshold; a click opens
+    /// Settings, where the cache can be cleared.
+    @ViewBuilder
+    private var cacheBanner: some View {
+        SettingsLink {
+            Label("App cache > 1Gb!", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        Divider()
     }
 
     /// Signals the find-duplicates mode and gives an explicit way out; any filter interaction or
