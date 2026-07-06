@@ -52,11 +52,17 @@ struct GalleryCell: View {
                 image = cached
             } else {
                 let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
-                // On fast scroll/recycle this cell may already be showing a different file
-                // by the time generation lands; don't paint the stale image into it.
+                // Generation runs off-actor and always completes — cancellation can't abort it,
+                // it only flips `Task.isCancelled`. Its result must therefore be handled either
+                // way: the thumbnail is already written to disk keyed by its fingerprint, and this
+                // merge is what records that fingerprint on the model. Skipping it would strand the
+                // just-written thumbnail with no live record, so the orphan sweep deletes it.
+                file.merge(result.metadata)
+                // The guard protects *only* the on-screen image: on fast scroll/recycle this cell
+                // may already be showing a different file by the time generation lands, so don't
+                // paint this (now stale) thumbnail into it.
                 guard !Task.isCancelled else { return }
                 image = result.image
-                file.merge(result.metadata)
             }
             // A thumbnail served from cache (disk or memory) carries no decoded metadata,
             // and a fresh decode fills only what its type carries; open the file once more

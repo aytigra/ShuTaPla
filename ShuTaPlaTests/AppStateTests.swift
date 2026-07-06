@@ -157,6 +157,23 @@ struct AppStateTests {
         #expect(appState.liveThumbnailFingerprints().contains("fp-pending"))
     }
 
+    /// The real gallery path: the record is already persisted (with `fingerprint == nil`) when the
+    /// thumbnail lands and `merge` sets the fingerprint — a pending *update*, not a pending insert.
+    /// A columnar `propertiesToFetch` read serves the stale store value here, so the sweep must
+    /// still see the merged key or it deletes the thumbnail of a file just viewed this session.
+    @Test func liveThumbnailFingerprintsIncludesMergeOntoPersistedRecord() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let file = addFile("a.jpg", order: 0, to: playlist, in: context)   // persisted, fingerprint nil
+        file.fingerprint = "fp-merged"                                     // pending update after display
+
+        #expect(appState.liveThumbnailFingerprints().contains("fp-merged"))
+    }
+
     // MARK: - Launch reconstruction & lifecycle (Task 16)
 
     /// A real temp folder holding the named (empty) files, with a bookmark, so a reconstructed
