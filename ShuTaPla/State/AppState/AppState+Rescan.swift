@@ -162,8 +162,6 @@ extension AppState {
         busyPlaylistIDs.insert(playlist.id)
         defer { busyPlaylistIDs.remove(playlist.id) }
 
-        await refreshCachePressureFlag()
-
         // Commit a refreshed bookmark before handing off, so the main context holds no pending
         // edit the background reconcile is unaware of and the actor's fetch sees the new bookmark.
         if folderAccess.refreshStaleBookmark(for: playlist) { try? modelContext.save() }
@@ -176,13 +174,6 @@ extension AppState {
         }
         guard !Task.isCancelled else { return }
         await deriveInBackground(playlist, from: current)
-    }
-
-    /// Measures the on-disk thumbnail cache (off the main actor) and writes the cache-pressure
-    /// flag the Manager notice-strip banner reads. Piggybacks the scan's cadence — infrequent and
-    /// already off-main — so there's no dedicated cache-scan pass or running counter.
-    private func refreshCachePressureFlag() async {
-        ThumbnailService.publishCachePressure(bytes: await ThumbnailService.defaultCacheSize())
     }
 
     /// Reconciles `playlist` against `current` on the background `scanActor` and applies a committed

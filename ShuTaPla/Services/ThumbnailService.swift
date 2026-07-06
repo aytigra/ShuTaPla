@@ -128,14 +128,14 @@ final class ThumbnailService {
         memory.object(forKey: memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize))
     }
 
-    /// Cheap, disk-I/O-free key for the in-memory cache: playlist id + relative path +
-    /// size. The playlist's stable id is collision-free (unlike a per-process
-    /// `hashValue`, which two folders' bookmarks can share and cross-paint). The disk
-    /// cache keys instead by content fingerprint (shared across folders); an in-memory
-    /// entry is refreshed when the file is renamed (its relative path changes) or on the
-    /// next launch.
+    /// Cheap, disk-I/O-free key for the in-memory cache: playlist id + relative path + longest-edge
+    /// pixel size + content fingerprint. The playlist's stable id is collision-free (unlike a
+    /// per-process `hashValue`, which two folders' bookmarks can share and cross-paint). Folding in
+    /// the fingerprint means a content change the record has picked up (a new fingerprint) keys a
+    /// fresh entry, so an in-place edit isn't served a stale decode carried over from earlier in the
+    /// session; an empty string stands in until the first fingerprint is known.
     private func memoryKey(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSString {
-        "\(playlist.id.uuidString)|\(file.relativePath)|\(maxPixelSize)" as NSString
+        "\(playlist.id.uuidString)|\(file.relativePath)|\(maxPixelSize)|\(file.fingerprint ?? "")" as NSString
     }
 
     /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative

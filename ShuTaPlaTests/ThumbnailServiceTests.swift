@@ -22,6 +22,13 @@ private func makeTempDir() throws -> URL {
     return url
 }
 
+/// Reads on-disk size / mtime through a freshly built URL. `URL` caches resource values per value,
+/// so re-reading the original `fileURL` after an in-place rewrite returns the stale pre-rewrite facts
+/// — the production producer always resolves a fresh URL per generation, so only these fixtures, which
+/// reuse one URL across a mutation, need this.
+private func currentSize(_ url: URL) -> Int? { URL(fileURLWithPath: url.path).fileSizeBytes }
+private func currentMtime(_ url: URL) -> Date? { URL(fileURLWithPath: url.path).contentModificationDate }
+
 /// Writes an opaque PNG of the given pixel dimensions to `url`.
 private func writePNG(width: Int, height: Int, to url: URL) throws {
     guard let rep = NSBitmapImageRep(
@@ -333,7 +340,7 @@ struct ThumbnailServiceTests {
         // First display of the original 80×80 content: computes fingerprint fp0 and writes fp0.heic.
         try writePNG(width: 80, height: 80, to: fileURL)
         let fp0 = try #require(fileURL.contentFingerprint())
-        let oldSize = try #require(fileURL.fileSizeBytes)
+        let oldSize = try #require(currentSize(fileURL))
         let service = ThumbnailService(cacheDirectory: cacheDir)
         #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
         #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(fp0).heic").path))
@@ -341,7 +348,7 @@ struct ThumbnailServiceTests {
         // The file is rewritten in place with different content *and* a different byte size.
         try writePNG(width: 8, height: 8, to: fileURL)
         let newFp = try #require(fileURL.contentFingerprint())
-        let newSize = try #require(fileURL.fileSizeBytes)
+        let newSize = try #require(currentSize(fileURL))
         #expect(newFp != fp0)
         #expect(newSize != oldSize)
 
@@ -388,15 +395,15 @@ struct ThumbnailServiceTests {
         // First display: computes fp0, writes fp0.heic. Capture the record's cached facts.
         try writePNG(width: 80, height: 80, to: fileURL)
         let fp0 = try #require(fileURL.contentFingerprint())
-        let size = try #require(fileURL.fileSizeBytes)
-        let originalMtime = try #require(fileURL.contentModificationDate)
+        let size = try #require(currentSize(fileURL))
+        let originalMtime = try #require(currentMtime(fileURL))
         let service = ThumbnailService(cacheDirectory: cacheDir)
         #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
 
         // Touch the file's mtime with no byte change: the fingerprint is unchanged, only mtime moved.
         try FileManager.default.setAttributes(
             [.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: fileURL.path)
-        let newMtime = try #require(fileURL.contentModificationDate)
+        let newMtime = try #require(currentMtime(fileURL))
         #expect(newMtime != originalMtime)
         #expect(fileURL.contentFingerprint() == fp0)
 
@@ -438,8 +445,8 @@ struct ThumbnailServiceTests {
         // First display of the original 80×80 content: computes fp0, writes fp0.heic.
         try writePNG(width: 80, height: 80, to: fileURL)
         let fp0 = try #require(fileURL.contentFingerprint())
-        let size = try #require(fileURL.fileSizeBytes)
-        let originalMtime = try #require(fileURL.contentModificationDate)
+        let size = try #require(currentSize(fileURL))
+        let originalMtime = try #require(currentMtime(fileURL))
         let service = ThumbnailService(cacheDirectory: cacheDir)
         #expect(await service.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
 
@@ -454,9 +461,9 @@ struct ThumbnailServiceTests {
         try FileManager.default.setAttributes(
             [.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: fileURL.path)
         let newFp = try #require(fileURL.contentFingerprint())
-        let newMtime = try #require(fileURL.contentModificationDate)
+        let newMtime = try #require(currentMtime(fileURL))
         #expect(newFp != fp0)
-        #expect(fileURL.fileSizeBytes == size)   // unchanged byte size — invisible to the filesize gate
+        #expect(currentSize(fileURL) == size)   // unchanged byte size — invisible to the filesize gate
         #expect(newMtime != originalMtime)
 
         // A record carrying the stale fingerprint, the (unchanged) size, and the pre-edit mtime.

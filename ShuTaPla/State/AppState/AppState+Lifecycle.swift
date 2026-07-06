@@ -25,6 +25,16 @@ extension AppState {
     /// continue and Paused stay paused.
     func windowWillReopen() {
         coordinator.unsuppress()
+        refreshCachePressureOnWindowOpen()
+    }
+
+    /// Measures the on-disk thumbnail cache (off the main actor) and writes the cache-pressure flag
+    /// the Manager notice-strip banner reads. Runs on a window-open — cold launch and Dock reopen
+    /// alike — not on every playlist scan: while the window is closed the footprint only moves if
+    /// another process touched the cache, so re-measuring the whole directory once per open suffices
+    /// and keeps the frequent scan path clear of a directory enumeration.
+    func refreshCachePressureOnWindowOpen() {
+        Task { ThumbnailService.publishCachePressure(bytes: await ThumbnailService.defaultCacheSize()) }
     }
 
     /// App termination: a final write of both channels' live positions, then a synchronous save

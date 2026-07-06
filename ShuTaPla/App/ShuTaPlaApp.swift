@@ -44,7 +44,10 @@ struct ShuTaPlaApp: App {
                 .environment(thumbnailService)
                 .environment(metadataService)
                 .frame(minWidth: 800, minHeight: 600)
-                .onAppear { appDelegate.appState = appState }
+                .onAppear {
+                    appDelegate.appState = appState
+                    appState.refreshCachePressureOnWindowOpen()
+                }
         }
         .modelContainer(modelContainer)
         .commands {
