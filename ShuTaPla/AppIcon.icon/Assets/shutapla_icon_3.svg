@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- SHUTAPLA icon — flat, transparent bg, organic -->
+  <defs>
+    <linearGradient id="gPurple" gradientUnits="userSpaceOnUse" x1="274" y1="0" x2="535" y2="0">
+      <stop offset="0" stop-color="#9B6FE8"/>
+      <stop offset="0.55" stop-color="#9B6FE8"/>
+      <stop offset="1" stop-color="#EDE8DA"/>
+    </linearGradient>
+    <linearGradient id="gCyan" gradientUnits="userSpaceOnUse" x1="222" y1="0" x2="535" y2="0">
+      <stop offset="0" stop-color="#22C3DD"/>
+      <stop offset="0.55" stop-color="#22C3DD"/>
+      <stop offset="1" stop-color="#EDE8DA"/>
+    </linearGradient>
+    <linearGradient id="gOrange" gradientUnits="userSpaceOnUse" x1="318" y1="0" x2="535" y2="0">
+      <stop offset="0" stop-color="#F5842F"/>
+      <stop offset="0.5" stop-color="#F5842F"/>
+      <stop offset="1" stop-color="#EDE8DA"/>
+    </linearGradient>
+  </defs>
+
+  <g fill="none" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- SQUARE -->
+    <rect x="146" y="232" width="128" height="128" rx="30" stroke="#9B6FE8"/>
+    <!-- CIRCLE -->
+    <circle cx="150" cy="508" r="72" stroke="#22C3DD"/>
+    <!-- TRIANGLE -->
+    <path d="M 250 672 L 322 792 Q 333 810 312 810 L 188 810 Q 167 810 178 792 Z" stroke="#F5842F"/>
+
+    <!-- LINES: single cubic beziers, gradient fade -->
+    <path d="M 274 296 C 420 296, 388 447, 535 447" stroke="url(#gPurple)"/>
+    <path d="M 222 508 C 348 545, 408 480, 535 512" stroke="url(#gCyan)"/>
+    <path d="M 318 778 C 470 778, 430 583, 535 583" stroke="url(#gOrange)"/>
+
+  </g>
+
+  <!-- PLAY triangle (filled) — narrower -->
+  <path d="M 638 371 L 812 489 Q 845 512 812 535 L 638 653 Q 605 676 605 638 L 605 386 Q 605 348 638 371 Z"
+        fill="#EDE8DA"/>
+</svg>

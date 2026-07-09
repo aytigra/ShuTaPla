@@ -1,0 +1,62 @@
+{
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.09802,0.09802,0.09802,1.00000"
+  },
+  "groups" : [
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "image-name" : "shutapla_icon_3.svg",
+          "name" : "shutapla_icon_3",
+          "position-specializations" : [
+            {
+              "value" : {
+                "scale" : 1.11,
+                "translation-in-points" : [
+                  75.26852651227966,
+                  -9.990000000000009
+                ]
+              }
+            },
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 1.11,
+                "translation-in-points" : [
+                  75.26852651227966,
+                  -9.990000000000009
+                ]
+              }
+            },
+            {
+              "idiom" : "watchOS",
+              "value" : {
+                "scale" : 1.03,
+                "translation-in-points" : [
+                  75.26852651227966,
+                  -9.990000000000009
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
