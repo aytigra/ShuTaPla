@@ -253,7 +253,11 @@ VoiceOver and macOS accessibility support (semantic fonts/colors, `Button` over 
 
 ## 14. Directory structure
 
-Repo-root Xcode file-system-synchronized groups: `ShuTaPla/` (app source), `ShuTaPlaTests/`, `ShuTaPlaUITests/`, `doc/`. Within `ShuTaPla/`:
+Repo-root Xcode file-system-synchronized groups: `ShuTaPla/` (app source), `ShuTaPlaTests/`, `ShuTaPlaUITests/`, `doc/`. 
+
+`Config.xcconfig` at the repo root is the project's base configuration (applied to both build configurations) and the single source of the version settings.
+
+Within `ShuTaPla/`:
 
 ```
 App/         ShuTaPlaApp (@main, scene, container), AppConstants (extension maps, thresholds)
@@ -280,6 +284,7 @@ Resources/   Assets.xcassets
 ```
 
 Tests (`ShuTaPlaTests/`, Swift Testing) cover `TagParser`, `FileSystemService`, `PlaybackCoordinator`, `OverlayManager`, and `HotkeyRouter`.
+
 
 ---
 

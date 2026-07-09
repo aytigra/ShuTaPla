@@ -44,7 +44,7 @@ struct PlaylistSidebar: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
         } message: { _ in
-            Text("This removes the playlist from ShuTaPla. The files on disk are not touched.")
+            Text("This removes the playlist from Shutapla. The files on disk are not touched.")
         }
     }
 

@@ -17,7 +17,7 @@ struct FolderReaccessPanel: FolderReaccessPrompting {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Grant Access"
-        panel.message = "Locate “\(playlist.name)” to let ShuTaPla modify its files."
+        panel.message = "Locate “\(playlist.name)” to let Shutapla modify its files."
         panel.directoryURL = URL(fileURLWithPath: playlist.folderPath)
         return panel.runModal() == .OK ? panel.url : nil
     }

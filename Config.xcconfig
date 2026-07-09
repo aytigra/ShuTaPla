@@ -1,0 +1,10 @@
+// Project base configuration — build settings shared across every target and both the Debug
+// and Release configurations, referenced as the project's baseConfigurationReference.
+//
+// Versioning lives here as the single source of truth:
+//   MARKETING_VERSION        — user-facing version (CFBundleShortVersionString), e.g. 0.7
+//   CURRENT_PROJECT_VERSION  — build number (CFBundleVersion), bump per uploaded build
+// Scripts/release.sh reads MARKETING_VERSION from the built app to name the DMG.
+
+MARKETING_VERSION = 0.7.1
+CURRENT_PROJECT_VERSION = 2

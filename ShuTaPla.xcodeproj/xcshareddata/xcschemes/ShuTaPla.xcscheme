@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "499BD7D52FB83BDA00720129"
-               BuildableName = "ShuTaPla.app"
+               BuildableName = "Shutapla.app"
                BlueprintName = "ShuTaPla"
                ReferencedContainer = "container:ShuTaPla.xcodeproj">
             </BuildableReference>
@@ -59,7 +59,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "499BD7D52FB83BDA00720129"
-            BuildableName = "ShuTaPla.app"
+            BuildableName = "Shutapla.app"
             BlueprintName = "ShuTaPla"
             ReferencedContainer = "container:ShuTaPla.xcodeproj">
          </BuildableReference>
@@ -76,7 +76,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "499BD7D52FB83BDA00720129"
-            BuildableName = "ShuTaPla.app"
+            BuildableName = "Shutapla.app"
             BlueprintName = "ShuTaPla"
             ReferencedContainer = "container:ShuTaPla.xcodeproj">
          </BuildableReference>

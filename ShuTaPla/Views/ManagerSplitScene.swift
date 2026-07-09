@@ -486,7 +486,7 @@ private struct ManagerTitleLabel: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Text(appState.managedPlaylist?.name ?? "ShuTaPla")
+        Text(appState.managedPlaylist?.name ?? "Shutapla")
             .font(.headline)
             .lineLimit(1)
             .truncationMode(.tail)

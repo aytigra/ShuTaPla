@@ -24,10 +24,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		499BD7D62FB83BDA00720129 /* ShuTaPla.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ShuTaPla.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		499BD7D62FB83BDA00720129 /* Shutapla.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Shutapla.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		499BD7E52FB83BDC00720129 /* ShuTaPlaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShuTaPlaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		499BD7EF2FB83BDC00720129 /* ShuTaPlaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShuTaPlaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		499BD8032FB83C3000720129 /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
+		499BD8042FB83C3000720129 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		49C0FFAA2FB84C0000720130 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -82,6 +84,8 @@
 			isa = PBXGroup;
 			children = (
 				499BD8032FB83C3000720129 /* CLAUDE.md */,
+				499BD8042FB83C3000720129 /* README.md */,
+				49C0FFAA2FB84C0000720130 /* Config.xcconfig */,
 				499BD8022FB83C2F00720129 /* doc */,
 				499BD7D82FB83BDA00720129 /* ShuTaPla */,
 				499BD7E82FB83BDC00720129 /* ShuTaPlaTests */,
@@ -93,7 +97,7 @@
 		499BD7D72FB83BDA00720129 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				499BD7D62FB83BDA00720129 /* ShuTaPla.app */,
+				499BD7D62FB83BDA00720129 /* Shutapla.app */,
 				499BD7E52FB83BDC00720129 /* ShuTaPlaTests.xctest */,
 				499BD7EF2FB83BDC00720129 /* ShuTaPlaUITests.xctest */,
 			);
@@ -124,7 +128,7 @@
 			packageProductDependencies = (
 			);
 			productName = ShuTaPla;
-			productReference = 499BD7D62FB83BDA00720129 /* ShuTaPla.app */;
+			productReference = 499BD7D62FB83BDA00720129 /* Shutapla.app */;
 			productType = "com.apple.product-type.application";
 		};
 		499BD7E42FB83BDC00720129 /* ShuTaPlaTests */ = {
@@ -299,6 +303,7 @@
 /* Begin XCBuildConfiguration section */
 		499BD7F72FB83BDC00720129 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 49C0FFAA2FB84C0000720130 /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -367,6 +372,7 @@
 		};
 		499BD7F82FB83BDC00720129 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 49C0FFAA2FB84C0000720130 /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = arm64;
@@ -435,7 +441,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
@@ -459,7 +464,6 @@
 					/opt/homebrew/opt/ffmpeg/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
-				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-lmpv",
 					"-lavformat",
@@ -468,7 +472,8 @@
 				);
 				OTHER_SWIFT_FLAGS = "-Xcc -DGL_SILENCE_DEPRECATION";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPla.debug;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = ShuTaPla;
+				PRODUCT_NAME = Shutapla;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -489,7 +494,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
@@ -513,7 +517,6 @@
 					/opt/homebrew/opt/ffmpeg/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
-				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-lmpv",
 					"-lavformat",
@@ -522,7 +525,8 @@
 				);
 				OTHER_SWIFT_FLAGS = "-Xcc -DGL_SILENCE_DEPRECATION";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPla;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = ShuTaPla;
+				PRODUCT_NAME = Shutapla;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -539,7 +543,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -548,7 +551,6 @@
 					/opt/homebrew/opt/ffmpeg/include,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -557,7 +559,7 @@
 				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ShuTaPla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ShuTaPla";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Shutapla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Shutapla";
 			};
 			name = Debug;
 		};
@@ -566,7 +568,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -575,7 +576,6 @@
 					/opt/homebrew/opt/ffmpeg/include,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -584,7 +584,7 @@
 				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/ShuTaPla/MPV/Cmpv $(SRCROOT)/ShuTaPla/FFmpeg/Cffmpeg";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ShuTaPla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ShuTaPla";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Shutapla.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Shutapla";
 			};
 			name = Release;
 		};
@@ -592,11 +592,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
@@ -613,11 +611,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aytigra.ShuTaPlaUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
