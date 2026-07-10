@@ -56,10 +56,35 @@ nonisolated enum ViewMode: String, Codable, Sendable {
     case gallery
 }
 
-/// Boolean combination applied to a multi-tag filter.
-nonisolated enum FilterMode: String, Codable, Sendable {
+/// Boolean combination applied to a multi-tag filter, including the two negatives — a file
+/// missing at least one selected tag (`notAll`, complement of `and`) or carrying none of them
+/// (`notAny`, complement of `or`). An untagged file satisfies both negatives.
+nonisolated enum FilterMode: String, Codable, Sendable, CaseIterable {
     case and
     case or
+    case notAll
+    case notAny
+
+    /// Segment label in the filter's mode picker.
+    var displayName: String {
+        switch self {
+        case .and: return "All"
+        case .or: return "Any"
+        case .notAll: return "Not all"
+        case .notAny: return "Not any"
+        }
+    }
+
+    /// One-line saved-search label for a tag set under this mode: the tags joined by the mode's
+    /// operator (`+` for all, `/` for any), wrapped in `not(…)` for the negatives.
+    func savedSearchLabel(_ tags: [String]) -> String {
+        switch self {
+        case .and: return tags.joined(separator: "  +  ")
+        case .or: return tags.joined(separator: "  /  ")
+        case .notAll: return "not(\(tags.joined(separator: "  +  ")))"
+        case .notAny: return "not(\(tags.joined(separator: "  /  ")))"
+        }
+    }
 }
 
 /// Result of parsing the tag bracket in a filename.

@@ -169,20 +169,31 @@ extension ModelContext {
         }
 
         let names = Array(Set(filter.selectedTags.map { $0.lowercased() }))
+        // The `.and`/`.notAll` pair counts the file's selected tags: `names` is deduped, so a file
+        // carries all of them iff that count equals `required`. A nested
+        // `allSatisfy { tags.contains { … } }` is an unsupported subquery, so this flat count stands
+        // in for it — and the negatives negate the same flat shapes (no subquery reintroduced).
+        let required = names.count
         switch filter.filterMode {
         case .or:
             return #Predicate { file in
                 file.playlist?.persistentModelID == pid && !file.isSkipped
                     && file.tags.contains { names.contains($0.normalizedName) }
             }
+        case .notAny:
+            return #Predicate { file in
+                file.playlist?.persistentModelID == pid && !file.isSkipped
+                    && !file.tags.contains { names.contains($0.normalizedName) }
+            }
         case .and:
-            // A nested `allSatisfy { tags.contains { … } }` is an unsupported subquery; instead
-            // count the file's tags that are in the selected set and require all of them present.
-            // `names` is deduped, so a match needs exactly `required` of its (distinct) tags.
-            let required = names.count
             return #Predicate { file in
                 file.playlist?.persistentModelID == pid && !file.isSkipped
                     && file.tags.filter { names.contains($0.normalizedName) }.count == required
+            }
+        case .notAll:
+            return #Predicate { file in
+                file.playlist?.persistentModelID == pid && !file.isSkipped
+                    && file.tags.filter { names.contains($0.normalizedName) }.count != required
             }
         }
     }

@@ -113,6 +113,48 @@ struct SequenceStoreTests {
         #expect(names(context.displaySequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
     }
 
+    @Test func tagNotAnyFilterExcludesEverySelectedTag() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .notAny)
+        try context.save()
+        // Complement of OR: files carrying neither tag — the two untagged files are included
+        // (honest "has none of the selected tags"), the three tagged ones excluded.
+        #expect(names(context.displaySequence(of: playlist), in: context)
+            == ["untagged.jpg", "invalid [ab].jpg"])
+    }
+
+    @Test func tagNotAllFilterExcludesFilesCarryingEverySelectedTag() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .notAll)
+        try context.save()
+        // Complement of AND: only the doubly-tagged file has both, so every other non-skipped file
+        // (missing at least one — including the untagged ones) is included.
+        #expect(names(context.displaySequence(of: playlist), in: context)
+            == ["a [beach].jpg", "c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"])
+    }
+
+    @Test func singleSelectedTagMakesNotAllAndNotAnyCoincide() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // With one selected tag, "missing all of it" == "has none of it": both exclude a and b.
+        let expected = ["c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"]
+        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAll)
+        try context.save()
+        #expect(names(context.displaySequence(of: playlist), in: context) == expected)
+
+        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAny)
+        try context.save()
+        #expect(names(context.displaySequence(of: playlist), in: context) == expected)
+    }
+
     @Test func playlistForwardersMatchTheContextMethods() throws {
         let container = try makeContainer()
         let context = container.mainContext

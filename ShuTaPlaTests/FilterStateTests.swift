@@ -7,6 +7,7 @@
 //
 
 import Testing
+import Foundation
 @testable import ShuTaPla
 
 struct FilterStateTests {
@@ -55,5 +56,41 @@ struct FilterStateTests {
         state.clearTags()
         #expect(state.selectedTags.isEmpty)
         #expect(state.serviceFilter == .skipped)
+    }
+
+    // MARK: - Persistence (the embedded JSON blob)
+
+    @Test func filterStateRoundTripsANegativeMode() throws {
+        let state = FilterState(selectedTags: ["a", "b"], filterMode: .notAll)
+        let decoded = try JSONDecoder().decode(FilterState.self, from: JSONEncoder().encode(state))
+        #expect(decoded == state)
+        #expect(decoded.filterMode == .notAll)
+    }
+
+    @Test func filterStateDecodesLegacyBlobWithoutServiceFilter() throws {
+        // A blob written before triage filters (no serviceFilter key) with a legacy mode string
+        // still decodes — the new enum cases only add values, they don't disturb the old ones.
+        let json = Data(#"{"selectedTags":["beach"],"filterMode":"or"}"#.utf8)
+        let decoded = try JSONDecoder().decode(FilterState.self, from: json)
+        #expect(decoded.selectedTags == ["beach"])
+        #expect(decoded.filterMode == .or)
+        #expect(decoded.serviceFilter == nil)
+    }
+
+    // MARK: - Mode helpers
+
+    @Test func savedSearchMatchDistinguishesModeAcrossNegatives() {
+        let and = SavedSearch(tags: ["a", "b"], mode: .and)
+        // Same tag set under a different mode is a different saved search.
+        #expect(!and.matches(SavedSearch(tags: ["a", "b"], mode: .notAll)))
+        // Same mode + same set (order-insensitive) still matches.
+        #expect(and.matches(SavedSearch(tags: ["b", "a"], mode: .and)))
+    }
+
+    @Test func savedSearchLabelReadsForEveryMode() {
+        #expect(FilterMode.and.savedSearchLabel(["a", "b"]) == "a  +  b")
+        #expect(FilterMode.or.savedSearchLabel(["a", "b"]) == "a  /  b")
+        #expect(FilterMode.notAll.savedSearchLabel(["a", "b"]) == "not(a  +  b)")
+        #expect(FilterMode.notAny.savedSearchLabel(["a", "b"]) == "not(a  /  b)")
     }
 }

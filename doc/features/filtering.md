@@ -6,7 +6,14 @@ The Filter Bar appears on all three surfaces (the Manager inspector, the Visual 
 
 ## Current scope
 
-For the first version, each playlist's filter is a single flat multi-select of tags plus an **AND / OR** switch that applies to the whole selection. The filter is **per playlist** — not a single app-wide setting — so each playlist's current combination of selected tags and AND/OR mode is its own.
+Each playlist's filter is a single flat multi-select of tags plus a **match mode** applied to the whole selection, chosen from four:
+
+- **All** — the file carries every selected tag.
+- **Any** — the file carries at least one selected tag.
+- **Not all** — the file is missing at least one selected tag (the complement of All).
+- **Not any** — the file carries none of the selected tags (the complement of Any).
+
+An **untagged** file — one with no tags at all — has none of the selected tags and is missing all of them, so it qualifies under both **Not all** and **Not any**. The filter is **per playlist** — not a single app-wide setting — so each playlist's current combination of selected tags and match mode is its own.
 
 Tags are picked with the same multiselect-autocomplete control as the Tag Editor — selected tags as chips, a typed-into dropdown of matching tags — but in search-only mode: it adds existing tags to the filter and cannot create new ones.
 
@@ -27,7 +34,7 @@ Filtering affects playback: files that don't match are silently skipped during p
 ## Filter persistence and history
 
 - Each playlist remembers its current filter selection across playlist switches, so returning to a playlist restores its filter.
-- **Saved searches** are playlist-scoped. Any non-empty tag filter — one or more tags, in AND or OR mode — can be saved for quick re-selection. A saved search captures **both its tag set and its AND/OR operator**; selecting it restores that exact combination. Save is offered only for a filter that isn't already saved; re-selecting a saved combination moves it to the top (keeping its remembered position) rather than adding a duplicate. An entry can be removed manually, and the list is unbounded. A playlist-wide tag **rename** rewrites the saved searches that used the tag; a tag **removal** drops a saved search that would be left with one tag or none (its remembered position goes with it) and rewrites any left with two or more.
+- **Saved searches** are playlist-scoped. Any non-empty tag filter — one or more tags, in any of the four match modes — can be saved for quick re-selection. A saved search captures **both its tag set and its match mode**; selecting it restores that exact combination. Save is offered only for a filter that isn't already saved; re-selecting a saved combination moves it to the top (keeping its remembered position) rather than adding a duplicate. An entry can be removed manually, and the list is unbounded. A playlist-wide tag **rename** rewrites the saved searches that used the tag; a tag **removal** drops a saved search that would be left with one tag or none (its remembered position goes with it) and rewrites any left with two or more.
 - Frequently used tags float to the top of the autocomplete dropdown within that playlist, independent of what is saved.
 - **Per-filter resume position.** Each saved search and the unfiltered state remembers the resume point it was last left at, recorded as a position on the shuffle order so it survives the exact file leaving the set (filtered out, deleted, or pruned). Changing the filter restores the incoming filter's remembered position — a live audio channel switches to it immediately, a suppressed visual pre-loads it. Service Filters get no slot, and Reshuffle clears every remembered position.
 

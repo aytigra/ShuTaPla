@@ -67,8 +67,9 @@ struct FilterBar: View {
             get: { playlist.filterState.filterMode },
             set: { appState.setFilterMode($0, on: playlist) }
         )) {
-            Text("All tags").tag(FilterMode.and)
-            Text("Any tag").tag(FilterMode.or)
+            ForEach(FilterMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -114,7 +115,7 @@ struct FilterBar: View {
     private func savedSearchRow(_ search: SavedSearch) -> some View {
         HStack(spacing: 6) {
             Button { appState.applySavedSearch(search, on: playlist) } label: {
-                Text(search.tags.joined(separator: search.mode == .and ? "  +  " : "  /  "))
+                Text(search.mode.savedSearchLabel(search.tags))
                     .font(.caption)
                     .lineLimit(1)
                     .truncationMode(.middle)
