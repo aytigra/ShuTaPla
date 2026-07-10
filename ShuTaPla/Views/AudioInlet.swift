@@ -38,6 +38,8 @@ struct AudioTransport: View {
     var body: some View {
         let _ = appState.sequenceVersion   // re-derive the Play affordance when membership changes
         HStack(spacing: 4) {
+            CloudStatusBadge(status: appState.currentAudioFile?.cloudStatus ?? .local)
+                .foregroundStyle(.secondary)
             if isLive {
                 controlButton("backward.fill") { coordinator.previous(playlist) }
             }

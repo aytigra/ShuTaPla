@@ -2,26 +2,6 @@
 
 ---
 
-## Task 18 — Cloud / offline file handling
-
-iCloud/offline awareness: per-file status indicators, on-demand download, and prefetch ahead of playback.
-
-**Deliverables:**
-- `CloudFileService.swift` — per-file status (local / in cloud / downloading) via `NSMetadataQuery` scoped to active playlist folders and URL resource values (`.ubiquitousItemDownloadingStatusKey`, `.ubiquitousItemIsDownloadingKey`)
-- On-demand download via `FileManager.startDownloadingUbiquitousItem(at:)`
-- Prefetch: while the current file plays, request downloads for the next N files in playback order (driven from `PlaybackCoordinator` on each file change)
-- Live status published off-main and delivered to `@MainActor` via `AsyncStream`; `CloudStatusBadge.swift` renders "in the cloud" / "downloading" indicators wired into `FileRowView` (list), the gallery, and the Overlays
-- Playback integration: if the file playback reaches is still in the cloud, request its download immediately; if it cannot be made local in time, advance to the next available file (same rule as missing files)
-
-**Testable:**
-- Status mapping: placeholder/evicted → in cloud, actively fetching → downloading, present → local
-- Prefetch requests exactly the next N files in playback order on a file change
-- On-demand download requested when playback reaches an in-cloud file
-- Download timeout → advance to next available file
-- Indicators appear/clear as status changes (mock status provider)
-
----
-
 ## Task 19 — HDR
 
 HDR/EDR output for video and images (the fullscreen/window-management handling this once shared lives in Task 16).

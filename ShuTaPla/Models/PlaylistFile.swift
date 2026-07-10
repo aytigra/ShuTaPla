@@ -106,8 +106,23 @@ final class PlaylistFile {
     /// Owning playlist (inverse of `Playlist.files`).
     var playlist: Playlist?
 
-    /// Runtime-only iCloud availability — derived from disk, never persisted.
-    @Transient var cloudStatus: CloudStatus = .local
+    /// Runtime-only iCloud availability — derived from disk, never persisted. Routed through
+    /// the model's own `@Observable` registrar so the live cloud feed's writes re-render every
+    /// reader (badges, the playback gate): SwiftData's `@Model` macro wraps *persisted* stored
+    /// properties in `_$observationRegistrar` but leaves a `@Transient` stored property
+    /// un-tracked, so a plain `@Transient var` mutates invisibly to `withObservationTracking`.
+    @Transient private var _cloudStatus: CloudStatus = .local
+    @Transient var cloudStatus: CloudStatus {
+        get {
+            _$observationRegistrar.access(self, keyPath: \.cloudStatus)
+            return _cloudStatus
+        }
+        set {
+            _$observationRegistrar.withMutation(of: self, keyPath: \.cloudStatus) {
+                _cloudStatus = newValue
+            }
+        }
+    }
 
     /// Tags are a relationship resolved against a `ModelContext`, so they're assigned after
     /// insert (via `ModelContext.tags(named:)`) rather than passed here.

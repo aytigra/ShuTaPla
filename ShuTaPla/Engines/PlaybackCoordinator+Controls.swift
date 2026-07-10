@@ -41,6 +41,15 @@ extension PlaybackCoordinator {
         visualKind == .image ? imageEngine.currentFile : videoEngine?.currentFile
     }
 
+    /// The evicted file the active visual engine is holding for download, or `nil` when nothing
+    /// is pending — the Player's downloading placeholder shows over the black stage while it is
+    /// set. Only one visual engine is ever live (starting a channel stops and clears the other),
+    /// so the first non-`nil` gate is the active one; the audio engine's gate is deliberately not
+    /// consulted here — the audio transport shows its own badge.
+    var visualCloudPendingFile: PlaylistFile? {
+        imageEngine.cloudLoad.pendingFile ?? videoEngine?.cloudLoad.pendingFile
+    }
+
     /// Visual playback position/duration in seconds. Images have no timeline, so both
     /// are 0 for the image channel.
     var visualCurrentTime: TimeInterval { visualVideoEngine?.currentTime ?? 0 }

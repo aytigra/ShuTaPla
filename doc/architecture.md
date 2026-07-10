@@ -135,7 +135,7 @@ Services hold UI-independent logic, are injected into state objects (not views),
 
 - **BookmarkService** — creates/resolves security-scoped bookmarks, reference-counts concurrent users of the same folder (e.g. an audio and a video playlist over one folder), and throws on stale/denied bookmarks so `AppState.beginFolderAccess(to:)` can re-prompt and refresh.
 
-Cloud/offline file handling (`CloudFileService`, status badges, prefetch) is a planned service — see Task 18 in `tasks/feature_roadmap.md`.
+- **CloudFileService** (`@MainActor @Observable`) — the live iCloud/offline status feed. It runs one `NSMetadataQuery` per live channel (visual, audio), each scoped to its playlist's folder, and folds every reported item's ubiquitous downloading state back onto the matching `PlaylistFile.cloudStatus` by relative path — so evict/fetch transitions surface in real time, not just at scan. `NSMetadataQuery`/`NSMetadataItem` are non-`Sendable` and run-loop-bound, so the whole service stays on the main actor; the classify-and-apply core is a pure function over normalized `CloudStatusUpdate` values, driven directly by tests without a live query or an iCloud account. It exposes one download entry point (`requestDownload(_:)` — request-and-forget through `startDownloadingUbiquitousItem`, behind an injectable requester), used for both on-demand playback and the coordinator's **prefetch** of the next files ahead. `cloudStatus` is a runtime-only `@Transient` on the model whose accessors are hand-routed through the model's `_$observationRegistrar` (the `@Model` macro tracks only *persisted* stored properties), so a write re-renders every reader — the list/gallery/audio status badges and the player's downloading placeholder — with no schema change. Missing (local-but-gone) files are skipped by the coordinator before any engine loads them; evicted files are handed to the engine, which holds the load pending and shows the placeholder until the bytes arrive.
 
 ---
 
@@ -265,10 +265,11 @@ Models/      Playlist, PlaylistFile, Tag, AppStateModel, GlobalSettings (@Model)
              PlaylistPreferences, FilterState, SavedSearch (Codable); Enums
 State/       AppState, PlaybackCoordinator, OverlayManager, HotkeyRouter
 Services/    FileSystemService (actor), PlaylistScanActor (@ModelActor), TagParser,
-             BookmarkService, ThumbnailService, MPVThumbnailer, AudioStripper, DurationService
+             BookmarkService, ThumbnailService, MPVThumbnailer, AudioStripper, DurationService,
+             CloudFileService
 MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, Cmpv/ (Clang module)
 FFmpeg/      Cffmpeg/ (Clang module)
-Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine
+Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine, CloudLoadGate
 Views/
   Welcome/   WelcomeView
   Manager/   ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,

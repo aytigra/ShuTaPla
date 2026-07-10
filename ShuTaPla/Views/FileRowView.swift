@@ -77,6 +77,9 @@ struct FileRowView: View {
             if playlist.mediaType != .audio {
                 column(file.pixelSize?.dimensionsText, width: 76)
             }
+            CloudStatusBadge(status: file.cloudStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             column(file.fileSizeBytes?.formattedFileSize, width: 64)
             if playlist.mediaType != .image {
                 column(file.duration?.formattedDuration, width: 56)

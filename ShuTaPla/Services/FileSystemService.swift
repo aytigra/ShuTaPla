@@ -187,7 +187,7 @@ actor FileSystemService {
                 relativePath: relativePath(of: fileURL, under: root),
                 fileName: fileURL.lastPathComponent,
                 mediaType: type,
-                cloudStatus: cloudStatus(from: values)
+                cloudStatus: CloudStatus.from(values)
             ))
         }
 
@@ -250,8 +250,9 @@ actor FileSystemService {
     /// standardized URLs. Comparing components (rather than a raw-string prefix)
     /// avoids a `/a/foo` root spuriously matching `/a/foobar`, and tolerates
     /// trailing-slash and normalization differences between the two. Falls back to
-    /// the last component when `url` isn't actually under `root`.
-    private nonisolated static func relativePath(of url: URL, under root: URL) -> String {
+    /// the last component when `url` isn't actually under `root`. Shared with the live
+    /// cloud feed, which keys files by the same relative path the scan records.
+    nonisolated static func relativePath(of url: URL, under root: URL) -> String {
         let fileComponents = url.standardizedFileURL.pathComponents
         let rootComponents = root.standardizedFileURL.pathComponents
         guard fileComponents.count > rootComponents.count,
@@ -259,17 +260,6 @@ actor FileSystemService {
             return url.lastPathComponent
         }
         return fileComponents.dropFirst(rootComponents.count).joined(separator: "/")
-    }
-
-    private nonisolated static func cloudStatus(from values: URLResourceValues?) -> CloudStatus {
-        guard let values, values.isUbiquitousItem == true else {
-            return .local
-        }
-        if values.ubiquitousItemIsDownloading == true { return .downloading }
-        switch values.ubiquitousItemDownloadingStatus {
-        case .some(.notDownloaded): return .inCloud
-        default:                    return .local
-        }
     }
 
     /// A type is dominant when it makes up ≥ 80% of recognized media files.

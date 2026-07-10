@@ -234,6 +234,138 @@ import SwiftData
         #expect(coordinator.fileAfter(sequence[1]) === sequence[0])   // wraps within matches
     }
 
+    // MARK: - Cloud prefetch (Task 18, Step 5)
+
+    /// An inserted file carrying a cloud status, for driving the pure prefetch selector.
+    private func makeCloudFile(_ name: String, _ status: CloudStatus, in context: ModelContext) -> PlaylistFile {
+        let file = PlaylistFile(relativePath: name, fileName: name)
+        context.insert(file)
+        file.cloudStatus = status
+        return file
+    }
+
+    @Test func prefetchTargetsWalksAheadSkippingLocalsAndWrapping() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let files = [
+            makeCloudFile("0", .local, in: context),
+            makeCloudFile("1", .inCloud, in: context),
+            makeCloudFile("2", .local, in: context),
+            makeCloudFile("3", .downloading, in: context),
+            makeCloudFile("4", .inCloud, in: context),
+        ]
+
+        // From index 0, count 3 → the next three are 1,2,3; the local one (2) is dropped.
+        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 3).map(\.fileName) == ["1", "3"])
+
+        // Wraps past the end the way playback does: from index 4 the next three are 0,1,2 →
+        // locals 0 and 2 dropped.
+        #expect(PlaybackCoordinator.prefetchTargets(after: files[4], in: files, count: 3).map(\.fileName) == ["1"])
+
+        // A count past the sequence never revisits the current file or repeats — every other
+        // non-local file, once each.
+        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 99).map(\.fileName) == ["1", "3", "4"])
+
+        // Degenerate inputs request nothing.
+        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 0).isEmpty)
+        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: [files[0]], count: 3).isEmpty)
+    }
+
+    @Test func fileSwitchPrefetchesTheNextNonLocalFiles() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["0.jpg", "1.jpg", "2.jpg", "3.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("0.jpg", []), ("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
+        )
+        try context.save()
+        let files = context.playbackFiles(of: image)
+        files[1].cloudStatus = .inCloud
+        files[2].cloudStatus = .local        // already on disk — skipped
+        files[3].cloudStatus = .downloading
+
+        var requested: [URL] = []
+        let cloud = CloudFileService(requester: { requested.append($0) })
+        let coordinator = PlaybackCoordinator(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            cloudFileService: cloud,
+            makeVideoEngine: { try AudioPlaybackEngine() },
+            makeAudioEngine: { try AudioPlaybackEngine() }
+        )
+        defer { coordinator.shutdown() }
+
+        // The switch choke point (with the default prefetch count of 3) looks at files 1,2,3 ahead
+        // of the cursor and requests only the two evicted ones, in playback order.
+        coordinator.setCurrentFile(files[0], on: image)
+        #expect(requested.map(\.lastPathComponent) == ["1.jpg", "3.jpg"])
+    }
+
+    // MARK: - Visual downloading placeholder (Task 18, Step 6c)
+
+    /// The Player reads `visualCloudPendingFile` to overlay the downloading placeholder over the
+    /// black stage. It must surface the active visual engine's held file while a load is pending
+    /// and clear once the engine stops. An evicted file is held by the gate and never decoded, so
+    /// the image engine (no libmpv) drives it without touching disk.
+    @Test func visualCloudPendingFileTracksTheVisualEngineGate() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let file = makeCloudFile("held.jpg", .inCloud, in: context)   // evicted → held pending
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        #expect(coordinator.visualCloudPendingFile == nil)
+        coordinator.imageEngine.load(file, at: URL(fileURLWithPath: "/tmp/held.jpg"))
+        #expect(coordinator.visualCloudPendingFile === file)
+        coordinator.imageEngine.stop()
+        #expect(coordinator.visualCloudPendingFile == nil)
+    }
+
+    // MARK: - Missing-file skip (Task 18, Step 6a)
+
+    @Test func availableFileSkipsUnavailableAndWraps() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let files = (0..<5).map { makeCloudFile("\($0)", .local, in: context) }
+        // "1" and "2" stand in for missing files the predicate rejects; the rest load.
+        let loads: (PlaylistFile) -> Bool = { !["1", "2"].contains($0.fileName) }
+
+        // Forward past the start skips the two rejects → "3".
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: false, isAvailable: loads) === files[3])
+        // Including the start, an accepted start qualifies immediately.
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[3], forward: true, includeStart: true, isAvailable: loads) === files[3])
+        // Including a rejected start walks forward off it → "3".
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[1], forward: true, includeStart: true, isAvailable: loads) === files[3])
+        // Backward past the start skips "2","1" → "0".
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[3], forward: false, includeStart: false, isAvailable: loads) === files[0])
+        // Forward wraps past the end → "0".
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[4], forward: true, includeStart: false, isAvailable: loads) === files[0])
+        // No file accepted → nil.
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: true, isAvailable: { _ in false }) == nil)
+        // Only the start accepted, but excluded → nil (nothing else to move to).
+        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: false, isAvailable: { $0.fileName == "0" }) == nil)
+    }
+
+    @Test func advanceSkipsAMissingLocalFile() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        // 1.jpg is listed in the playlist but never written to disk — a local file gone missing.
+        let folder = try makeFolder(["0.jpg", "2.jpg"])
+        let image = makePlaylist(
+            .image, folder: folder,
+            files: [("0.jpg", []), ("1.jpg", []), ("2.jpg", [])], in: context
+        )
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+        // Hold scoped access so the coordinator's existence check can resolve the folder.
+        #expect(coordinator.folderAccess.begin(for: image) != nil)
+
+        let files = context.playbackFiles(of: image)
+        // The missing middle file is skipped in both directions before any engine sees it.
+        #expect(coordinator.fileAfter(files[0]) === files[2])
+        #expect(coordinator.fileBefore(files[2]) === files[0])
+    }
+
     // MARK: - Player controls surface (Task 14)
 
     @Test func setVolumePersistsAndClamps() throws {

@@ -40,6 +40,11 @@ final class AppState {
     /// resolves file URLs through `bookmarkService`. Injected into the player views.
     let coordinator: PlaybackCoordinator
 
+    /// The live iCloud/offline status feed: watches each live channel's folder and writes
+    /// `cloudStatus` onto its files. Held by the coordinator (which drives its query lifecycle)
+    /// and injected into the views that render the cloud indicator.
+    let cloudFileService: CloudFileService
+
     /// The Manager "peek": shows one selected file on its own engine, outside the coordinator's
     /// channels, so it disturbs neither the playlist nor the live audio channel. Injected into
     /// the lightbox view; driven from `togglePreviewOfSelection()`.
@@ -215,9 +220,12 @@ final class AppState {
         self.globalSettings = settings
         let folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService, prompt: FolderReaccessPanel())
         self.folderAccess = folderAccess
+        let cloudFileService = CloudFileService()
+        self.cloudFileService = cloudFileService
         self.coordinator = PlaybackCoordinator(
             folderAccess: folderAccess,
             globalSettings: settings,
+            cloudFileService: cloudFileService,
             makeVideoEngine: makeVideoEngine
         )
         self.preview = MediaPreview(folderAccess: folderAccess, makeVideoEngine: makeVideoEngine)

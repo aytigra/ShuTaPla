@@ -75,6 +75,11 @@ final class PlaybackCoordinator: PlaybackSource {
     /// (not snapshotted), so editing a global default in Settings takes effect immediately.
     let globalSettings: GlobalSettings
 
+    /// The live cloud-status feed. The coordinator drives its per-channel query lifecycle from
+    /// the same claim/release points that own the channels, so a channel's folder watch tracks
+    /// whichever playlist is live on it.
+    let cloudFileService: CloudFileService
+
     /// The repeating "write the live position" loop, run while a timeline channel plays so a
     /// crash or hard quit still leaves a recent resume point. Started lazily, cancelled on shutdown.
     var positionPersistTask: Task<Void, Never>?
@@ -92,12 +97,14 @@ final class PlaybackCoordinator: PlaybackSource {
     init(
         folderAccess: ScopedFolderAccess,
         globalSettings: GlobalSettings = GlobalSettings(),
+        cloudFileService: CloudFileService = CloudFileService(),
         imageEngine: ImagePlaybackEngine = ImagePlaybackEngine(),
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() },
         makeAudioEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() }
     ) {
         self.folderAccess = folderAccess
         self.globalSettings = globalSettings
+        self.cloudFileService = cloudFileService
         self.imageEngine = imageEngine
         self.makeVideoEngine = makeVideoEngine
         self.makeAudioEngine = makeAudioEngine
@@ -108,6 +115,8 @@ final class PlaybackCoordinator: PlaybackSource {
     func shutdown() {
         positionPersistTask?.cancel()
         positionPersistTask = nil
+        cloudFileService.endMonitoring(on: .visual)
+        cloudFileService.endMonitoring(on: .audio)
         videoEngine?.shutdown()
         audioEngine?.shutdown()
         imageEngine.stop()
@@ -136,6 +145,7 @@ final class PlaybackCoordinator: PlaybackSource {
     private func startVisual(_ playlist: Playlist, startingAt file: PlaylistFile?, lifecycle: Bool) {
         if let current = liveVisualPlaylist, current !== playlist { stopVisual() }
         guard let folder = folderAccess.begin(for: playlist) else { return }
+        cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .visual)
 
         let start = startFile(for: playlist, requested: file)
         liveVisualPlaylist = playlist
@@ -160,6 +170,7 @@ final class PlaybackCoordinator: PlaybackSource {
         if let current = liveAudioPlaylist, current !== playlist { stopAudio() }
         guard let folder = folderAccess.begin(for: playlist),
               let engine = ensureAudioEngine() else { return }
+        cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .audio)
 
         let start = startFile(for: playlist, requested: file)
         liveAudioPlaylist = playlist
@@ -196,6 +207,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     private func stopVisual() {
         guard let playlist = liveVisualPlaylist else { return }
+        cloudFileService.endMonitoring(on: .visual)
         persistTimelinePosition(from: visualVideoEngine)   // capture where it stopped before the engine clears
         switch visualKind {
         case .image: imageEngine.stop()
@@ -209,6 +221,7 @@ final class PlaybackCoordinator: PlaybackSource {
 
     func stopAudio() {
         guard let playlist = liveAudioPlaylist else { return }
+        cloudFileService.endMonitoring(on: .audio)
         persistTimelinePosition(from: audioEngine)   // capture where it stopped before the engine clears
         audioEngine?.stop()
         liveAudioPlaylist = nil
@@ -339,15 +352,18 @@ final class PlaybackCoordinator: PlaybackSource {
         imageEngine.startSlideshow(interval: playlist.effectiveSlideshowInterval(globalSettings))
     }
 
-    /// The file to start at: the explicit request, else the remembered current
-    /// file if it is still in the sequence, else the first file.
+    /// The file to start at: the explicit request, else the remembered current file if it is still
+    /// in the sequence, else the first file — then skipped forward to the next available file, so a
+    /// missing local start never reaches an engine.
     private func startFile(for playlist: Playlist, requested: PlaylistFile?) -> PlaylistFile? {
-        if let requested { return requested }
         let sequence = playlist.playbackFiles
-        if let id = playlist.currentFileID, let remembered = sequence.first(where: { $0.id == id }) {
-            return remembered
-        }
-        return sequence.first
+        let preferred = requested
+            ?? playlist.currentFileID.flatMap { id in sequence.first { $0.id == id } }
+            ?? sequence.first
+        guard let preferred else { return nil }
+        return Self.availableFile(
+            in: sequence, from: preferred, forward: true, includeStart: true, isAvailable: isAvailable
+        )
     }
 
     /// mpv volume (0–100) from the playlist's stored 0.0–1.0 preference.

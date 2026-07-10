@@ -60,6 +60,10 @@ final class ImagePlaybackEngine: SourceNavigating {
     /// Supplies the next/previous file and its URL. Set by the coordinator.
     weak var source: PlaybackSource?
 
+    /// Holds an evicted file pending until its bytes arrive, then decodes it. The player
+    /// view reads `cloudLoad.pendingFile` to show the downloading placeholder.
+    let cloudLoad = CloudLoadGate()
+
     private var loadTask: Task<Void, Never>?
     private var slideshowTask: Task<Void, Never>?
 
@@ -67,11 +71,23 @@ final class ImagePlaybackEngine: SourceNavigating {
 
     // MARK: - Loading
 
-    /// Loads and displays the image at `url`, resetting pan/zoom to identity. The
-    /// decode runs off the main actor so a large image doesn't hitch the advance.
+    /// Loads and displays the image at `url`, resetting pan/zoom to identity. An evicted file
+    /// is held pending by `cloudLoad` and only decoded once the live feed reports its arrival;
+    /// a `.local` file decodes at once. The decode runs off the main actor so a large image
+    /// doesn't hitch the advance.
     func load(_ file: PlaylistFile?, at url: URL) {
         currentFile = file
         transform = .identity
+        cloudLoad.load(file) { [weak self] in
+            self?.decode(at: url)
+        } requestDownload: { [weak self] in
+            self?.source?.requestDownload($0)
+        }
+    }
+
+    /// Decodes and displays the image — run at once for a `.local` file or deferred by
+    /// `cloudLoad` until an evicted file arrives.
+    private func decode(at url: URL) {
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             let decoded = await Self.decodeImage(at: url)
@@ -82,6 +98,7 @@ final class ImagePlaybackEngine: SourceNavigating {
 
     /// Clears the displayed image and stops the slideshow.
     func stop() {
+        cloudLoad.cancel()
         stopSlideshow()
         loadTask?.cancel()
         loadTask = nil

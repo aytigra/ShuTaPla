@@ -41,6 +41,7 @@ struct ShuTaPlaApp: App {
             RootView()
                 .environment(appState)
                 .environment(appState.coordinator)
+                .environment(appState.cloudFileService)
                 .environment(thumbnailService)
                 .environment(metadataService)
                 .frame(minWidth: 800, minHeight: 600)

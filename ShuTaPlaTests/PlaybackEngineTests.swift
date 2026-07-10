@@ -120,6 +120,27 @@ import AppKit
         #expect(engine.currentFile === only)
     }
 
+    @Test func loadErrorStallsWithoutAdvancing() throws {
+        // Baseline for the missing/evicted-file handling (cloud task, Step 6): an mpv load
+        // failure surfaces as `END_FILE` reason `error`, which the engine currently *ignores*
+        // — only a natural EOF advances. So an unloadable file leaves the engine anchored on it
+        // with nothing playing; it does not skip forward. Any silent-skip on a missing file is
+        // therefore new behavior to add, not an existing path to extend.
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, resource: sine(5))   // anchor on the first file
+
+        engine.handle(.endFile(.error))          // what a failed/missing-file load reports
+
+        #expect(source.advancedTo.isEmpty)       // did not skip to the next file
+        #expect(engine.currentFile === first)    // stayed anchored on the unloadable file
+    }
+
     @Test func advanceAfterShutdownIsANoOp() throws {
         // A natural end-of-file event already in flight when the engine is torn down must
         // not walk the source (whose models may be gone): shutdown drops the source, so a
@@ -297,6 +318,7 @@ final class MockPlaybackSource: PlaybackSource {
     private(set) var fileAfterCalls = 0
     private(set) var fileBeforeCalls = 0
     private(set) var advancedTo: [UUID] = []
+    private(set) var downloadRequests: [UUID] = []
 
     init(files: [PlaylistFile] = []) { self.files = files }
 
@@ -315,4 +337,6 @@ final class MockPlaybackSource: PlaybackSource {
     func url(for file: PlaylistFile) -> URL? { urlByID[file.id] }
 
     func engineDidAdvance(to file: PlaylistFile) { advancedTo.append(file.id) }
+
+    func requestDownload(_ file: PlaylistFile) { downloadRequests.append(file.id) }
 }

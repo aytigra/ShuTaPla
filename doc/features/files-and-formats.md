@@ -12,9 +12,16 @@ Unsupported files in a selected folder are ignored silently. A small, non-intrus
 
 ## Cloud / offline files
 
-Source folders may live in cloud storage (for example an iCloud Drive folder) where files are not always downloaded locally. The app surfaces this state per file:
+Source folders may live in cloud storage (for example an iCloud Drive folder) where files are not always downloaded locally. A live query watches each active playlist's folder and keeps every file's status current as the system evicts and fetches files, so the state below reflects the disk in real time rather than only what was true at scan.
 
-- An **"in the cloud"** indicator marks files that are not yet downloaded (placeholder / evicted).
-- A **"downloading from cloud"** indicator marks files that are actively being fetched.
+The app surfaces this state per file, alongside the on-disk size:
 
-These indicators appear in every file list (the Manager list and gallery, and the Visual Overlay). To avoid stalls, the app **prefetches ahead**: while the current file plays, it requests the download of the next files in line (default: the next 3) so they are ready by the time playback reaches them. If a file is still in the cloud when playback reaches it, the app requests its download immediately and shows the downloading indicator; if it cannot be made available in time, playback advances to the next available file (unless the file was selected explicitly by double-click from a file list — in that case playback waits for the download to finish).
+- An **"in the cloud"** indicator (`icloud`) marks files that are not yet downloaded (placeholder / evicted).
+- A **"downloading from cloud"** indicator (`icloud.and.arrow.down`) marks files that are actively being fetched.
+
+These indicators appear in the Manager list and gallery and in the audio transport; a fully local file shows no indicator. To avoid stalls, the app **prefetches ahead**: while the current file plays, it requests the download of the next files in line (default: the next 3) so they are ready by the time playback reaches them.
+
+Two unavailable cases are handled differently when playback reaches a file:
+
+- **Evicted** (in the cloud / downloading): the file still exists on disk as a placeholder stub, so playback moves to it normally. The app requests its download and shows a downloading placeholder on the visual stage (the audio channel shows the transport indicator), then plays the file in place the moment its bytes arrive. Video and audio wait for it indefinitely; a slideshow keeps its own cadence and moves on after the interval whether or not the image finished downloading.
+- **Missing** (recorded as local but gone from disk before a rescan pruned it): silently skipped to the next available file, in playback order.

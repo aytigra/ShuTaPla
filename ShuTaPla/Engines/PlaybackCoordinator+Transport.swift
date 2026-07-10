@@ -102,16 +102,20 @@ extension PlaybackCoordinator {
     /// channel the playlist occupies.
     func jump(_ playlist: Playlist, to file: PlaylistFile) {
         guard let folder = folderAccess.url(for: playlist.id) else { return }
+        // Skip a missing local target to the next available file before any engine loads it.
+        let target = Self.availableFile(
+            in: playlist.playbackFiles, from: file, forward: true, includeStart: true, isAvailable: isAvailable
+        ) ?? file
         persistTimelinePosition(from: timelineEngine(of: playlist))   // save the outgoing file before loading the new one
-        let url = folder.appending(path: file.relativePath)
-        setCurrentFile(file, on: playlist)
+        let url = folder.appending(path: target.relativePath)
+        setCurrentFile(target, on: playlist)
         // A jump is a fresh entry into a file (a double-click, or a reconcile landing on a new
         // file), so it resumes mid-file only when file-position persistence is on for the playlist.
-        let resumeAt = persistsPosition(playlist) ? file.lastPosition : nil
+        let resumeAt = persistsPosition(playlist) ? target.lastPosition : nil
         switch channel(of: playlist) {
-        case .visualImage: imageEngine.load(file, at: url)
-        case .visualVideo: videoEngine?.load(file, at: url, startingAt: resumeAt)
-        case .audio: audioEngine?.load(file, at: url, startingAt: resumeAt)
+        case .visualImage: imageEngine.load(target, at: url)
+        case .visualVideo: videoEngine?.load(target, at: url, startingAt: resumeAt)
+        case .audio: audioEngine?.load(target, at: url, startingAt: resumeAt)
         case nil: break
         }
         // `load` always starts the new file playing. Re-halt it if this playlist shouldn't be

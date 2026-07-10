@@ -28,6 +28,10 @@ protocol PlaybackSource: AnyObject {
     /// or `nil` when it can't be resolved (e.g. a stale bookmark or a missing file).
     func url(for file: PlaylistFile) -> URL?
 
+    /// Asks the source to pull an evicted `file` down from iCloud — the engine calls it
+    /// when it holds a not-yet-local file pending, so the live feed reports the arrival.
+    func requestDownload(_ file: PlaylistFile)
+
     /// Called whenever the engine moves to `file` through its own advance/previous —
     /// including the unattended paths (natural end-of-file, slideshow tick) that don't
     /// pass back through the coordinator — so the source can sync its persisted

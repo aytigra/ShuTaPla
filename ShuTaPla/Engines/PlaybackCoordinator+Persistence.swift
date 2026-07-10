@@ -83,17 +83,34 @@ extension PlaybackCoordinator {
 
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
-        return playlist.playbackFiles.cyclicSuccessor { $0.id == current.id }
+        return Self.availableFile(
+            in: playlist.playbackFiles, from: current, forward: true, includeStart: false, isAvailable: isAvailable
+        )
     }
 
     func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
-        return playlist.playbackFiles.cyclicPredecessor { $0.id == current.id }
+        return Self.availableFile(
+            in: playlist.playbackFiles, from: current, forward: false, includeStart: false, isAvailable: isAvailable
+        )
+    }
+
+    /// Whether `file` is a valid load target. An evicted file is (the engine placeholders it until
+    /// the bytes arrive), and a present local file is; only a `.local` file gone from disk before a
+    /// rescan pruned it is not. An unresolvable folder can't be checked, so the file isn't treated as
+    /// missing — the engine's own load simply no-ops.
+    func isAvailable(_ file: PlaylistFile) -> Bool {
+        guard file.cloudStatus == .local, let url = url(for: file) else { return true }
+        return FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
     }
 
     func url(for file: PlaylistFile) -> URL? {
         guard let playlist = file.playlist, let folder = folderAccess.url(for: playlist.id) else { return nil }
         return folder.appending(path: file.relativePath)
+    }
+
+    func requestDownload(_ file: PlaylistFile) {
+        cloudFileService.requestDownload(file)
     }
 
     func engineDidAdvance(to file: PlaylistFile) {
@@ -102,9 +119,51 @@ extension PlaybackCoordinator {
 
     /// Records `file` as `playlist`'s current resume cursor and mirrors its shuffle position into
     /// the active filter's slot — the single point every natural file switch (Play, jump, an
-    /// engine-reported advance) routes through, so the outgoing filter's slot stays current.
+    /// engine-reported advance) routes through, so the outgoing filter's slot stays current. Each
+    /// switch also prefetches the files just ahead, so an evicted one is already arriving by the
+    /// time the cursor reaches it.
     func setCurrentFile(_ file: PlaylistFile, on playlist: Playlist) {
         playlist.currentFileID = file.id
         playlist.captureResumePosition(file.sortOrder)
+        for target in Self.prefetchTargets(
+            after: file, in: playlist.playbackFiles, count: AppConstants.cloudPrefetchCount
+        ) {
+            cloudFileService.requestDownload(target)
+        }
+    }
+
+    /// The prefetch horizon after `current`: the next `count` files in playback order — wrapping
+    /// past the end the way playback does — that aren't already on disk. Never includes `current`,
+    /// and never repeats a file when the sequence is shorter than `count + 1`. Pure, so the
+    /// selection is unit-tested apart from the coordinator and its download side effect.
+    /// Walking `sequence` in playback order (wrapping) from `start`, the first file `isAvailable`
+    /// accepts — the shared "next available" resolution that skips a missing local file before any
+    /// engine touches it. `forward` picks the direction; `includeStart` treats `start` itself as the
+    /// first candidate (resolving a jump / start target) rather than stepping past it (advance /
+    /// previous). Pure over the injected predicate, so the walk is unit-tested apart from the disk
+    /// existence check the coordinator supplies. `nil` when no file in the sequence is available.
+    static func availableFile(
+        in sequence: [PlaylistFile], from start: PlaylistFile, forward: Bool,
+        includeStart: Bool, isAvailable: (PlaylistFile) -> Bool
+    ) -> PlaylistFile? {
+        let count = sequence.count
+        guard count > 0, let index = sequence.firstIndex(where: { $0.id == start.id }) else { return nil }
+        for offset in (includeStart ? 0 : 1)..<count {
+            let position = forward ? (index + offset) % count : ((index - offset) % count + count) % count
+            let candidate = sequence[position]
+            if isAvailable(candidate) { return candidate }
+        }
+        return nil
+    }
+
+    static func prefetchTargets(
+        after current: PlaylistFile, in sequence: [PlaylistFile], count: Int
+    ) -> [PlaylistFile] {
+        guard count > 0, sequence.count > 1,
+              let index = sequence.firstIndex(where: { $0.id == current.id }) else { return [] }
+        let horizon = min(count, sequence.count - 1)
+        return (1...horizon)
+            .map { sequence[(index + $0) % sequence.count] }
+            .filter { $0.cloudStatus != .local }
     }
 }

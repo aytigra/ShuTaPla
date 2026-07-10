@@ -62,6 +62,10 @@ class MPVPlaybackEngine: SourceNavigating {
     /// tests; all routine control goes through the engine's own methods.
     let client: MPVClient
 
+    /// Holds an evicted file pending until its bytes arrive, then runs the real load.
+    /// Player views read `cloudLoad.pendingFile` to show the downloading placeholder.
+    let cloudLoad = CloudLoadGate()
+
     private var eventTask: Task<Void, Never>?
 
     // MARK: - Lifecycle
@@ -102,11 +106,25 @@ class MPVPlaybackEngine: SourceNavigating {
 
     /// Loads an mpv resource string directly (a file path or a protocol URL such as
     /// `av://…`). The URL-taking overload funnels here; tests drive it with libmpv's
-    /// virtual sources, which aren't expressible as `URL`s.
+    /// virtual sources, which aren't expressible as `URL`s. An evicted file is held pending
+    /// by `cloudLoad` at a rest position (no time, not playing) and its bytes only load once
+    /// the live feed reports its arrival; a `.local` file loads at once.
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
-        currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
+        currentTime = 0                // no stale position while pending; `startFile` sets the real one
         videoSize = .zero              // the new file re-reports its size; don't linger on the old one
+        isPlaying = false
+        cloudLoad.load(file) { [weak self] in
+            self?.startFile(resource: resource, startingAt: position)
+        } requestDownload: { [weak self] in
+            self?.source?.requestDownload($0)
+        }
+    }
+
+    /// Hands the resource to mpv and starts it — the byte-touching load, run at once for a
+    /// `.local` file or deferred by `cloudLoad` until an evicted file arrives.
+    private func startFile(resource: String, startingAt position: TimeInterval?) {
+        currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
         isPlaying = true               // optimistic; corrected by the next `pause` event
         if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)
@@ -118,6 +136,7 @@ class MPVPlaybackEngine: SourceNavigating {
 
     /// Stops playback and clears the engine's current-file/position state.
     func stop() {
+        cloudLoad.cancel()
         client.stop()
         isPlaying = false
         currentTime = 0

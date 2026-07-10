@@ -48,6 +48,10 @@ struct PlayerView: View {
                 noFilesPlaceholder
             }
 
+            if let pending = coordinator.visualCloudPendingFile {
+                downloadingPlaceholder(pending)
+            }
+
             if coordinator.isSuppressed {
                 PauseOverlay(
                     onUnpause: { coordinator.unsuppress() },
@@ -62,6 +66,7 @@ struct PlayerView: View {
         .overlay { visualOverlayContainer }
         .animation(.easeInOut(duration: 0.15), value: coordinator.isSuppressed)
         .animation(.easeInOut(duration: 0.2), value: visualHasNoFiles)
+        .animation(.easeInOut(duration: 0.2), value: coordinator.visualCloudPendingFile != nil)
         // Keep the display awake while the picture is moving; release it on pause and on exit
         // so a paused or torn-down player lets the screen sleep normally again.
         .onChange(of: coordinator.isVisuallyPlaying, initial: true) { _, playing in
@@ -121,6 +126,29 @@ struct PlayerView: View {
                     .font(.headline)
             }
             .foregroundStyle(.white.opacity(0.75))
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
+    }
+
+    /// Shown over the black stage while the current visual file is evicted from disk: the engine
+    /// holds the load until iCloud delivers the bytes, then swaps the picture in. The glyph tracks
+    /// the file's live `cloudStatus` (`icloud` → `icloud.and.arrow.down` once fetching starts).
+    private func downloadingPlaceholder(_ file: PlaylistFile) -> some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 12) {
+                Image(systemName: file.cloudStatus.badgeSymbol ?? "icloud.and.arrow.down")
+                    .font(.system(size: 48))
+                Text(file.fileName)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                ProgressView()
+                    .controlSize(.small)
+            }
+            .foregroundStyle(.white.opacity(0.75))
+            .padding()
         }
         .ignoresSafeArea()
         .transition(.opacity)

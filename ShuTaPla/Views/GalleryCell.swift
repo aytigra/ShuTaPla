@@ -98,8 +98,15 @@ struct GalleryCell: View {
             .overlay(alignment: .topTrailing) {
                 if let size = file.pixelSize { badge(size.dimensionsText) }
             }
+            // Cloud availability and on-disk size are conceptually paired, so the cloud badge
+            // sits beside the size badge — shown (as its own pill) only when the file isn't local.
             .overlay(alignment: .bottomLeading) {
-                if let bytes = file.fileSizeBytes { badge(bytes.formattedFileSize) }
+                HStack(spacing: 0) {
+                    if file.cloudStatus.badgeSymbol != nil {
+                        pill(CloudStatusBadge(status: file.cloudStatus))
+                    }
+                    if let bytes = file.fileSizeBytes { badge(bytes.formattedFileSize) }
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if let duration = file.duration { badge(duration.formattedDuration) }
@@ -136,10 +143,13 @@ struct GalleryCell: View {
         }
     }
 
-    /// One thumbnail corner badge: a dark rounded pill with a white monospaced caption,
-    /// inset from the tile edge. Shared by the dimensions, size, and duration badges.
-    private func badge(_ text: String) -> some View {
-        Text(text)
+    /// One thumbnail corner badge: a text pill. The dimensions, size, and duration badges.
+    private func badge(_ text: String) -> some View { pill(Text(text)) }
+
+    /// The dark rounded pill chrome, inset from the tile edge — a white monospaced caption or,
+    /// for the cloud badge, a glyph. Shared by every corner badge.
+    private func pill(_ content: some View) -> some View {
+        content
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.white)
             .padding(.horizontal, 5)
