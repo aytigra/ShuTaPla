@@ -315,13 +315,3 @@ classes before running.
   **indefinitely** — no give-up-and-skip timeout. A user Next/Prev retargets normally.
 - **Glyph choice** for `.inCloud` vs `.downloading`, and whether the download-progress percentage is
   worth its wiring — settle alongside Task 20 so the accessibility labels are written once.
-
-## Docs to update on completion ✅
-
-Done — all three updated:
-- `doc/features/files-and-formats.md` — the live-feed indicators, prefetch, and the evicted-placeholder
-  vs missing-skip split (indefinite wait recorded).
-- `doc/architecture.md` — a `CloudFileService` service bullet, the "planned service" note removed, and
-  `CloudFileService`/`CloudLoadGate` added to the source-tree map.
-- `doc/tasks/feature_roadmap.md` — Task 18 removed.
-</content>

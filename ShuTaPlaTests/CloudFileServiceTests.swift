@@ -13,6 +13,10 @@ import Foundation
 import SwiftData
 @testable import ShuTaPla
 
+/// A one-shot flag for `withObservationTracking`'s `@Sendable` `onChange`, which can't mutate a
+/// captured `var`. The callback runs synchronously on the main actor within the mutation.
+private final class Fired: @unchecked Sendable { var value = false }
+
 @MainActor
 struct CloudFileServiceTests {
 
@@ -83,43 +87,42 @@ struct CloudFileServiceTests {
         #expect(a.cloudStatus == .local)         // download completed → back to local
     }
 
-    /// A temp directory and a plain (non-scoped, test) bookmark to it — so `requestDownload`
-    /// resolves the folder without an iCloud account or a security-scoped grant.
-    private func makeFolder() throws -> (url: URL, bookmark: Data) {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ShuTaPlaCloud-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return (url, try BookmarkService.makeBookmark(for: url))
-    }
-
-    @Test func requestDownloadIssuesOneRequestForTheFile() throws {
+    @Test func applyDoesNotInvalidateObserversOnUnchangedStatus() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let folder = try makeFolder()
-        let playlist = Playlist(
-            name: "P", folderBookmark: folder.bookmark, folderPath: "/p", mediaType: .video
-        )
-        context.insert(playlist)
-        let file = makeFile("clip.mp4", in: context)
-        file.playlist = playlist
+        let a = makeFile("a.mp4", in: context)
 
-        var requested: [URL] = []
-        let service = CloudFileService(requester: { requested.append($0) })
-        service.requestDownload(file)
+        let service = CloudFileService()
+        service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .inCloud)], to: [a])
+        #expect(a.cloudStatus == .inCloud)
 
-        #expect(requested.count == 1)                              // exactly one request
-        #expect(requested.first?.lastPathComponent == "clip.mp4")  // for the named file
+        // A repeated metadata tick reports the same status. Feeding it must not invalidate the
+        // observer — with the match-all predicate every file is fed every tick, so an unchanged
+        // write would re-render the whole Manager list + gallery on any metadata change. `onChange`
+        // is `@Sendable`, so record the fire through a reference (it runs synchronously on the main
+        // actor within the mutation — single-threaded in practice).
+        let invalidated = Fired()
+        withObservationTracking { _ = a.cloudStatus } onChange: { invalidated.value = true }
+        service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .inCloud)], to: [a])
+        #expect(!invalidated.value)   // unchanged status → no redundant invalidation
+
+        // A genuine transition still notifies observers — the gate suppresses only no-op writes.
+        let changed = Fired()
+        withObservationTracking { _ = a.cloudStatus } onChange: { changed.value = true }
+        service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .local)], to: [a])
+        #expect(changed.value)
     }
 
-    @Test func requestDownloadIsANoOpWhenTheFileHasNoPlaylist() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let file = makeFile("orphan.mp4", in: context)
-
+    // The caller resolves the file URL under the playlist folder's live scoped session (the
+    // coordinator's `url(for:)`); the service just forwards it to the requester once. The
+    // "no playlist / unresolvable folder → no-op" guard lives with the resolver, in
+    // `PlaybackCoordinatorTests` (`setCurrentFile` requests nothing without an open session).
+    @Test func requestDownloadForwardsURLToRequester() throws {
+        let url = URL(fileURLWithPath: "/folder/clip.mp4")
         var requested: [URL] = []
         let service = CloudFileService(requester: { requested.append($0) })
-        service.requestDownload(file)
+        service.requestDownload(at: url)
 
-        #expect(requested.isEmpty)   // no folder to resolve → nothing requested
+        #expect(requested == [url])   // exactly one request, for the given URL
     }
 }

@@ -294,11 +294,38 @@ import SwiftData
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
         defer { coordinator.shutdown() }
+        #expect(coordinator.folderAccess.begin(for: image) != nil)   // live playback session — the URL resolver
 
         // The switch choke point (with the default prefetch count of 3) looks at files 1,2,3 ahead
-        // of the cursor and requests only the two evicted ones, in playback order.
+        // of the cursor and requests only the two evicted ones, in playback order — each URL resolved
+        // under the open folder session.
         coordinator.setCurrentFile(files[0], on: image)
         #expect(requested.map(\.lastPathComponent) == ["1.jpg", "3.jpg"])
+    }
+
+    // The download URL is resolved against the coordinator's live folder session (`url(for:)`), so a
+    // switch with no session open — no folder to resolve against — requests nothing rather than
+    // re-resolving the bookmark per file. This is the "unresolvable → no-op" guard, at its resolver.
+    @Test func fileSwitchWithoutOpenSessionRequestsNothing() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["0.jpg", "1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("0.jpg", []), ("1.jpg", [])], in: context)
+        try context.save()
+        let files = context.playbackFiles(of: image)
+        files[1].cloudStatus = .inCloud
+
+        var requested: [URL] = []
+        let coordinator = PlaybackCoordinator(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            cloudFileService: CloudFileService(requester: { requested.append($0) }),
+            makeVideoEngine: { try AudioPlaybackEngine() },
+            makeAudioEngine: { try AudioPlaybackEngine() }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.setCurrentFile(files[0], on: image)   // no folderAccess.begin — nothing to resolve against
+        #expect(requested.isEmpty)
     }
 
     // MARK: - Visual downloading placeholder (Task 18, Step 6c)

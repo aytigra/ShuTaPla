@@ -13,9 +13,6 @@ nonisolated enum AppConstants {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "jxl", "gif", "heic", "heif", "webp", "tiff", "bmp"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "aiff", "wma"]
 
-    /// Every recognized media extension — the live cloud query watches exactly these.
-    static let allMediaExtensions: Set<String> = videoExtensions.union(imageExtensions).union(audioExtensions)
-
     /// How many not-yet-local files ahead of the playback cursor to begin downloading from iCloud
     /// on each file switch, so an evicted file is already arriving before playback reaches it.
     static let cloudPrefetchCount = 3

@@ -118,6 +118,9 @@ final class PlaylistFile {
             return _cloudStatus
         }
         set {
+            // Gate on change: the live feed re-reports every file each metadata tick, so an
+            // unchanged write would still fire `withMutation` and re-render every reader for nothing.
+            guard newValue != _cloudStatus else { return }
             _$observationRegistrar.withMutation(of: self, keyPath: \.cloudStatus) {
                 _cloudStatus = newValue
             }

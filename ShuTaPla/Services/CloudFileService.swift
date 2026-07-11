@@ -118,16 +118,13 @@ final class CloudFileService {
 
     // MARK: - On-demand download
 
-    /// Requests that `file` be pulled down from iCloud, returning immediately — the live feed
-    /// reports the resulting `.downloading` → `.local` transition. The one entry point for both
-    /// on-demand playback and prefetch. Resolves the file's URL under its playlist folder's
-    /// scoped-access session; a file with no playlist or an unresolvable folder is a silent no-op.
-    func requestDownload(_ file: PlaylistFile) {
-        guard let bookmark = file.playlist?.folderBookmark else { return }
-        let relativePath = file.relativePath
-        try? BookmarkService.withScopedAccess(to: bookmark) { folder in
-            try requester(folder.appending(path: relativePath))
-        }
+    /// Requests that the file at `url` be pulled down from iCloud, returning immediately — the live
+    /// feed reports the resulting `.downloading` → `.local` transition. The one entry point for both
+    /// on-demand playback and prefetch. The caller resolves the URL under the playlist folder's live
+    /// scoped-access session (the coordinator's `url(for:)`), matching how `beginMonitoring` is
+    /// handed its folder URL; a failed request is a silent no-op.
+    func requestDownload(at url: URL) {
+        try? requester(url)
     }
 
     // MARK: - Apply core (pure, no live query)

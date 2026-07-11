@@ -110,7 +110,8 @@ extension PlaybackCoordinator {
     }
 
     func requestDownload(_ file: PlaylistFile) {
-        cloudFileService.requestDownload(file)
+        guard let url = url(for: file) else { return }
+        cloudFileService.requestDownload(at: url)
     }
 
     func engineDidAdvance(to file: PlaylistFile) {
@@ -128,7 +129,7 @@ extension PlaybackCoordinator {
         for target in Self.prefetchTargets(
             after: file, in: playlist.playbackFiles, count: AppConstants.cloudPrefetchCount
         ) {
-            cloudFileService.requestDownload(target)
+            requestDownload(target)
         }
     }
 

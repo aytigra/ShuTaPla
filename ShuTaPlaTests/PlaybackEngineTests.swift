@@ -214,6 +214,69 @@ import AppKit
         #expect(await poll(timeout: .seconds(5)) { abs(engine.client.volume - 42) < 0.5 })
     }
 
+    @Test func switchingToEvictedFileStopsThePreviousFile() async throws {
+        // A manual switch (Next/Prev/jump) from a playing local file to an evicted (not-yet-local)
+        // one holds the new file pending behind a downloading placeholder. The engine must rest mpv
+        // while it waits — otherwise the previous file keeps decoding and *audibly playing* behind
+        // the placeholder for the whole download. Proven through the live client: once rested,
+        // time-pos stops advancing, so `currentTime` no longer climbs.
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+
+        engine.load(makeFile("a"), resource: sine(30))
+        #expect(await poll(timeout: .seconds(10)) { engine.currentTime > 0.5 })   // A is really playing
+
+        let evicted = makeFile("b")
+        evicted.cloudStatus = .inCloud
+        engine.load(evicted, resource: sine(30))
+        #expect(engine.cloudLoad.pendingFile === evicted)   // the switch is genuinely held pending
+
+        // Let any in-flight time-pos event land and the stop take effect, then confirm playback is
+        // at rest. If A kept playing, its time-pos events would have climbed `currentTime` past 0.5.
+        try? await Task.sleep(for: .seconds(1))
+        #expect(engine.currentTime < 0.5)
+    }
+
+    @Test func evictedFileArrivingWhilePausedStaysPaused() async throws {
+        // A channel paused (or suppressed) while its current file is still evicted holds the file
+        // pending with mpv rested. When the bytes arrive, the deferred load must honor the standing
+        // pause — not auto-start playback. Otherwise relaunching a Paused playlist (or pausing while
+        // an evicted file downloads) starts blaring the moment iCloud delivers the file.
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+
+        let evicted = makeFile("a")
+        evicted.cloudStatus = .inCloud
+        engine.load(evicted, resource: sine(30))
+        #expect(engine.cloudLoad.pendingFile === evicted)   // held pending, nothing playing yet
+
+        engine.pause()   // the coordinator's suspend() path: the channel should stay halted
+
+        evicted.cloudStatus = .local   // the live feed reports the bytes arrived
+        #expect(await poll(timeout: .seconds(5)) { engine.cloudLoad.pendingFile == nil })   // load ran
+
+        // The file is loaded but must be at rest. Give any time-pos event a chance to land.
+        try? await Task.sleep(for: .seconds(1))
+        #expect(!engine.isPlaying)
+        #expect(engine.currentTime < 0.5)
+    }
+
+    @Test func shutdownWhilePendingCancelsTheGate() throws {
+        // An engine torn down while awaiting an evicted file must cancel its cloud-load gate, exactly
+        // as stop() does. Otherwise the armed cloudStatus observation outlives teardown and its later
+        // react() dereferences the pending PlaylistFile after its context is gone (trap class 2), or
+        // runs a stray deferred load on the already-shut-down client at app quit.
+        let engine = try AudioPlaybackEngine()
+
+        let evicted = makeFile("a")
+        evicted.cloudStatus = .inCloud
+        engine.load(evicted, resource: sine(30))
+        #expect(engine.cloudLoad.pendingFile === evicted)   // held pending, gate armed
+
+        engine.shutdown()
+        #expect(engine.cloudLoad.pendingFile == nil)         // shutdown cancelled the wait
+    }
+
     @Test func stopClearsState() async throws {
         let engine = try AudioPlaybackEngine()
         defer { engine.shutdown() }

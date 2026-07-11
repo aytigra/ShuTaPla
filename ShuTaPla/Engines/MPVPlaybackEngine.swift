@@ -43,6 +43,12 @@ class MPVPlaybackEngine: SourceNavigating {
     /// `setLooping(_:)`/`toggleLoop()`.
     private(set) var isLooping: Bool = false
 
+    /// The transport's standing play/pause intent, tracking the last `play()`/`pause()` command
+    /// (a fresh `load` resets it to play). A `.local` file loads and applies this at once; a
+    /// deferred evicted-file load reads it on arrival so a channel paused/suppressed while the
+    /// file downloaded doesn't auto-start when its bytes land.
+    private var wantsPlayback = true
+
     /// The file the engine considers current. `nil` when stopped or idle. Set on
     /// load and used as the anchor for advance/previous.
     private(set) var currentFile: PlaylistFile?
@@ -83,6 +89,9 @@ class MPVPlaybackEngine: SourceNavigating {
     func shutdown() {
         eventTask?.cancel()
         eventTask = nil
+        // Drop any pending evicted-file wait so its armed `cloudStatus` observation can't fire
+        // a stray load after teardown (`stop()` cancels for the same reason).
+        cloudLoad.cancel()
         // Drop the source so an end-of-file event already in flight when shutdown
         // lands finds nothing to advance to and returns without walking the (now
         // possibly torn-down) playlist's models.
@@ -114,25 +123,31 @@ class MPVPlaybackEngine: SourceNavigating {
         currentTime = 0                // no stale position while pending; `startFile` sets the real one
         videoSize = .zero              // the new file re-reports its size; don't linger on the old one
         isPlaying = false
+        wantsPlayback = true           // a fresh load intends to play; the coordinator re-halts after if needed
         cloudLoad.load(file) { [weak self] in
             self?.startFile(resource: resource, startingAt: position)
         } requestDownload: { [weak self] in
             self?.source?.requestDownload($0)
         }
+        // A load held pending (evicted file) never touches the client, so rest it — otherwise the
+        // previous file keeps decoding and playing behind the downloading placeholder until arrival.
+        if cloudLoad.pendingFile != nil { client.stop() }
     }
 
     /// Hands the resource to mpv and starts it — the byte-touching load, run at once for a
     /// `.local` file or deferred by `cloudLoad` until an evicted file arrives.
     private func startFile(resource: String, startingAt position: TimeInterval?) {
         currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
-        isPlaying = true               // optimistic; corrected by the next `pause` event
+        isPlaying = wantsPlayback      // optimistic; corrected by the next `pause` event
         if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)
-        client.play()
+        // Honor the standing intent: a deferred load whose channel was paused/suppressed while the
+        // evicted file downloaded must land paused, not blare the moment its bytes arrive.
+        if wantsPlayback { client.play() } else { client.pause() }
     }
 
-    func play() { client.play() }
-    func pause() { client.pause() }
+    func play() { wantsPlayback = true; client.play() }
+    func pause() { wantsPlayback = false; client.pause() }
 
     /// Stops playback and clears the engine's current-file/position state.
     func stop() {

@@ -75,6 +75,33 @@ import SwiftData
         #expect(gate.pendingFile == nil)
     }
 
+    // Supersession: a second `load` replaces the pending file before the first arrives. The old
+    // file's one-shot observation is now stale. When it later fires, the gate must drop it — never
+    // run the superseded `perform`, and never re-arm on the current pending file — so exactly the
+    // current file's `perform` runs, exactly once, on its own arrival.
+    @Test func supersededWaitDropsAndOnlyCurrentPerforms() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = makeFile(.inCloud, in: context)
+        let b = makeFile(.inCloud, in: context)
+        let gate = CloudLoadGate()
+        var performedA = 0
+        var performedB = 0
+        gate.load(a, perform: { performedA += 1 }, requestDownload: { _ in })
+        gate.load(b, perform: { performedB += 1 }, requestDownload: { _ in })   // supersedes A
+        #expect(gate.pendingFile === b)
+
+        a.cloudStatus = .local                     // the superseded file arriving must not load
+        await settle(until: { performedA > 0 })
+        #expect(performedA == 0)                   // A was superseded — dropped, never performed
+        #expect(gate.pendingFile === b)
+
+        b.cloudStatus = .local                     // the current file arrives — its perform runs once
+        await settle(until: { performedB > 0 })
+        #expect(performedB == 1)
+        #expect(gate.pendingFile == nil)
+    }
+
     @Test func cancelDropsPendingWait() async throws {
         let container = try makeContainer()
         let file = makeFile(.inCloud, in: container.mainContext)
