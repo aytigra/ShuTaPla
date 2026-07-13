@@ -361,10 +361,13 @@ final class PlaybackCoordinator: PlaybackSource {
             .flatMap { playlist.modelContext?.identifier(of: $0) }
             .flatMap { ids.contains($0) ? $0 : nil }
         guard let preferred = requested?.persistentModelID ?? currentID ?? ids.first else { return nil }
+        // A requested file outside the playback sequence (a skipped file started under the
+        // `.skipped` filter) isn't found by `availableFile`; fall back to it as `jump` does so it
+        // still plays rather than the claimed channel loading nothing.
         return Self.availableFile(
             in: ids, from: preferred, forward: true, includeStart: true,
             resolve: resolveFile(in: playlist), isAvailable: isAvailable
-        )
+        ) ?? requested
     }
 
     /// mpv volume (0–100) from the playlist's stored 0.0–1.0 preference.

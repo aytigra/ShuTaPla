@@ -427,6 +427,27 @@ import SwiftData
         #expect(coordinator.fileBefore(files[2]) === files[0])
     }
 
+    @Test func startsARequestedFileOutsideThePlaybackSequence() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["skip.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [], in: context)
+        // A skipped file shows in the Manager's display sequence but is dropped from the
+        // playback sequence, so double-clicking it (under the `.skipped` filter) requests a
+        // start at a file `availableFile` can't find in the sequence.
+        let skipped = insertFile("skip.jpg", skipped: true, order: 0, to: image, in: context)
+        try context.save()
+        #expect(context.playbackSequence(of: image).isEmpty)
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image, startingAt: skipped)
+        // The requested file must load rather than the start resolving to nil and the claimed
+        // channel showing nothing.
+        #expect(coordinator.visualCurrentFile?.id == skipped.id)
+    }
+
     // MARK: - Player controls surface (Task 14)
 
     @Test func setVolumePersistsAndClamps() throws {

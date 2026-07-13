@@ -11,8 +11,9 @@
 //  A previewed video plays from the beginning, looping forever (so it never reaches
 //  end-of-file), at its playlist's volume, with `source` left nil so it never
 //  advances past the one file. An image is decoded and shown fit-to-window. The
-//  scoped-folder session opened on the file's folder lives for the duration of the
-//  preview and is released on close.
+//  scoped-folder session opened on the file's folder — and a cloud-status watch on it,
+//  so an evicted peek's arrival fires the gate — live for the duration of the preview
+//  and are torn down on close.
 //
 
 import Foundation
@@ -112,6 +113,9 @@ final class MediaPreview {
               let folder = folderAccess.begin(for: playlist) else { return }
         sessionPlaylistID = playlist.id
         self.file = file
+        // Watch the folder for the life of the preview so an evicted file's arrival writes
+        // `cloudStatus` and fires the gate — no live channel plays it otherwise.
+        cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .preview)
         let url = folder.appending(path: file.relativePath)
 
         switch playlist.mediaType {
@@ -131,6 +135,7 @@ final class MediaPreview {
     func close() {
         videoEngine?.stop()
         imageEngine.stop()
+        cloudFileService.endMonitoring(on: .preview)
         if let sessionPlaylistID { folderAccess.end(for: sessionPlaylistID) }
         sessionPlaylistID = nil
         file = nil

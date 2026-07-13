@@ -263,6 +263,38 @@ import SwiftData
         #expect(preview.cloudPendingFile == nil)
     }
 
+    /// The preview drives the shared `CloudFileService` for its own folder while open, so the live
+    /// feed writes `cloudStatus` and the gate fires exactly as under playback — no hand-written
+    /// `.local`. Driving the service's `absorb` for the `.preview` channel stands in for a metadata
+    /// tick; it resolves nothing (so the pending never clears) unless the preview registered a
+    /// monitor on open.
+    @Test func evictedPreviewClearsWhenFeedResolvesArrival() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+        file.cloudStatus = .inCloud
+
+        let cloud = CloudFileService()
+        let preview = MediaPreview(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            cloudFileService: cloud,
+            makeVideoEngine: { try AudioPlaybackEngine() }
+        )
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        #expect(preview.cloudPendingFile === file)
+
+        // A feed tick on the preview's own channel reports the bytes landing local. It reaches the
+        // file only because opening the preview started the folder watch.
+        cloud.absorb([CloudStatusUpdate(relativePath: "1.jpg", status: .local)], on: .preview)
+        await settle(until: { preview.cloudPendingFile == nil })
+        #expect(file.cloudStatus == .local)
+        #expect(preview.cloudPendingFile == nil)
+    }
+
     @Test func audioIsNeverPreviewed() throws {
         let container = try makeContainer()
         let context = container.mainContext

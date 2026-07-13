@@ -31,9 +31,10 @@ nonisolated struct CloudStatusUpdate: Equatable, Sendable {
 @Observable
 final class CloudFileService {
 
-    /// The two independent live channels — the visual channel (video or image) and the
-    /// audio channel — so two playlists in different folders can both stay live at once.
-    enum Channel: Hashable { case visual, audio }
+    /// The independent live channels — the visual channel (video or image) and the audio channel
+    /// of playback, plus the Manager preview's own watch — so playlists in different folders (and a
+    /// peek outside them) can each stay live at once.
+    enum Channel: Hashable { case visual, audio, preview }
 
     /// One running folder watch: the query, the playlist whose files it writes onto, and its
     /// observer tokens. Each token's closure captures its own folder URL for relative-path keying.
@@ -128,8 +129,9 @@ final class CloudFileService {
 
     /// Resolves a channel's reported paths to their models through a scoped fetch — never
     /// `playlist.files`, so the whole relationship is never faulted on the main actor — and folds the
-    /// statuses on. Fed the already-normalized `Sendable` updates by the notification observer.
-    private func absorb(_ updates: [CloudStatusUpdate], on channel: Channel) {
+    /// statuses on. Fed the already-normalized `Sendable` updates by the notification observer; tests
+    /// drive it directly to simulate a channel's feed reporting arrival.
+    func absorb(_ updates: [CloudStatusUpdate], on channel: Channel) {
         guard let monitor = monitors[channel], let playlist = monitor.playlist,
               let context = playlist.modelContext else { return }
         apply(updates, to: context.files(in: playlist, atRelativePaths: Set(updates.map(\.relativePath))))
