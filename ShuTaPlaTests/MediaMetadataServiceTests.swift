@@ -248,4 +248,25 @@ import UniformTypeIdentifiers
 
         _ = container
     }
+
+    // MARK: - Cloud-aware extraction
+
+    /// An evicted file (`cloudStatus != .local`) is not opened — extracting would read bytes that
+    /// aren't local — so the model-facing entry point returns the (here empty) cached bundle and
+    /// leaves the model untouched, even though the file is readable on disk.
+    @MainActor @Test func evictedFileSkipsExtractionAndReturnsCached() async throws {
+        let (directory, fileName) = try Self.makeImage(width: 64, height: 48)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bookmark = try BookmarkService.makeBookmark(for: directory)
+
+        let playlist = Playlist(name: "I", folderBookmark: bookmark, folderPath: directory.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: fileName, fileName: fileName)
+        file.cloudStatus = .inCloud
+
+        let metadata = await MediaMetadataService().metadata(for: file, in: playlist)
+        #expect(metadata.width == nil)          // no extraction ran
+        #expect(metadata.height == nil)
+        #expect(metadata.fileSizeBytes == nil)
+        #expect(file.fileSizeBytes == nil)      // the model is untouched
+    }
 }

@@ -9,8 +9,8 @@
 //  `AudioPlaybackEngine` (via the engine factory) so no Vulkan surface is created,
 //  and folders are real temp directories with empty placeholder files — every
 //  assertion is on the preview's synchronous bookkeeping, not on decoded output.
-//  `source` is left nil on the preview engine, so an empty file's `END_FILE` never
-//  advances into torn-down models.
+//  The preview is its own engines' `source`, but its `fileAfter`/`fileBefore` return
+//  nil, so an empty file's `END_FILE` never advances into torn-down models.
 //
 
 import Testing
@@ -211,6 +211,57 @@ import SwiftData
     }
 
     // MARK: - Gating
+
+    // MARK: - Cloud-aware preview
+
+    /// Lets the gate's observation reaction (a `Task { @MainActor }` scheduled from the
+    /// `withObservationTracking` change hook) run before asserting. Bounded, so it never hangs.
+    private func settle(until condition: () -> Bool) async {
+        for _ in 0..<20 where !condition() { await Task.yield() }
+    }
+
+    @Test func previewingEvictedFileRequestsDownloadAndHoldsPending() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+        file.cloudStatus = .inCloud                          // evicted — bytes not on disk
+
+        var requestedURLs: [URL] = []
+        let preview = MediaPreview(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            cloudFileService: CloudFileService(requester: { requestedURLs.append($0) }),
+            makeVideoEngine: { try AudioPlaybackEngine() }
+        )
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        #expect(preview.imageEngine.cloudLoad.pendingFile === file)   // held pending, not decoded
+        #expect(preview.cloudPendingFile === file)
+        #expect(preview.imageEngine.currentImage == nil)
+        #expect(requestedURLs.count == 1)                             // exactly one download requested
+        #expect(requestedURLs.first?.lastPathComponent == "1.jpg")
+    }
+
+    @Test func evictedPreviewLoadsOnArrival() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+        file.cloudStatus = .inCloud
+
+        let preview = makePreview(ScopedFolderAccess(bookmarkService: BookmarkService()))
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        #expect(preview.cloudPendingFile === file)
+
+        file.cloudStatus = .local                            // arrival — the deferred load runs, pending clears
+        await settle(until: { preview.cloudPendingFile == nil })
+        #expect(preview.cloudPendingFile == nil)
+    }
 
     @Test func audioIsNeverPreviewed() throws {
         let container = try makeContainer()

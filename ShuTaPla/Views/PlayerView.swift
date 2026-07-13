@@ -49,7 +49,9 @@ struct PlayerView: View {
             }
 
             if let pending = coordinator.visualCloudPendingFile {
-                downloadingPlaceholder(pending)
+                CloudDownloadingPlaceholder(file: pending)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
             }
 
             if coordinator.isSuppressed {
@@ -126,29 +128,6 @@ struct PlayerView: View {
                     .font(.headline)
             }
             .foregroundStyle(.white.opacity(0.75))
-        }
-        .ignoresSafeArea()
-        .transition(.opacity)
-    }
-
-    /// Shown over the black stage while the current visual file is evicted from disk: the engine
-    /// holds the load until iCloud delivers the bytes, then swaps the picture in. The glyph tracks
-    /// the file's live `cloudStatus` (`icloud` → `icloud.and.arrow.down` once fetching starts).
-    private func downloadingPlaceholder(_ file: PlaylistFile) -> some View {
-        ZStack {
-            Color.black
-            VStack(spacing: 12) {
-                Image(systemName: file.cloudStatus.badgeSymbol ?? "icloud.and.arrow.down")
-                    .font(.system(size: 48))
-                Text(file.fileName)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                ProgressView()
-                    .controlSize(.small)
-            }
-            .foregroundStyle(.white.opacity(0.75))
-            .padding()
         }
         .ignoresSafeArea()
         .transition(.opacity)

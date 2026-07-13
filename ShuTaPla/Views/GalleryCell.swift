@@ -164,6 +164,8 @@ struct GalleryCell: View {
         return isSelected ? .accentColor : .clear
     }
 
-    /// Reload when the file is replaced or renamed (path change).
-    private var thumbnailKey: String { "\(file.id)|\(file.relativePath)" }
+    /// Reload when the file is replaced or renamed (path change), and when its bytes arrive from
+    /// the cloud (`cloudStatus` flips to `.local`) so the tile regenerates the thumbnail the evicted
+    /// pass skipped. Keyed on local-ness, not the full status, so it re-fires only on that boundary.
+    var thumbnailKey: String { "\(file.id)|\(file.relativePath)|\(file.cloudStatus == .local)" }
 }

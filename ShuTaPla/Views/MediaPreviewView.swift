@@ -26,6 +26,10 @@ struct MediaPreviewView: View {
     private static let cornerRadius: CGFloat = 12
     private static let progressStripHeight: CGFloat = 3
 
+    /// The card's fallback shape while a file with no cached dimensions downloads — just enough to
+    /// carry the placeholder, latched to the media's true shape once it arrives.
+    private static let placeholderCardSize = CGSize(width: 600, height: 600)
+
     /// The card's aspect ratio, latched from `preview.contentSize`. It only ever takes a real
     /// size and never resets to `nil`, so the card stays structurally present through the close.
     /// `close()` clears `contentSize` the instant it clears `isOpen`; if the card's presence
@@ -52,22 +56,31 @@ struct MediaPreviewView: View {
             // card would never appear for an already-sized preview, since no *change* follows.
             if let size { cardSize = size }
         }
+        .onChange(of: preview.cloudPendingFile != nil, initial: true) { _, pending in
+            // A file with no cached dimensions has no `contentSize` while it downloads, so give the
+            // card a default shape to carry the placeholder; the media's real shape latches on arrival.
+            if pending, cardSize == nil { cardSize = Self.placeholderCardSize }
+        }
     }
 
     /// The media at the card's aspect ratio, corners rounded and lifted off the backdrop.
     @ViewBuilder
     private var card: some View {
         ZStack(alignment: .bottom) {
-            switch preview.mediaType {
-            case .video:
-                PreviewVideoView()
-                progressStrip
-            case .image:
-                if let image = preview.image {
-                    Image(nsImage: image).resizable()
+            if let pending = preview.cloudPendingFile {
+                CloudDownloadingPlaceholder(file: pending)
+            } else {
+                switch preview.mediaType {
+                case .video:
+                    PreviewVideoView()
+                    progressStrip
+                case .image:
+                    if let image = preview.image {
+                        Image(nsImage: image).resizable()
+                    }
+                case .audio, .none:
+                    EmptyView()
                 }
-            case .audio, .none:
-                EmptyView()
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))

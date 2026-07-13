@@ -56,11 +56,16 @@ struct FileRowView: View {
         // do carry dimensions and size, so every type opens once — only when a field this type
         // needs is still missing, so a fully-cached row never re-opens and the columns (shown
         // synchronously from the model) don't flash empty on scroll-in.
-        .task(id: file.id) {
+        .task(id: metadataKey) {
             guard !file.hasCompleteMetadata(for: playlist.mediaType) else { return }
             _ = await metadataService.metadata(for: file, in: playlist)
         }
     }
+
+    /// Re-extract when the file is replaced (id change), and when its bytes arrive from the cloud
+    /// (`cloudStatus` flips to `.local`) so the row fills the metadata the evicted pass skipped.
+    /// Keyed on local-ness, not the full status, so it re-fires only on that boundary.
+    var metadataKey: String { "\(file.id)|\(file.cloudStatus == .local)" }
 
     private var fileName: some View {
         Text(file.fileName)

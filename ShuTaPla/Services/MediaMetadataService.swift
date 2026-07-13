@@ -27,6 +27,9 @@ final class MediaMetadataService {
     /// the model, and returns the updated bundle.
     func metadata(for file: PlaylistFile, in playlist: Playlist) async -> MediaMetadata {
         if file.hasCompleteMetadata(for: playlist.mediaType) { return file.cachedMetadata }
+        // An evicted file isn't opened — extraction would read bytes that aren't local. Serve the
+        // cached bundle (possibly partial); its next arrival as `.local` re-triggers this read.
+        guard file.cloudStatus == .local else { return file.cachedMetadata }
 
         let found = await Self.extract(
             bookmark: playlist.folderBookmark,

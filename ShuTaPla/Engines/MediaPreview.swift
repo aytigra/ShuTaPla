@@ -60,6 +60,7 @@ final class MediaPreview {
     }
 
     private let folderAccess: ScopedFolderAccess
+    private let cloudFileService: CloudFileService
     private let makeVideoEngine: () throws -> MPVPlaybackEngine
 
     /// Built on first video preview so an image-only session never spins up libmpv; kept
@@ -76,12 +77,25 @@ final class MediaPreview {
 
     init(
         folderAccess: ScopedFolderAccess,
+        cloudFileService: CloudFileService = CloudFileService(),
         imageEngine: ImagePlaybackEngine = ImagePlaybackEngine(),
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() }
     ) {
         self.folderAccess = folderAccess
+        self.cloudFileService = cloudFileService
         self.imageEngine = imageEngine
         self.makeVideoEngine = makeVideoEngine
+        imageEngine.source = self   // preview is its own source: resolves URLs and requests downloads
+    }
+
+    /// The evicted file the active engine is holding pending, or `nil` when the preview is local or
+    /// closed — the view shows the downloading placeholder while it is set.
+    var cloudPendingFile: PlaylistFile? {
+        switch mediaType {
+        case .video: return videoEngine?.cloudLoad.pendingFile
+        case .image: return imageEngine.cloudLoad.pendingFile
+        case .audio, .none: return nil
+        }
     }
 
     // MARK: - Open / close
@@ -105,7 +119,6 @@ final class MediaPreview {
             imageEngine.load(file, at: url)
         case .video:
             guard let engine = ensureVideoEngine() else { close(); return }
-            engine.source = nil                                    // a preview is one file; never advance
             engine.volume = Double(playlist.preferences.volume) * 100
             engine.load(file, at: url)                             // always from the beginning
             engine.setLooping(true)                               // after load, which clears looping
@@ -133,7 +146,34 @@ final class MediaPreview {
     private func ensureVideoEngine() -> MPVPlaybackEngine? {
         if let videoEngine { return videoEngine }
         guard let engine = try? makeVideoEngine() else { return nil }
+        engine.source = self
         videoEngine = engine
         return engine
     }
+}
+
+// MARK: - PlaybackSource
+
+/// The preview is its own engines' source. It never advances (a peek is one file), so the
+/// next/previous lookups return `nil`; its role is to resolve the file's URL and pull an evicted
+/// file down from iCloud so the gate's arrival wait fires. `fileAfter`/`fileBefore` are the seam a
+/// later preview-navigation task fills in — the engines' `advanceToNext`/`returnToPrevious` then work
+/// unchanged.
+extension MediaPreview: PlaybackSource {
+
+    func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? { nil }
+
+    func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? { nil }
+
+    func url(for file: PlaylistFile) -> URL? {
+        guard let playlist = file.playlist, let folder = folderAccess.url(for: playlist.id) else { return nil }
+        return folder.appending(path: file.relativePath)
+    }
+
+    func requestDownload(_ file: PlaylistFile) {
+        guard let url = url(for: file) else { return }
+        cloudFileService.requestDownload(at: url)
+    }
+
+    func engineDidAdvance(to file: PlaylistFile) {}
 }

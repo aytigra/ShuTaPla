@@ -228,7 +228,9 @@ final class AppState {
             cloudFileService: cloudFileService,
             makeVideoEngine: makeVideoEngine
         )
-        self.preview = MediaPreview(folderAccess: folderAccess, makeVideoEngine: makeVideoEngine)
+        self.preview = MediaPreview(
+            folderAccess: folderAccess, cloudFileService: cloudFileService, makeVideoEngine: makeVideoEngine
+        )
         self.scanActor = PlaylistScanActor(modelContainer: modelContext.container)
 
         // Welcome until at least one playlist exists, otherwise Manager — unless a

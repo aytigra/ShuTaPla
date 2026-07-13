@@ -19,86 +19,24 @@ effective-filter predicates as `atOrAfter minSortOrder: Int = .min`; `ModelConte
 `displayFiles` and the `Playlist.playbackFiles` forwarder are now marked test-only (no production
 callers). The `fileExists` stat review finding 3 flagged was confirmed a non-issue and left as-is;
 G — misplaced `availableFile`/`prefetchTargets` doc comment;
-H — drop/cancel tests gated on a positive pump-cycle signal.)
-
-## Step I — Make thumbnail/metadata generation cloud-aware (from the background note)
-
-**Problem.** The thumbnail and metadata subsystems are cloud-**un**aware, and that's two concrete
-defects, not just a missing feature:
-
-1. **They attempt work that must fail for an evicted file.** `GalleryCell`'s `.task(id: thumbnailKey)`
-   (`GalleryCell.swift:43`) runs `thumbnails.thumbnail(...)` (`:54`) and, when metadata is incomplete,
-   `metadataService.metadata(...)` (`:72`) with no `file.cloudStatus` check. For a file that is
-   evicted and was never local, `ThumbnailService.produceData` resolves the bookmark and does an
-   uncoordinated read whose `contentFingerprint()` / decode can't succeed — wasted bookmark-resolve +
-   read + decode attempt, main-actor merge of an empty result, every time such a cell appears. The
-   list surface (`FileRowView` → metadata) has the same blind spot.
-2. **They never refresh when the file flips to `.local`.** `thumbnailKey` is
-   `"\(file.id)|\(file.relativePath)"` — no cloud component — so when the bytes arrive and
-   `cloudStatus` flips `.downloading → .local`, the `.task` does **not** re-fire, and the placeholder
-   art / empty badges persist until an unrelated reload (rename, path change, relaunch).
-
-**Plan (settle the seam before implementing).**
-
-- *Skip the doomed attempt.* Don't generate a thumbnail or extract metadata for a file whose
-  `cloudStatus != .local`. Decide the seam: gate at the service entry points (`thumbnail(...)`,
-  `MediaMetadataService.metadata(...)`) so both the gallery and the list benefit from one guard and
-  return an empty/`nil` result the callers already handle as "show placeholder / fall back to persisted
-  values" — vs. gating in each view's `.task`. Prefer the service-level guard (deeper, one place,
-  covers every caller) unless it disturbs a caller that legitimately reads a cache hit without a live
-  file. A cached thumbnail / persisted metadata for an already-seen file must still be served (the disk
-  cache is fingerprint-keyed and independent of current cloud state) — only the *fresh read* is
-  skipped when evicted.
-- *Refresh on arrival.* Fold `file.cloudStatus` into the gallery `.task` id (and the list's metadata
-  trigger) so the flip to `.local` re-runs generation and the tile swaps placeholder → real thumbnail
-  and empty → real badges on its own. `cloudStatus` is already Observation-tracked, so the `.task(id:)`
-  re-fires without extra plumbing.
-- *No gallery prefetch.* The gallery must **not** request downloads to fill in thumbnails/metadata for
-  evicted files. An evicted folder means "keep in cloud, load on demand"; pulling files down just to
-  render tiles would materialize the whole folder locally and negate the point of keeping it in the
-  cloud. Evicted tiles stay on placeholder art until the file becomes local through playback (the
-  playback-horizon prefetch in `setCurrentFile`) or an explicit user action — the skip-and-refresh
-  pair above is the whole of this step.
-
-**Test-first.** The extraction cores are stateless and already seam-tested. Add: (a) a test that a
-non-`.local` file yields no read attempt / empty result from the gated entry point (observe the
-current code doing the wasted read first, then gate); (b) a test that flipping a file's `cloudStatus`
-to `.local` changes the task id / re-trigger key so the view would regenerate. Keep trap-safe per
-CLAUDE.md (registrar-routed `cloudStatus` doesn't fetch; use non-inserted identity fixtures).
-
-## Step J — Make the Manager preview cloud-aware, like playback
-
-**Problem.** The Manager "peek" (`MediaPreview`, opened by `[space]` on a single selected file) does
-**not** handle an evicted file the way playback does:
-
-- `MediaPreview.open` (`MediaPreview.swift:96`) builds the URL and calls `engine.load(file, at: url)`
-  directly. The video engine's `load` routes through `CloudLoadGate` (so it *defers*), but preview
-  never calls `requestDownload` — only playback issues that, via `setCurrentFile` /
-  `PlaybackCoordinator.requestDownload`. So previewing an evicted video parks the engine pending with
-  no download ever requested: it waits forever, nothing plays, and no placeholder communicates why.
-- The image branch (`imageEngine.load`) uses `ImagePlaybackEngine`, which has **no** cloud gate at
-  all, so it just attempts to decode the evicted placeholder and fails to a blank card.
-
-**Plan (settle before implementing).** Give preview the same open-on-cloud behavior as playback:
-show a placeholder card, **request the download** for the file's URL, and start the actual render only
-once the file is `.local` — reusing the shared machinery rather than duplicating it. Decide the seam:
-
-- Video: the engine already gates through `CloudLoadGate`; the missing piece is the `requestDownload`
-  call. Route preview's engine load through a source/hook that issues the download (the coordinator's
-  `requestDownload` resolves URL via `folderAccess`; preview holds its own `ScopedFolderAccess`, so a
-  small preview-owned download call over `cloudFileService.requestDownload(at:)` may be cleaner than
-  borrowing the coordinator). Once `cloudStatus` flips `.local`, the gate performs the deferred load.
-- Image: `ImagePlaybackEngine` needs an equivalent evicted-file gate (or a pre-check in
-  `MediaPreview.open` that, for a non-`.local` image, requests the download, shows the placeholder, and
-  loads once local) — mirror whatever the video gate does so both media types behave identically.
-- Preview UI (`MediaPreviewView`) shows a cloud/placeholder state while pending, replaced by the media
-  on arrival (`cloudStatus` is Observation-tracked, so the card updates itself).
-
-**Test-first.** Preview's engines are injectable (`makeVideoEngine`, `imageEngine`). Cover: opening a
-preview on a non-`.local` file requests exactly one download and stays on the placeholder (no play)
-until the status flips; flipping to `.local` performs the load. Keep trap-safe per CLAUDE.md — use the
-window-free/image engines, `defer { shutdown() }`, and non-inserted fixtures; never a real
-`VideoPlaybackEngine` in the test host.
+H — drop/cancel tests gated on a positive pump-cycle signal;
+I — thumbnail/metadata generation is cloud-aware: `MediaMetadataService.metadata(...)` and
+`ThumbnailService.thumbnail(...)` gate on `cloudStatus == .local` at the service entry so an evicted
+file is never read (metadata serves the cached bundle; the thumbnailer threads `isLocal` into
+`produceData`, disabling the staleness gate and skipping both the fingerprint recompute and the
+`renderThumbnail` on a disk miss — but still serving a disk-cache hit named by a stored fingerprint,
+so an evicted folder shows the thumbnails generated while it was local). The gallery `thumbnailKey`
+and the list's new `FileRowView.metadataKey` fold `\(file.cloudStatus == .local)` so the flip to
+`.local` re-fires generation exactly once, on the local boundary. No gallery prefetch — evicted tiles
+stay on placeholder art until playback or an explicit action makes the file local;
+J — the Manager preview is cloud-aware like playback: `MediaPreview` conforms to `PlaybackSource` and
+is set as both engines' `source`, resolving each file's URL and issuing
+`cloudFileService.requestDownload(at:)` for an evicted file so the gate's arrival wait fires. Its
+`fileAfter`/`fileBefore` return nil (the seam a later preview-navigation task fills in), preserving
+"a peek never advances" — so the `engine.source = nil` line was dropped. `MediaPreviewView` overlays a
+shared `CloudDownloadingPlaceholder` while `MediaPreview.cloudPendingFile` is set, on a 600 pt default
+card when no dimensions are cached and latching to the media's true shape on arrival; the placeholder
+duplicated in `PlayerView` folded into that shared view.)
 
 ## Step K — Download-on-demand from the cloud badge and a context-menu command
 

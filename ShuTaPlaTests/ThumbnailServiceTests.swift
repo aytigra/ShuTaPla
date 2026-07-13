@@ -508,6 +508,90 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
     }
 
+    // MARK: - Cloud-aware generation
+
+    /// An evicted file (`cloudStatus != .local`) whose record carries no fingerprint can't be
+    /// addressed in the disk cache without reading its bytes — the read that would fetch it from the
+    /// cloud. It yields the placeholder (`nil` image) and touches neither the source nor the cache.
+    @MainActor @Test
+    func evictedFileWithoutFingerprintYieldsPlaceholderAndNoRead() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.cloudStatus = .inCloud                              // evicted, and no fingerprint on the record
+
+        let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image == nil)                            // no source read/decode → placeholder
+        #expect(result.metadata.fingerprint == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)   // nothing rendered
+    }
+
+    /// The disk cache is still served for an evicted file whose record carries the fingerprint — the
+    /// `.heic` is addressed by that fingerprint with no source read, so a folder kept in the cloud
+    /// still shows the thumbnails generated while it was local. The source is made unreadable to prove
+    /// the served path never touches it.
+    @MainActor @Test
+    func evictedFileServesExistingDiskThumbnail() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        // Generate the thumbnail while the file is local, populating the disk cache.
+        let seeding = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await seeding.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+        let fp = try #require(fileURL.contentFingerprint())
+        #expect(FileManager.default.fileExists(atPath: cacheDir.appending(path: "\(fp).heic").path))
+
+        // Strip read permission so any source read on the evicted path would fail.
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: fileURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path) }
+
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp
+        file.cloudStatus = .inCloud
+        let fresh = ThumbnailService(cacheDirectory: cacheDir)  // empty memory → forces the disk path
+        let result = await fresh.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image != nil)                            // served from disk, no source read
+    }
+
+    /// An evicted file whose fingerprint has no cached `.heic` (a disk miss) yields the placeholder
+    /// rather than rendering — the render is the source read that would fetch from the cloud. The
+    /// cache stays empty.
+    @MainActor @Test
+    func evictedFileWithFingerprintButNoCachedThumbnailYieldsPlaceholder() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let fp = try #require(fileURL.contentFingerprint())     // the record carries a fingerprint…
+
+        let service = ThumbnailService(cacheDirectory: cacheDir)   // …but the cache is empty (disk miss)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp
+        file.cloudStatus = .inCloud
+
+        let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image == nil)                            // disk miss + evicted → no render
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)   // nothing rendered
+    }
+
     // MARK: - Cache management
 
     /// The reported size is the whole directory's footprint — the single-writer cache folder holds

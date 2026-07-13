@@ -90,6 +90,7 @@ final class ThumbnailService {
         let fingerprint = file.fingerprint
         let recordFileSize = file.fileSizeBytes
         let recordLastModified = file.lastModified
+        let isLocal = file.cloudStatus == .local
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
         if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
@@ -104,6 +105,7 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
+            isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, produced.metadata) }
@@ -287,6 +289,7 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
+        isLocal: Bool = true,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
         // One resolve + scoped-access session for the whole produce: form the cache name (which
@@ -303,9 +306,15 @@ final class ThumbnailService {
             // bytes to decide — comparing against a value the record actually holds, so an unset
             // size/mtime (a pre-mtime row) doesn't fire the gate but is backfilled by the reported
             // metadata below.
-            let gateFired = fingerprint != nil
+            // An evicted file (`!isLocal`) is never read from: the staleness gate never fires (no
+            // fingerprint recompute), and a record with no stored fingerprint can't be addressed in
+            // the cache without reading its bytes — so it stays on the placeholder.
+            let gateFired = isLocal && fingerprint != nil
                 && ((recordFileSize != nil && fileSizeBytes != recordFileSize)
                     || (recordLastModified != nil && lastModified != recordLastModified))
+            guard isLocal || fingerprint != nil else {
+                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified))
+            }
             guard let named = cacheFilename(fileURL: fileURL, fingerprint: gateFired ? nil : fingerprint) else {
                 return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified))
             }
@@ -326,6 +335,9 @@ final class ThumbnailService {
                 // forever and leave the cell stuck on a placeholder. Drop it and regenerate.
                 try? FileManager.default.removeItem(at: diskURL)
             }
+            // Past here lies the source read/decode. An evicted file's disk hit (above) is served, but
+            // a miss stays on the placeholder rather than fetching the bytes from the cloud to render.
+            guard isLocal else { return (nil, hitMetadata) }
 
             var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             rendered.metadata.fileSizeBytes = fileSizeBytes
@@ -355,6 +367,7 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
+        isLocal: Bool = true,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
@@ -365,6 +378,7 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
+            isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )
         guard let data = produced.data else { return (nil, produced.metadata) }
