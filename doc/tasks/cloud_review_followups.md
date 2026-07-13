@@ -2,9 +2,8 @@
 
 Follow-ups from the `xhigh` code review of the `cloud-status-and-prefetch` branch (the
 `cloud_offline_file_handling` work). The lettered steps are the open review findings; steps **I–K** are
-related cloud gaps and features surfaced while discussing the review. Every item is scheduled as a step
-below; each step is written but **not started — implementation begins only on explicit go-ahead**, one
-step at a time, test-first. Steps are independent, so they can be taken in any order. (Done and removed:
+related cloud gaps and features surfaced while discussing the review. Every item was scheduled as a step,
+implemented one at a time, test-first. All steps are complete. (Done and removed:
 A — pending-load resume-position clobber; B — dead `CloudFileService` environment injection;
 C — list cloud badge folded into the fixed-width file-size column so it adds no width and keeps the
 columns aligned; D — `isLooping` reset deferred to arrival during a pending load;
@@ -36,38 +35,15 @@ is set as both engines' `source`, resolving each file's URL and issuing
 "a peek never advances" — so the `engine.source = nil` line was dropped. `MediaPreviewView` overlays a
 shared `CloudDownloadingPlaceholder` while `MediaPreview.cloudPendingFile` is set, on a 600 pt default
 card when no dimensions are cached and latching to the media's true shape on arrival; the placeholder
-duplicated in `PlayerView` folded into that shared view.)
-
-## Step K — Download-on-demand from the cloud badge and a context-menu command
-
-**Problem / feature.** There is no user-driven way to pull an evicted file local short of playing it.
-Two entry points to add:
-
-1. **Tap the cloud badge to download.** `CloudStatusBadge` is documented as "A status readout, not a
-   control" (`CloudStatusBadge.swift:5`), shown in the list (`FileRowView:80`) and gallery
-   (`GalleryCell:106`). Make the badge tappable so clicking the `icloud` / `icloud.and.arrow.down`
-   glyph requests that file's download (a no-op / already-local for `.local`, where the badge isn't
-   shown anyway). Update the type's doc comment away from "not a control" to match.
-2. **A "Download" context-menu command with multi-file support.** `FileContextMenu` already takes
-   `onRemoveAudio` / `onDelete` closures fed by `targets(for: file)` (the multi-selection when the
-   clicked row is part of it, else just that row — `FileCollectionView.swift:263`). Add a **Download**
-   item beside them that requests download for every target that isn't `.local`. Model it on Delete's
-   multi-file targeting, **but with no confirmation dialog** (a download is non-destructive and cheap
-   to reverse by eviction) — so it goes straight through, unlike `confirmDelete`.
-
-**Plan (settle before implementing).** Add one `AppState` entry point — e.g.
-`downloadFiles(_ files: [PlaylistFile])` — that resolves each file's URL and calls
-`cloudFileService.requestDownload(at:)` (or the coordinator's `requestDownload`), skipping `.local`
-ones. Wire both the badge tap and the new menu item to it. Settle: which service owns the
-selection-download call (the coordinator already resolves URLs via `folderAccess`, but requires an
-active scoped session for the playlist — confirm the managed playlist's session is available when
-browsing, or resolve the URL through the same bookmark path the thumbnailer uses). Respect the
-"single `onTapGesture`, branch on click count" convention if the badge tap shares a row's gesture
-region; a distinct control (the badge as its own `Button`) sidesteps the gesture-arbitration trap
-entirely — prefer that.
-
-**Test-first.** The selection→download resolution is pure list logic: cover that `downloadFiles`
-requests a download for each non-`.local` target and skips `.local` ones (inject a recording
-`requestDownload` seam), and that `FileSelection.actionTargets` still drives the multi-file set the
-menu passes. Badge-tap wiring is a view concern (manual check), but the underlying
-`downloadFiles` call is unit-tested. Trap-safe fixtures per CLAUDE.md.
+duplicated in `PlayerView` folded into that shared view;
+K — download-on-demand: `AppState.downloadFiles(_:)` (in `AppState+FileOps.swift`) filters to the
+non-`.local` targets, opens one transient `folderAccess.withAccess` session (the browse path — a
+non-playing playlist holds no `begin` session for `url(for:)`), calls
+`cloudFileService.requestDownload(at:)` per target, and optimistically marks each `.downloading` for
+immediate badge feedback (the live `NSMetadataQuery` runs only for a playing channel; `cloudStatus` is
+`@Transient`, so it's an observation-only write the feed / next scan settles to `.local`). The Manager
+list (`FileRowView`) and gallery (`GalleryCell`) cloud badge is now its own borderless `Button`
+requesting that file's download — a distinct control that sidesteps the row's tap arbitration;
+`FileContextMenu` gained a no-confirmation `Download` item shown only for a non-`.local` file, wired in
+the Manager (multi-file `targets(for:)`) and the Visual Overlay (single file). `AppState.init` took a
+`cloudFileService` test seam so the request is asserted against a recording requester.)

@@ -221,6 +221,7 @@ struct LibrarySurface: View {
                     playlist: playlist,
                     onRename: { fileDraftName = file.fileName; fileRenamingID = file.id },
                     onRemoveAudio: { context.onRemoveAudio(file) },
+                    onDownload: { appState.downloadFiles([file]) },
                     onDelete: { context.onDeleteFile(file) }
                 )
             }

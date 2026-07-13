@@ -209,6 +209,7 @@ final class AppState {
         modelContext: ModelContext,
         fileSystem: FileSystemProviding = FileSystemService(),
         bookmarkService: BookmarkService = BookmarkService(),
+        cloudFileService: CloudFileService = CloudFileService(),
         persist: (() throws -> Void)? = nil,
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() }
     ) {
@@ -220,7 +221,6 @@ final class AppState {
         self.globalSettings = settings
         let folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService, prompt: FolderReaccessPanel())
         self.folderAccess = folderAccess
-        let cloudFileService = CloudFileService()
         self.cloudFileService = cloudFileService
         self.coordinator = PlaybackCoordinator(
             folderAccess: folderAccess,

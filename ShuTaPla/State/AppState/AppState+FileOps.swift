@@ -89,6 +89,23 @@ extension AppState {
         } ?? nil
     }
 
+    /// Requests an iCloud download for each file that isn't already local, resolving every URL
+    /// under one transient scoped session — the browse-time entry point (the cloud badge tap and
+    /// the Download menu command), where the playlist holds no open playback session. Each target
+    /// is optimistically marked `.downloading` for immediate badge feedback, since the live status
+    /// feed runs only for a *playing* channel; the feed or the next scan settles it to `.local` once
+    /// the bytes land. Already-local files are skipped, so a fully-local selection opens no session.
+    func downloadFiles(_ files: [PlaylistFile]) {
+        let targets = files.filter { $0.cloudStatus != .local }
+        guard let playlist = targets.first?.playlist else { return }
+        folderAccess.withAccess(to: playlist) { folderURL in
+            for file in targets {
+                cloudFileService.requestDownload(at: folderURL.appending(path: file.relativePath))
+                file.cloudStatus = .downloading
+            }
+        }
+    }
+
     /// Removes the audio track from each video, remuxing it in place (the video
     /// stream is copied, not re-encoded). The original is moved to the Trash as a
     /// recoverable backup and the audio-free file takes its place; a video currently

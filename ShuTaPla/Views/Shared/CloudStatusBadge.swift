@@ -3,7 +3,9 @@
 //  ShuTaPla
 //
 //  The small iCloud-availability indicator shown alongside a file's on-disk size, in the
-//  Manager list and gallery and in the audio transport. A status readout, not a control:
+//  Manager list and gallery and in the audio transport. The glyph itself is a pure readout; the
+//  Manager list and gallery wrap it in a `Button` that requests the file's download, while the
+//  audio transport shows it plainly.
 //  `.inCloud` and `.downloading` each carry a semantic SF Symbol and a VoiceOver label;
 //  `.local` renders nothing. The glyph/label mapping lives on `CloudStatus` as a pure,
 //  `nonisolated` core so it's exercised without a view, and so the gallery — which wraps the

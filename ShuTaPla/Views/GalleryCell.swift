@@ -24,6 +24,7 @@ struct GalleryCell: View {
 
     @Environment(ThumbnailService.self) private var thumbnails
     @Environment(MediaMetadataService.self) private var metadataService
+    @Environment(AppState.self) private var appState
     @State private var image: NSImage?
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
@@ -103,7 +104,11 @@ struct GalleryCell: View {
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 0) {
                     if file.cloudStatus.badgeSymbol != nil {
-                        pill(CloudStatusBadge(status: file.cloudStatus))
+                        Button { appState.downloadFiles([file]) } label: {
+                            pill(CloudStatusBadge(status: file.cloudStatus))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Download from iCloud")
                     }
                     if let bytes = file.fileSizeBytes { badge(bytes.formattedFileSize) }
                 }

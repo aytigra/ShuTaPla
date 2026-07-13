@@ -1117,6 +1117,38 @@ struct AppStateTests {
         #expect(Set(playlist.files.map(\.fileName)) == ["b.mp4"])
     }
 
+    // MARK: - Download on demand
+
+    @Test func downloadFilesRequestsEvictedTargetsAndMarksThemDownloading() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let evicted = PlaylistFile(relativePath: "cloud.mp4", fileName: "cloud.mp4", sortOrder: 0)
+        let local = PlaylistFile(relativePath: "here.mp4", fileName: "here.mp4", sortOrder: 1)
+        evicted.playlist = playlist
+        local.playlist = playlist
+        context.insert(evicted)
+        context.insert(local)
+        evicted.cloudStatus = .inCloud   // `local` keeps the `.local` default
+
+        var requested: [URL] = []
+        let cloudFileService = CloudFileService(requester: { requested.append($0) })
+        let appState = AppState(
+            modelContext: context, fileSystem: StubFileSystem(result: emptyResult),
+            cloudFileService: cloudFileService
+        )
+
+        appState.downloadFiles([evicted, local])
+
+        #expect(requested == [dir.appending(path: "cloud.mp4")])   // only the evicted target, at its URL
+        #expect(evicted.cloudStatus == .downloading)               // optimistic badge feedback
+        #expect(local.cloudStatus == .local)                       // already-local target skipped
+    }
+
     // MARK: - Strip audio (orchestration around AudioStripper)
 
     /// The first real codec-labeled sample whose filename starts with `prefix`,

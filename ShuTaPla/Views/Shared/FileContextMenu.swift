@@ -16,6 +16,7 @@ struct FileContextMenu: View {
     let playlist: Playlist
     let onRename: () -> Void
     let onRemoveAudio: () -> Void
+    let onDownload: () -> Void
     let onDelete: () -> Void
 
     @Environment(AppState.self) private var appState
@@ -25,6 +26,10 @@ struct FileContextMenu: View {
         Button("Show in Finder") { appState.revealInFinder(file) }
         if playlist.mediaType == .video {
             Button("Remove Audio", action: onRemoveAudio)
+        }
+        // Only when the file isn't already on disk — a local file has nothing to pull down.
+        if file.cloudStatus != .local {
+            Button("Download", action: onDownload)
         }
         Divider()
         Button("Delete", role: .destructive, action: onDelete)

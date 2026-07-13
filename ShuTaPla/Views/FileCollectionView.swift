@@ -244,6 +244,7 @@ struct FileCollectionView: View {
                 playlist: playlist,
                 onRename: { beginRename(file) },
                 onRemoveAudio: { appState.requestAudioStrip(targets(for: file)) },
+                onDownload: { appState.downloadFiles(targets(for: file)) },
                 onDelete: { confirmDelete(targets(for: file)) }
             )
         }

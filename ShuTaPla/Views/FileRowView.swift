@@ -21,6 +21,7 @@ struct FileRowView: View {
     let onCancelRename: () -> Void
 
     @Environment(MediaMetadataService.self) private var metadataService
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         Group {
@@ -95,7 +96,13 @@ struct FileRowView: View {
     /// the size/duration columns stay aligned across the whole list.
     private var sizeColumn: some View {
         HStack(spacing: 4) {
-            CloudStatusBadge(status: file.cloudStatus)
+            if file.cloudStatus.badgeSymbol != nil {
+                Button { appState.downloadFiles([file]) } label: {
+                    CloudStatusBadge(status: file.cloudStatus)
+                }
+                .buttonStyle(.plain)
+                .help("Download from iCloud")
+            }
             Text(file.fileSizeBytes?.formattedFileSize ?? "")
         }
         .font(.caption.monospacedDigit())
