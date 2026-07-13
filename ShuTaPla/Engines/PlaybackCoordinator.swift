@@ -356,13 +356,14 @@ final class PlaybackCoordinator: PlaybackSource {
     /// in the sequence, else the first file — then skipped forward to the next available file, so a
     /// missing local start never reaches an engine.
     private func startFile(for playlist: Playlist, requested: PlaylistFile?) -> PlaylistFile? {
-        let sequence = playlist.playbackFiles
-        let preferred = requested
-            ?? playlist.currentFileID.flatMap { id in sequence.first { $0.id == id } }
-            ?? sequence.first
-        guard let preferred else { return nil }
+        let ids = playlist.playbackSequence
+        let currentID = playlist.currentFileID
+            .flatMap { playlist.modelContext?.identifier(of: $0) }
+            .flatMap { ids.contains($0) ? $0 : nil }
+        guard let preferred = requested?.persistentModelID ?? currentID ?? ids.first else { return nil }
         return Self.availableFile(
-            in: sequence, from: preferred, forward: true, includeStart: true, isAvailable: isAvailable
+            in: ids, from: preferred, forward: true, includeStart: true,
+            resolve: resolveFile(in: playlist), isAvailable: isAvailable
         )
     }
 

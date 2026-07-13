@@ -244,6 +244,15 @@ import SwiftData
         return file
     }
 
+    /// The identifiers of `files` plus a dictionary-backed resolver — the `[PersistentIdentifier]` +
+    /// `resolve:` seam the pure selectors take, without touching the store.
+    private func idResolver(_ files: [PlaylistFile])
+        -> ([PersistentIdentifier], (PersistentIdentifier) -> PlaylistFile?) {
+        let ids = files.map(\.persistentModelID)
+        let byID = Dictionary(uniqueKeysWithValues: zip(ids, files))
+        return (ids, { byID[$0] })
+    }
+
     @Test func prefetchTargetsWalksAheadSkippingLocalsAndWrapping() throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -254,21 +263,22 @@ import SwiftData
             makeCloudFile("3", .downloading, in: context),
             makeCloudFile("4", .inCloud, in: context),
         ]
+        let (ids, resolve) = idResolver(files)
 
         // From index 0, count 3 → the next three are 1,2,3; the local one (2) is dropped.
-        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 3).map(\.fileName) == ["1", "3"])
+        #expect(PlaybackCoordinator.prefetchTargets(after: ids[0], in: ids, count: 3, resolve: resolve).map(\.fileName) == ["1", "3"])
 
         // Wraps past the end the way playback does: from index 4 the next three are 0,1,2 →
         // locals 0 and 2 dropped.
-        #expect(PlaybackCoordinator.prefetchTargets(after: files[4], in: files, count: 3).map(\.fileName) == ["1"])
+        #expect(PlaybackCoordinator.prefetchTargets(after: ids[4], in: ids, count: 3, resolve: resolve).map(\.fileName) == ["1"])
 
         // A count past the sequence never revisits the current file or repeats — every other
         // non-local file, once each.
-        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 99).map(\.fileName) == ["1", "3", "4"])
+        #expect(PlaybackCoordinator.prefetchTargets(after: ids[0], in: ids, count: 99, resolve: resolve).map(\.fileName) == ["1", "3", "4"])
 
         // Degenerate inputs request nothing.
-        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: files, count: 0).isEmpty)
-        #expect(PlaybackCoordinator.prefetchTargets(after: files[0], in: [files[0]], count: 3).isEmpty)
+        #expect(PlaybackCoordinator.prefetchTargets(after: ids[0], in: ids, count: 0, resolve: resolve).isEmpty)
+        #expect(PlaybackCoordinator.prefetchTargets(after: ids[0], in: [ids[0]], count: 3, resolve: resolve).isEmpty)
     }
 
     @Test func fileSwitchPrefetchesTheNextNonLocalFiles() throws {
@@ -354,23 +364,47 @@ import SwiftData
         let container = try makeContainer()
         let context = container.mainContext
         let files = (0..<5).map { makeCloudFile("\($0)", .local, in: context) }
+        let (ids, resolve) = idResolver(files)
         // "1" and "2" stand in for missing files the predicate rejects; the rest load.
         let loads: (PlaylistFile) -> Bool = { !["1", "2"].contains($0.fileName) }
 
         // Forward past the start skips the two rejects → "3".
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: false, isAvailable: loads) === files[3])
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[0], forward: true, includeStart: false, resolve: resolve, isAvailable: loads) === files[3])
         // Including the start, an accepted start qualifies immediately.
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[3], forward: true, includeStart: true, isAvailable: loads) === files[3])
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[3], forward: true, includeStart: true, resolve: resolve, isAvailable: loads) === files[3])
         // Including a rejected start walks forward off it → "3".
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[1], forward: true, includeStart: true, isAvailable: loads) === files[3])
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[1], forward: true, includeStart: true, resolve: resolve, isAvailable: loads) === files[3])
         // Backward past the start skips "2","1" → "0".
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[3], forward: false, includeStart: false, isAvailable: loads) === files[0])
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[3], forward: false, includeStart: false, resolve: resolve, isAvailable: loads) === files[0])
         // Forward wraps past the end → "0".
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[4], forward: true, includeStart: false, isAvailable: loads) === files[0])
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[4], forward: true, includeStart: false, resolve: resolve, isAvailable: loads) === files[0])
         // No file accepted → nil.
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: true, isAvailable: { _ in false }) == nil)
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[0], forward: true, includeStart: true, resolve: resolve, isAvailable: { _ in false }) == nil)
         // Only the start accepted, but excluded → nil (nothing else to move to).
-        #expect(PlaybackCoordinator.availableFile(in: files, from: files[0], forward: true, includeStart: false, isAvailable: { $0.fileName == "0" }) == nil)
+        #expect(PlaybackCoordinator.availableFile(in: ids, from: ids[0], forward: true, includeStart: false, resolve: resolve, isAvailable: { $0.fileName == "0" }) == nil)
+    }
+
+    /// The walk resolves a candidate only when it reaches it, so a normal forward advance that
+    /// accepts the very next file realizes exactly one model — the winner — never the rest of the
+    /// sequence. This is the point of taking `[PersistentIdentifier]` + `resolve` over `[PlaylistFile]`.
+    @Test func availableFileResolvesOnlyTheCandidatesItTests() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let files = (0..<5).map { makeCloudFile("\($0)", .local, in: context) }
+        let ids = files.map(\.persistentModelID)
+        let byID = Dictionary(uniqueKeysWithValues: zip(ids, files))
+
+        var resolved: [String] = []
+        let resolve: (PersistentIdentifier) -> PlaylistFile? = { id in
+            let file = byID[id]
+            if let file { resolved.append(file.fileName) }
+            return file
+        }
+        let winner = PlaybackCoordinator.availableFile(
+            in: ids, from: ids[0], forward: true, includeStart: false, resolve: resolve, isAvailable: { _ in true }
+        )
+        #expect(winner === files[1])
+        #expect(resolved == ["1"])   // only "1" was asked for — 2,3,4 never resolved
     }
 
     @Test func advanceSkipsAMissingLocalFile() throws {
@@ -1165,6 +1199,31 @@ import SwiftData
 
         coordinator.play(audio)            // resumes tracks[0] at 58; the empty file never reports time-pos
         coordinator.persistLivePositions() // a persist in the load/seek gap must not overwrite 58 with 0
+        #expect(tracks[0].lastPosition == 58)
+    }
+
+    /// While an evicted file is held pending by the cloud gate, the engine reports `currentTime == 0`
+    /// (its real `startFile`, which adopts the resume position, hasn't run — the bytes haven't
+    /// arrived). A persist in that window (the 5 s loop, a stop, an advance) must not overwrite the
+    /// file's saved `lastPosition` with that placeholder 0, or a stop/quit while downloading destroys
+    /// the resume point.
+    @Test func pendingLoadDoesNotClobberSavedPosition() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp3", "2.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
+        audio.preferences.filePositionPersistence = true
+        try context.save()
+        let tracks = context.playbackFiles(of: audio)
+        tracks[0].lastPosition = 58
+        tracks[0].cloudStatus = .inCloud    // evicted → the gate holds the load pending; startFile never runs
+        audio.currentFileID = tracks[0].id
+
+        let coordinator = makeCoordinator(BookmarkService())
+        defer { coordinator.shutdown() }
+
+        coordinator.play(audio)             // held pending: currentFile set, currentTime still 0
+        coordinator.persistLivePositions()  // a persist in the pending window must not overwrite 58 with 0
         #expect(tracks[0].lastPosition == 58)
     }
 

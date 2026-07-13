@@ -60,6 +60,36 @@ struct CloudFileServiceTests {
         #expect(c.cloudStatus == .local)       // unmentioned — untouched
     }
 
+    // A changed-items-only tick (an `NSMetadataQueryDidUpdate` delta) feeds `apply` just the
+    // handful of files the live feed reports as changed, not the whole folder. The safety property
+    // that makes that fold correct: files outside the delta keep their prior status — including a
+    // non-default one an earlier tick set — and are never reset toward the `.local` default.
+    @Test func applyDeltaFoldFlipsOnlyReportedAndPreservesOthers() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let a = makeFile("a.mp4", in: context)
+        let b = makeFile("b.mp4", in: context)
+        let c = makeFile("c.mp4", in: context)
+
+        let service = CloudFileService()
+        service.apply(
+            [
+                CloudStatusUpdate(relativePath: "b.mp4", status: .inCloud),
+                CloudStatusUpdate(relativePath: "c.mp4", status: .downloading),
+            ],
+            to: [a, b, c]
+        )
+        #expect(b.cloudStatus == .inCloud)
+        #expect(c.cloudStatus == .downloading)
+
+        // The delta reports only `c` finishing. Folding it must flip exactly `c` and leave `a` (never
+        // mentioned) and `b` (mentioned earlier, out of this delta) at their prior statuses.
+        service.apply([CloudStatusUpdate(relativePath: "c.mp4", status: .local)], to: [a, b, c])
+        #expect(a.cloudStatus == .local)       // never mentioned — untouched
+        #expect(b.cloudStatus == .inCloud)     // out of this delta — prior status preserved
+        #expect(c.cloudStatus == .local)       // the one reported item flipped
+    }
+
     @Test func applyIgnoresUpdatesWithNoMatchingFile() throws {
         let container = try makeContainer()
         let context = container.mainContext

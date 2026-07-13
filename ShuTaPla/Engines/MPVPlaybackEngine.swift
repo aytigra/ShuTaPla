@@ -123,6 +123,7 @@ class MPVPlaybackEngine: SourceNavigating {
         currentTime = 0                // no stale position while pending; `startFile` sets the real one
         videoSize = .zero              // the new file re-reports its size; don't linger on the old one
         isPlaying = false
+        if isLooping { setLooping(false) }   // per-file: a new file starts unlooped at once, not on arrival
         wantsPlayback = true           // a fresh load intends to play; the coordinator re-halts after if needed
         cloudLoad.load(file) { [weak self] in
             self?.startFile(resource: resource, startingAt: position)
@@ -139,7 +140,6 @@ class MPVPlaybackEngine: SourceNavigating {
     private func startFile(resource: String, startingAt position: TimeInterval?) {
         currentTime = position ?? 0    // optimistic; mpv's seek is async and corrects it via `time-pos`
         isPlaying = wantsPlayback      // optimistic; corrected by the next `pause` event
-        if isLooping { setLooping(false) }   // looping is per-file; a new file starts unlooped
         client.loadFile(resource, startingAt: position)
         // Honor the standing intent: a deferred load whose channel was paused/suppressed while the
         // evicted file downloaded must land paused, not blare the moment its bytes arrive.

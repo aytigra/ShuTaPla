@@ -77,14 +77,25 @@ struct FileRowView: View {
             if playlist.mediaType != .audio {
                 column(file.pixelSize?.dimensionsText, width: 76)
             }
-            CloudStatusBadge(status: file.cloudStatus)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            column(file.fileSizeBytes?.formattedFileSize, width: 64)
+            sizeColumn
             if playlist.mediaType != .image {
                 column(file.duration?.formattedDuration, width: 56)
             }
         }
+    }
+
+    /// The on-disk size, prefixed by the cloud-status glyph when the file isn't fully local. The
+    /// glyph shares the size column's fixed width rather than occupying its own inline slot, so a
+    /// non-local row keeps the exact column geometry of a local one — the badge adds no width and
+    /// the size/duration columns stay aligned across the whole list.
+    private var sizeColumn: some View {
+        HStack(spacing: 4) {
+            CloudStatusBadge(status: file.cloudStatus)
+            Text(file.fileSizeBytes?.formattedFileSize ?? "")
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .frame(width: 64, alignment: .trailing)
     }
 
     /// One right-aligned, fixed-width metadata value — empty until its field is cached.

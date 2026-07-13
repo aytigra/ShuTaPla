@@ -168,6 +168,25 @@ struct SequenceStoreTests {
         #expect(playlist.fileCount == context.fileCount(in: playlist))
     }
 
+    @Test func playbackResumeTargetResolvesAtOrAfterElseWraps() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // Playback order (skipped excluded): a(0) b(1) c(2) untagged(3) invalid(4).
+        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 2)?.fileName == "c [sunny].jpg")
+        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 3)?.fileName == "untagged.jpg")
+        // The skipped file at order 5 is not a playback file, so nothing qualifies at/after 5 → wrap.
+        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 5)?.fileName == "a [beach].jpg")
+        // No lower bound resolves the first playback file.
+        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: .min)?.fileName == "a [beach].jpg")
+
+        // Under the skipped service filter playback is empty — no resume target at all.
+        playlist.filterState.serviceFilter = .skipped
+        try context.save()
+        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 0) == nil)
+    }
+
     @Test func fileCountMatchesRelationshipCount() throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -177,6 +196,37 @@ struct SequenceStoreTests {
         // Counts every file regardless of triage/skip state (the row badge is the raw total).
         #expect(context.fileCount(in: playlist) == 6)
         #expect(context.fileCount(in: playlist) == playlist.files.count)
+    }
+
+    @Test func filesAtRelativePathsResolvesOnlyThatSubset() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // The live cloud feed folds just the paths a metadata delta reports — never the whole set.
+        let hits = context.files(in: playlist, atRelativePaths: ["a [beach].jpg", "untagged.jpg"])
+        #expect(Set(hits.map(\.relativePath)) == ["a [beach].jpg", "untagged.jpg"])
+
+        // An unknown path contributes nothing; an empty request fetches nothing at all.
+        #expect(context.files(in: playlist, atRelativePaths: ["ghost.jpg"]).isEmpty)
+        #expect(context.files(in: playlist, atRelativePaths: []).isEmpty)
+    }
+
+    @Test func filesAtRelativePathsIsScopedToThePlaylist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let p1 = try seededPlaylist(in: context)
+        let p2 = Playlist(name: "Q", folderBookmark: Data(), folderPath: "/q", mediaType: .image)
+        context.insert(p2)
+        insertFile("a [beach].jpg", status: .valid, order: 0, to: p2, in: context)  // same path, other playlist
+        try context.save()
+
+        // The `persistentModelID` scope keeps the collision in `p1` out — only `p2`'s file returns.
+        let hits = context.files(in: p2, atRelativePaths: ["a [beach].jpg"])
+        #expect(hits.count == 1)
+        #expect(hits.first?.playlist?.persistentModelID == p2.persistentModelID)
+        #expect(context.files(in: p1, atRelativePaths: ["a [beach].jpg"]).first?.playlist?.persistentModelID
+            == p1.persistentModelID)
     }
 
     @Test func unsavedInsertIsNotYetVisible() throws {

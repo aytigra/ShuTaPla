@@ -194,6 +194,45 @@ import AppKit
         #expect(await poll(timeout: .seconds(5)) { !engine.client.isLooping })
     }
 
+    @Test func loadingAnEvictedFileResetsLoopingImmediately() async throws {
+        // The per-file loop reset must not wait for an evicted file's bytes to arrive: while the
+        // download is pending, `isLooping` already reflects the new (unlooped) file, not the previous
+        // one's loop state left standing behind the downloading placeholder.
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+
+        engine.load(makeFile("a"), resource: sine(30))
+        engine.setLooping(true)
+        #expect(engine.isLooping)
+
+        let evicted = makeFile("b")
+        evicted.cloudStatus = .inCloud
+        engine.load(evicted, resource: sine(30))
+        #expect(engine.cloudLoad.pendingFile === evicted)   // held pending, startFile hasn't run
+        #expect(!engine.isLooping)                           // reset up front, not deferred to arrival
+    }
+
+    @Test func loopToggledWhileEvictedFileDownloadsSurvivesArrival() async throws {
+        // A loop toggled on while an evicted file is still downloading must survive the file's
+        // arrival — the deferred byte-load must not undo the user's choice by re-resetting looping.
+        let engine = try AudioPlaybackEngine()
+        defer { engine.shutdown() }
+
+        let evicted = makeFile("a")
+        evicted.cloudStatus = .inCloud
+        engine.load(evicted, resource: sine(30))
+        #expect(engine.cloudLoad.pendingFile === evicted)   // held pending
+
+        engine.setLooping(true)   // user turns on loop during the download wait
+        #expect(engine.isLooping)
+
+        evicted.cloudStatus = .local   // the live feed reports the bytes arrived; the deferred load runs
+        #expect(await poll(timeout: .seconds(5)) { engine.cloudLoad.pendingFile == nil })
+
+        #expect(engine.isLooping)                                                   // the toggle stands
+        #expect(await poll(timeout: .seconds(5)) { engine.client.isLooping })
+    }
+
     @Test func seekMovesTime() async throws {
         let engine = try AudioPlaybackEngine()
         defer { engine.shutdown() }

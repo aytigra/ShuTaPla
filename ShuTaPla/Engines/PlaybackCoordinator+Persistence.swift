@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import SwiftData
 
 extension PlaybackCoordinator {
 
@@ -30,11 +31,13 @@ extension PlaybackCoordinator {
 
     /// Writes `engine`'s live position back to the file it has loaded, so a later launch can resume
     /// there. A no-op when the engine is absent or has no loaded file (so the timeline-less image
-    /// channel, whose `timelineEngine` is `nil`, is skipped). Callers pass the channel's engine via
+    /// channel, whose `timelineEngine` is `nil`, is skipped), and while an evicted file's load is
+    /// still held pending by the gate — its `startFile` hasn't run, so `currentTime` is a placeholder
+    /// 0 that would destroy the file's saved resume point. Callers pass the channel's engine via
     /// `timelineEngine(of:)`, `visualVideoEngine`, or `audioEngine`.
     func persistTimelinePosition(from engine: MPVPlaybackEngine?) {
-        guard let file = engine?.currentFile, let time = engine?.currentTime else { return }
-        file.lastPosition = time
+        guard let engine, engine.cloudLoad.pendingFile == nil, let file = engine.currentFile else { return }
+        file.lastPosition = engine.currentTime
     }
 
     /// Persists both live channels' positions — the periodic loop's per-tick work and the
@@ -84,15 +87,24 @@ extension PlaybackCoordinator {
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
         return Self.availableFile(
-            in: playlist.playbackFiles, from: current, forward: true, includeStart: false, isAvailable: isAvailable
+            in: playlist.playbackSequence, from: current.persistentModelID, forward: true,
+            includeStart: false, resolve: resolveFile(in: playlist), isAvailable: isAvailable
         )
     }
 
     func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
         return Self.availableFile(
-            in: playlist.playbackFiles, from: current, forward: false, includeStart: false, isAvailable: isAvailable
+            in: playlist.playbackSequence, from: current.persistentModelID, forward: false,
+            includeStart: false, resolve: resolveFile(in: playlist), isAvailable: isAvailable
         )
+    }
+
+    /// Resolves one sequence identifier to its live model through the playlist's context — the
+    /// lazy seam the pure selectors call, so they realize only the rows they actually test rather
+    /// than the whole `[PersistentIdentifier]` sequence.
+    func resolveFile(in playlist: Playlist) -> (PersistentIdentifier) -> PlaylistFile? {
+        { playlist.modelContext?.model(for: $0) as? PlaylistFile }
     }
 
     /// Whether `file` is a valid load target. An evicted file is (the engine placeholders it until
@@ -127,44 +139,52 @@ extension PlaybackCoordinator {
         playlist.currentFileID = file.id
         playlist.captureResumePosition(file.sortOrder)
         for target in Self.prefetchTargets(
-            after: file, in: playlist.playbackFiles, count: AppConstants.cloudPrefetchCount
+            after: file.persistentModelID, in: playlist.playbackSequence,
+            count: AppConstants.cloudPrefetchCount, resolve: resolveFile(in: playlist)
         ) {
             requestDownload(target)
         }
     }
 
-    /// The prefetch horizon after `current`: the next `count` files in playback order — wrapping
-    /// past the end the way playback does — that aren't already on disk. Never includes `current`,
-    /// and never repeats a file when the sequence is shorter than `count + 1`. Pure, so the
-    /// selection is unit-tested apart from the coordinator and its download side effect.
     /// Walking `sequence` in playback order (wrapping) from `start`, the first file `isAvailable`
     /// accepts — the shared "next available" resolution that skips a missing local file before any
     /// engine touches it. `forward` picks the direction; `includeStart` treats `start` itself as the
     /// first candidate (resolving a jump / start target) rather than stepping past it (advance /
-    /// previous). Pure over the injected predicate, so the walk is unit-tested apart from the disk
-    /// existence check the coordinator supplies. `nil` when no file in the sequence is available.
+    /// previous). The sequence is `[PersistentIdentifier]`; each candidate is resolved through
+    /// `resolve` only when the walk reaches it, so a normal advance realizes a single model, and the
+    /// accepted candidate — already resolved to run `isAvailable` — is returned without a re-resolve.
+    /// An identifier `resolve` can't realize (a row gone since the fetch) is skipped. Pure over the
+    /// injected seams, so the walk is unit-tested apart from the store and the disk existence check.
+    /// `nil` when no file in the sequence is available.
     static func availableFile(
-        in sequence: [PlaylistFile], from start: PlaylistFile, forward: Bool,
-        includeStart: Bool, isAvailable: (PlaylistFile) -> Bool
+        in sequence: [PersistentIdentifier], from start: PersistentIdentifier, forward: Bool,
+        includeStart: Bool, resolve: (PersistentIdentifier) -> PlaylistFile?,
+        isAvailable: (PlaylistFile) -> Bool
     ) -> PlaylistFile? {
         let count = sequence.count
-        guard count > 0, let index = sequence.firstIndex(where: { $0.id == start.id }) else { return nil }
+        guard count > 0, let index = sequence.firstIndex(of: start) else { return nil }
         for offset in (includeStart ? 0 : 1)..<count {
             let position = forward ? (index + offset) % count : ((index - offset) % count + count) % count
-            let candidate = sequence[position]
+            guard let candidate = resolve(sequence[position]) else { continue }
             if isAvailable(candidate) { return candidate }
         }
         return nil
     }
 
+    /// The prefetch horizon after `current`: the next `count` files in playback order — wrapping
+    /// past the end the way playback does — that aren't already on disk. Never includes `current`,
+    /// and never repeats a file when the sequence is shorter than `count + 1`. Resolves only the
+    /// horizon window through `resolve` to read each `cloudStatus`, never the whole sequence. Pure,
+    /// so the selection is unit-tested apart from the coordinator and its download side effect.
     static func prefetchTargets(
-        after current: PlaylistFile, in sequence: [PlaylistFile], count: Int
+        after current: PersistentIdentifier, in sequence: [PersistentIdentifier], count: Int,
+        resolve: (PersistentIdentifier) -> PlaylistFile?
     ) -> [PlaylistFile] {
         guard count > 0, sequence.count > 1,
-              let index = sequence.firstIndex(where: { $0.id == current.id }) else { return [] }
+              let index = sequence.firstIndex(of: current) else { return [] }
         let horizon = min(count, sequence.count - 1)
         return (1...horizon)
-            .map { sequence[(index + $0) % sequence.count] }
+            .compactMap { resolve(sequence[(index + $0) % sequence.count]) }
             .filter { $0.cloudStatus != .local }
     }
 }

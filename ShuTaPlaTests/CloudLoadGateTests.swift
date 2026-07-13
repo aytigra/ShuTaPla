@@ -91,14 +91,15 @@ import SwiftData
         gate.load(b, perform: { performedB += 1 }, requestDownload: { _ in })   // supersedes A
         #expect(gate.pendingFile === b)
 
+        // Flip the superseded file first, then the current one: A's stale reaction is enqueued onto
+        // the main actor before B's, so B's `perform` running is a positive signal that the pump has
+        // run a full cycle — A's reaction already ran (and was dropped) by the time B's does. That
+        // makes `performedA == 0` a real drop, not a settle that returned before anything reacted.
         a.cloudStatus = .local                     // the superseded file arriving must not load
-        await settle(until: { performedA > 0 })
-        #expect(performedA == 0)                   // A was superseded — dropped, never performed
-        #expect(gate.pendingFile === b)
-
         b.cloudStatus = .local                     // the current file arrives — its perform runs once
         await settle(until: { performedB > 0 })
         #expect(performedB == 1)
+        #expect(performedA == 0)                   // A was superseded — dropped, never performed
         #expect(gate.pendingFile == nil)
     }
 
@@ -113,8 +114,15 @@ import SwiftData
         gate.cancel()
         #expect(gate.pendingFile == nil)
 
-        file.cloudStatus = .local                  // a superseded arrival must not load
-        await settle(until: { performed })
+        // The cancelled file's arrival still fires its armed observation, enqueuing a (now stale)
+        // reaction onto the main actor. A plain `Task` enqueued right after rides behind it, so its
+        // flag flipping is a positive signal that the pump has run a full cycle — the stale reaction
+        // already ran (and found nothing pending) by the time this does. `performed` staying false is
+        // then a real drop, not a settle that returned before the reaction it rules out had run.
+        file.cloudStatus = .local                  // a cancelled arrival must not load
+        var pumpCycled = false
+        Task { @MainActor in pumpCycled = true }
+        await settle(until: { pumpCycled })
         #expect(!performed)
     }
 }

@@ -18,6 +18,7 @@
 
 import Foundation
 import Observation
+import SwiftData
 
 /// One normalized cloud-status observation: a file's path (relative to its playlist folder,
 /// keyed the same way the scan records it) and the status the live feed reports for it.
@@ -34,18 +35,16 @@ final class CloudFileService {
     /// audio channel — so two playlists in different folders can both stay live at once.
     enum Channel: Hashable { case visual, audio }
 
-    /// One running folder watch: the query, the playlist whose files it writes onto, the
-    /// folder it is scoped to (for relative-path keying), and its observer tokens.
+    /// One running folder watch: the query, the playlist whose files it writes onto, and its
+    /// observer tokens. Each token's closure captures its own folder URL for relative-path keying.
     private final class Monitor {
         let query: NSMetadataQuery
         weak var playlist: Playlist?
-        let folderURL: URL
         var tokens: [NSObjectProtocol] = []
 
-        init(query: NSMetadataQuery, playlist: Playlist, folderURL: URL) {
+        init(query: NSMetadataQuery, playlist: Playlist) {
             self.query = query
             self.playlist = playlist
-            self.folderURL = folderURL
         }
     }
 
@@ -78,17 +77,46 @@ final class CloudFileService {
         // path-keying keep only the ones this playlist actually holds.
         query.predicate = NSPredicate(format: "%K LIKE %@", NSMetadataItemFSNameKey, "*")
 
-        let monitor = Monitor(query: query, playlist: playlist, folderURL: folderURL)
+        let monitor = Monitor(query: query, playlist: playlist)
         for name in [NSNotification.Name.NSMetadataQueryDidFinishGathering, .NSMetadataQueryDidUpdate] {
             let token = NotificationCenter.default.addObserver(
                 forName: name, object: query, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.absorb(channel) }
+            ) { [weak self] note in
+                let updates = Self.statusUpdates(from: note, under: folderURL)
+                MainActor.assumeIsolated { self?.absorb(updates, on: channel) }
             }
             monitor.tokens.append(token)
         }
         monitors[channel] = monitor
         query.start()
+    }
+
+    /// Normalizes a query notification to `Sendable` updates on the main run loop where it fires, so
+    /// nothing run-loop-bound (`NSMetadataItem`/`NSMetadataQuery`) crosses into the actor. A
+    /// `DidUpdate` folds only its changed + added items — so a frequent progress tick classifies just
+    /// those; a `DidFinishGathering` (no delta keys) reads the query's full results once under a
+    /// stable snapshot, the one-time initial gather.
+    private nonisolated static func statusUpdates(from note: Notification, under folderURL: URL) -> [CloudStatusUpdate] {
+        let changed = note.userInfo?[NSMetadataQueryUpdateChangedItemsKey] as? [NSMetadataItem]
+        let added = note.userInfo?[NSMetadataQueryUpdateAddedItemsKey] as? [NSMetadataItem]
+        let items: [NSMetadataItem]
+        if changed != nil || added != nil {
+            items = (changed ?? []) + (added ?? [])
+        } else if let query = note.object as? NSMetadataQuery {
+            query.disableUpdates()
+            defer { query.enableUpdates() }
+            items = query.results as? [NSMetadataItem] ?? []
+        } else {
+            items = []
+        }
+        return items.compactMap { item in
+            (item.value(forAttribute: NSMetadataItemURLKey) as? URL).map { url in
+                CloudStatusUpdate(
+                    relativePath: FileSystemService.relativePath(of: url, under: folderURL),
+                    status: CloudStatus.from(item)
+                )
+            }
+        }
     }
 
     /// Stops and discards `channel`'s query, if any.
@@ -98,22 +126,13 @@ final class CloudFileService {
         monitor.tokens.forEach(NotificationCenter.default.removeObserver)
     }
 
-    /// Reads a channel's query results under a stable snapshot and folds them onto the models.
-    private func absorb(_ channel: Channel) {
-        guard let monitor = monitors[channel], let playlist = monitor.playlist else { return }
-        let query = monitor.query
-        query.disableUpdates()
-        defer { query.enableUpdates() }
-
-        let updates = (query.results as? [NSMetadataItem] ?? []).compactMap { item in
-            (item.value(forAttribute: NSMetadataItemURLKey) as? URL).map { url in
-                CloudStatusUpdate(
-                    relativePath: FileSystemService.relativePath(of: url, under: monitor.folderURL),
-                    status: CloudStatus.from(item)
-                )
-            }
-        }
-        apply(updates, to: playlist.files)
+    /// Resolves a channel's reported paths to their models through a scoped fetch — never
+    /// `playlist.files`, so the whole relationship is never faulted on the main actor — and folds the
+    /// statuses on. Fed the already-normalized `Sendable` updates by the notification observer.
+    private func absorb(_ updates: [CloudStatusUpdate], on channel: Channel) {
+        guard let monitor = monitors[channel], let playlist = monitor.playlist,
+              let context = playlist.modelContext else { return }
+        apply(updates, to: context.files(in: playlist, atRelativePaths: Set(updates.map(\.relativePath))))
     }
 
     // MARK: - On-demand download

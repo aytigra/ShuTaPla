@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import SwiftData
 
 extension AppState {
 
@@ -88,10 +89,8 @@ extension AppState {
     /// qualify. `nil` — leaving the cursor untouched — when the active filter has no slot or no
     /// stored position yet (first visit / ad-hoc / service), or the sequence is empty.
     private func restoreTarget(for playlist: Playlist) -> PlaylistFile? {
-        guard let stored = playlist.activeResumeSortOrder else { return nil }
-        let sequence = playlist.playbackFiles
-        guard !sequence.isEmpty else { return nil }
-        return sequence.first { $0.sortOrder >= stored } ?? sequence.first
+        guard let stored = playlist.activeResumeSortOrder, let context = playlist.modelContext else { return nil }
+        return context.playbackResumeTarget(of: playlist, atOrAfter: stored)
     }
 
     /// Re-centers the Manager on the managed playlist's cursor — the selection re-seed a scope
