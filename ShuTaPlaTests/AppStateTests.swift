@@ -582,7 +582,7 @@ struct AppStateTests {
         }
         await appState.updateTask?.value   // drain the create derivation before the explicit update
         #expect(playlist.files.count == 2)
-        let versionBefore = appState.sequenceVersion
+        let versionBefore = appState.sequences.version
 
         await appState.update(playlist)
 
@@ -592,7 +592,7 @@ struct AppStateTests {
         // playlist, so its `tagFrequency` reflects the committed counts.
         #expect(playlist.tagFrequency["beach"] == 1)
         // A committed reconcile bumps the version so the store-side file lists re-derive.
-        #expect(appState.sequenceVersion != versionBefore)
+        #expect(appState.sequences.version != versionBefore)
     }
 
     /// A cancellation landing in the actor's post-diff/pre-save window must not strand a commit:
@@ -620,7 +620,7 @@ struct AppStateTests {
         }
         await appState.updateTask?.value   // drain the create derivation before the cancellation test
         let namesBefore = Set(storedFiles(of: playlist).map(\.fileName))
-        let versionBefore = appState.sequenceVersion
+        let versionBefore = appState.sequences.version
 
         // Run the update on its own task and cancel that task from the pre-save hook — landing the
         // cancellation in exactly the post-diff/pre-save window. The hook is installed synchronously
@@ -630,13 +630,13 @@ struct AppStateTests {
         await task.value
 
         let storeChanged = Set(storedFiles(of: playlist).map(\.fileName)) != namesBefore
-        let versionBumped = appState.sequenceVersion != versionBefore
+        let versionBumped = appState.sequences.version != versionBefore
         #expect(storeChanged == versionBumped)   // consistent: both moved, or neither did
         #expect(!storeChanged)                    // rolled back: the prune never committed
     }
 
     /// A failed background save surfaces like the main-actor save path: `saveError` is set, the
-    /// reconcile rolls back so the prune never lands, and `sequenceVersion` stays put (nothing
+    /// reconcile rolls back so the prune never lands, and `sequences.version` stays put (nothing
     /// committed to re-derive from). Forced through the actor's save-override seam.
     @Test func updateSurfacesBackgroundSaveFailure() async throws {
         let container = try makeContainer()
@@ -660,7 +660,7 @@ struct AppStateTests {
         }
         await appState.updateTask?.value   // drain the create derivation before forcing a save failure
         let namesBefore = Set(storedFiles(of: playlist).map(\.fileName))
-        let versionBefore = appState.sequenceVersion
+        let versionBefore = appState.sequences.version
 
         struct SaveFailure: Error {}
         appState.scanActor.saveOverride.withLock { $0 = { throw SaveFailure() } }
@@ -668,7 +668,7 @@ struct AppStateTests {
 
         #expect(appState.saveError != nil)                                      // surfaced, not swallowed
         #expect(Set(storedFiles(of: playlist).map(\.fileName)) == namesBefore)  // rolled back: prune never landed
-        #expect(appState.sequenceVersion == versionBefore)                      // nothing committed to re-derive
+        #expect(appState.sequences.version == versionBefore)                      // nothing committed to re-derive
     }
 
     // MARK: - File operations (Task 6)
@@ -1243,12 +1243,12 @@ struct AppStateTests {
         // The accessor returns identifiers, not models — the same ordered sequence the store
         // derives — and `file(for:)` resolves each on demand (the lazy render path).
         let ids = appState.managerFileIDs
-        #expect(ids == context.displaySequence(of: playlist))
+        #expect(ids == context.sequence(of: playlist))
         #expect(ids.compactMap { appState.file(for: $0)?.fileName } == ["a.mp4", "b.mp4", "c.mp4"])
     }
 
     /// The memoized sequence accessors re-derive exactly when the store-side result can change:
-    /// a `sequenceVersion` bump (any persisted membership/order/filter mutation) or a switch of
+    /// a `sequences.version` bump (any persisted membership/order/filter mutation) or a switch of
     /// the accessor's source playlist. Within one version-and-playlist they reuse the last result
     /// instead of re-fetching. Passes on the un-memoized accessor too (which always refetches), so
     /// it pins the contract the memoization must preserve.
@@ -1272,7 +1272,7 @@ struct AppStateTests {
 
         // A saved insert visible only after a version bump (the mutation contract) re-derives.
         addFile("a3.mp4", order: 2, to: a, in: context)
-        appState.sequenceVersion &+= 1
+        appState.sequences.bump()
         #expect(appState.managerFiles.map(\.fileName) == ["a1.mp4", "a2.mp4", "a3.mp4"])
 
         // Switching the managed playlist re-derives without a version bump (keyed on identity)…
@@ -1326,12 +1326,12 @@ struct AppStateTests {
         appState.managerSelection = [a.id, b.id]
 
         #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
-        let versionBefore = appState.sequenceVersion
+        let versionBefore = appState.sequences.version
 
         appState.setDuplicateSearch(true)
         #expect(appState.duplicateSearchActive)
         #expect(appState.managerSelection.isEmpty)                       // selection reset on entry
-        #expect(appState.sequenceVersion > versionBefore)                // re-derives the list
+        #expect(appState.sequences.version > versionBefore)                // re-derives the list
         #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "c.jpg"])   // only the fp1 pair
 
         appState.setDuplicateSearch(false)
@@ -1340,10 +1340,10 @@ struct AppStateTests {
 
         // A no-op call (already inactive) leaves the selection and version untouched.
         appState.managerSelection = [a.id]
-        let versionRest = appState.sequenceVersion
+        let versionRest = appState.sequences.version
         appState.setDuplicateSearch(false)
         #expect(appState.managerSelection == [a.id])
-        #expect(appState.sequenceVersion == versionRest)
+        #expect(appState.sequences.version == versionRest)
     }
 
     /// Deleting a duplicate while the mode is active recomputes the grouping *within* the mode: the
@@ -1394,7 +1394,7 @@ struct AppStateTests {
         appState.clearTagFilter(on: playlist)   // any filter interaction returns to the ordinary view
 
         #expect(!appState.duplicateSearchActive)
-        #expect(appState.managerFileIDs == context.displaySequence(of: playlist))
+        #expect(appState.managerFileIDs == context.sequence(of: playlist))
     }
 
     /// `findDuplicates` saves before entering the mode: fingerprints merged onto records while
@@ -1419,6 +1419,79 @@ struct AppStateTests {
         appState.findDuplicates(in: playlist)
         #expect(appState.duplicateSearchActive)
         #expect(appState.managerFiles.map(\.fileName) == ["a.jpg", "b.jpg"])   // the flushed pair is visible
+    }
+
+    /// Skipped-review swaps the Manager center to the wrong-type files a scan flagged — the notice
+    /// bar's "N skipped" — and back. `reviewSkipped` is the notice-bar entry; the skipped files
+    /// never appear in the ordinary sequence, so the mode is the only place they surface.
+    @Test func skippedReviewSwapsCenterToSkippedFilesAndBack() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context)
+        addFile("skip.txt", skipped: true, order: 1, to: playlist, in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        appState.managerSelection = [a.id]
+
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg"])   // skipped excluded from the sequence
+        let versionBefore = appState.sequences.version
+
+        appState.reviewSkipped(in: playlist)
+        #expect(appState.skippedReviewActive)
+        #expect(appState.managerSelection.isEmpty)                    // selection reset on entry
+        #expect(appState.sequences.version > versionBefore)             // re-derives the list
+        #expect(appState.managerFiles.map(\.fileName) == ["skip.txt"])
+
+        appState.setSkippedReview(false)
+        #expect(!appState.skippedReviewActive)
+        #expect(appState.managerFiles.map(\.fileName) == ["a.jpg"])
+    }
+
+    /// The two review modes are mutually exclusive: entering either exits the other.
+    @Test func reviewModesAreMutuallyExclusive() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        addFile("a.jpg", order: 0, to: playlist, in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+
+        appState.setDuplicateSearch(true)
+        #expect(appState.duplicateSearchActive && !appState.skippedReviewActive)
+
+        appState.setSkippedReview(true)                               // enters skipped, exits duplicates
+        #expect(appState.skippedReviewActive && !appState.duplicateSearchActive)
+
+        appState.setDuplicateSearch(true)                            // enters duplicates, exits skipped
+        #expect(appState.duplicateSearchActive && !appState.skippedReviewActive)
+    }
+
+    /// A filter interaction leaves skipped-review, exactly as it leaves find-duplicates.
+    @Test func filterEditExitsSkippedReview() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        addFile("a.jpg", order: 0, to: playlist, in: context)
+        addFile("skip.txt", skipped: true, order: 1, to: playlist, in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        appState.setSkippedReview(true)
+        #expect(appState.skippedReviewActive)
+
+        appState.clearTagFilter(on: playlist)
+
+        #expect(!appState.skippedReviewActive)
+        #expect(appState.managerFileIDs == context.sequence(of: playlist))
     }
 
     // MARK: - Filtering (Task 7)
@@ -1540,10 +1613,7 @@ struct AppStateTests {
         appState.toggleServiceFilter(.invalidTagging, on: playlist)  // mutually exclusive: replaces
         #expect(appState.managerFiles.map(\.fileName) == ["c [ab].mp4"])
 
-        appState.toggleServiceFilter(.skipped, on: playlist)
-        #expect(appState.managerFiles.map(\.fileName) == ["x.jpg"])
-
-        appState.toggleServiceFilter(.skipped, on: playlist)  // off → tag filter restored
+        appState.toggleServiceFilter(.invalidTagging, on: playlist)  // off → tag filter restored
         #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])
 
         await appState.updateTask?.value
@@ -2392,20 +2462,17 @@ struct AppStateTests {
         context.insert(audio)
         addFile("1.mp3", order: 0, to: audio, in: context)
         let skipped = addFile("2.mp3", skipped: true, order: 1, to: audio, in: context)
-        // The Skipped triage filter is the one effective filter whose display list contains skipped
-        // files; honoring it in the overlay would otherwise surface them on the audio channel.
-        audio.filterState = FilterState(selectedTags: [], filterMode: .and, serviceFilter: .skipped)
+        // A skipped (wrong-type) track is excluded from the sequence entirely, so it can't reach the
+        // audio channel — even when it is the persisted resume track.
         audio.currentFileID = skipped.id
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
         appState.remember(audio)
 
-        // The audio overlay is a transport list, not a triage surface: skipped tracks are never
-        // playable, so they must not appear in it, and a skipped resume track must not resolve as
-        // the current (transport) track. Under the Skipped filter nothing is playable, so the list
-        // is empty.
-        #expect(appState.audioChannelFiles.isEmpty)
+        // The channel list holds only the playable track, and a skipped resume track resolves to no
+        // current (transport) track rather than surfacing the skipped file.
+        #expect(appState.audioChannelFiles.map(\.fileName) == ["1.mp3"])
         #expect(appState.currentAudioFile == nil)
     }
 

@@ -87,7 +87,7 @@ extension PlaybackCoordinator {
     func fileAfter(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
         return Self.availableFile(
-            in: playlist.playbackSequence, from: current.persistentModelID, forward: true,
+            in: sequences.sequence(of: playlist), from: current.persistentModelID, forward: true,
             includeStart: false, resolve: resolveFile(in: playlist), isAvailable: isAvailable
         )
     }
@@ -95,7 +95,7 @@ extension PlaybackCoordinator {
     func fileBefore(_ current: PlaylistFile?) -> PlaylistFile? {
         guard let current, let playlist = current.playlist else { return nil }
         return Self.availableFile(
-            in: playlist.playbackSequence, from: current.persistentModelID, forward: false,
+            in: sequences.sequence(of: playlist), from: current.persistentModelID, forward: false,
             includeStart: false, resolve: resolveFile(in: playlist), isAvailable: isAvailable
         )
     }
@@ -139,7 +139,7 @@ extension PlaybackCoordinator {
         playlist.currentFileID = file.id
         playlist.captureResumePosition(file.sortOrder)
         for target in Self.prefetchTargets(
-            after: file.persistentModelID, in: playlist.playbackSequence,
+            after: file.persistentModelID, in: sequences.sequence(of: playlist),
             count: AppConstants.cloudPrefetchCount, resolve: resolveFile(in: playlist)
         ) {
             requestDownload(target)

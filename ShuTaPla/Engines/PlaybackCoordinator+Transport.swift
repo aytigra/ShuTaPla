@@ -105,7 +105,7 @@ extension PlaybackCoordinator {
         guard let folder = folderAccess.url(for: playlist.id) else { return }
         // Skip a missing local target to the next available file before any engine loads it.
         let target = Self.availableFile(
-            in: playlist.playbackSequence, from: file.persistentModelID, forward: true,
+            in: sequences.sequence(of: playlist), from: file.persistentModelID, forward: true,
             includeStart: true, resolve: resolveFile(in: playlist), isAvailable: isAvailable
         ) ?? file
         persistTimelinePosition(from: timelineEngine(of: playlist))   // save the outgoing file before loading the new one
@@ -148,7 +148,7 @@ extension PlaybackCoordinator {
     func reconcile(playlistThatChanged playlist: Playlist) {
         guard let channel = channel(of: playlist) else { return }
         let current = channel == .audio ? audioCurrentFile : visualCurrentFile
-        let ids = playlist.playbackSequence
+        let ids = sequences.sequence(of: playlist)
         if let current, ids.contains(current.persistentModelID) { return }
         if let first = ids.first.flatMap(resolveFile(in: playlist)) {
             jump(playlist, to: first)

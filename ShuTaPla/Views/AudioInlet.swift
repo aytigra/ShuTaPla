@@ -36,7 +36,7 @@ struct AudioTransport: View {
     private var isLive: Bool { coordinator.liveAudioPlaylist === playlist }
 
     var body: some View {
-        let _ = appState.sequenceVersion   // re-derive the Play affordance when membership changes
+        let _ = appState.sequences.version   // re-derive the Play affordance when membership changes
         HStack(spacing: 4) {
             CloudStatusBadge(status: appState.currentAudioFile?.cloudStatus ?? .local)
                 .foregroundStyle(.secondary)
@@ -47,7 +47,7 @@ struct AudioTransport: View {
                 coordinator.playOrTogglePause(playlist)
             }
             // The skipped triage filter leaves no playable track, so starting playback is a no-op.
-            .disabled(playlist.playbackState != .playing && !playlist.hasPlaybackFiles)
+            .disabled(playlist.playbackState != .playing && !playlist.sequenceNotEmpty)
             if isLive {
                 controlButton("stop.fill") { coordinator.stop(playlist) }
                 controlButton("forward.fill") { coordinator.next(playlist) }

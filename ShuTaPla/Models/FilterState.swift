@@ -12,8 +12,8 @@ nonisolated struct FilterState: Codable, Sendable, Equatable {
     var filterMode: FilterMode = .and
 
     /// The active triage filter. While set it overrides the tag filter (untagged /
-    /// invalid-tagging / skipped); mutually exclusive with itself. Decodes to `nil`
-    /// from filters persisted before triage filters were stored.
+    /// invalid-tagging); mutually exclusive with itself. Decodes to `nil` from filters
+    /// persisted before triage filters were stored.
     var serviceFilter: ServiceFilter?
 
     init() {}
@@ -22,6 +22,18 @@ nonisolated struct FilterState: Codable, Sendable, Equatable {
         self.selectedTags = selectedTags
         self.filterMode = filterMode
         self.serviceFilter = serviceFilter
+    }
+
+    /// Decodes leniently so an *unrecognized* `serviceFilter` — a triage-filter case removed in a
+    /// later version, sitting in an existing store's blob — coerces to `nil` ("no filter") instead
+    /// of failing the whole composite decode. Synthesized `decodeIfPresent` throws on a
+    /// present-but-unknown raw value; `try?` turns that into `nil`. An absent key already yields
+    /// `nil`, and the tag fields keep their defaults exactly as the synthesized decode would.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedTags = try container.decodeIfPresent([String].self, forKey: .selectedTags) ?? []
+        filterMode = try container.decodeIfPresent(FilterMode.self, forKey: .filterMode) ?? .and
+        serviceFilter = try? container.decodeIfPresent(ServiceFilter.self, forKey: .serviceFilter)
     }
 
     /// No tags selected — the tag filter matches everything.

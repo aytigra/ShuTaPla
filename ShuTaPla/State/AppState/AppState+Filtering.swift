@@ -66,7 +66,7 @@ extension AppState {
     /// falls back to the reconcile (advance only if the current file left the set). The managed
     /// playlist re-centers its selection on the resulting cursor.
     private func filterChanged(on playlist: Playlist) {
-        if managedPlaylist === playlist { setDuplicateSearch(false) }   // filtering exits find-duplicates
+        if managedPlaylist === playlist { exitReviewModes() }   // filtering exits any review mode
         persistAndRefresh()   // the new filter must be in the store before the sequence/slot are read
 
         if let target = restoreTarget(for: playlist) {
@@ -90,7 +90,7 @@ extension AppState {
     /// stored position yet (first visit / ad-hoc / service), or the sequence is empty.
     private func restoreTarget(for playlist: Playlist) -> PlaylistFile? {
         guard let stored = playlist.activeResumeSortOrder, let context = playlist.modelContext else { return nil }
-        return context.playbackResumeTarget(of: playlist, atOrAfter: stored)
+        return context.resumeTarget(of: playlist, atOrAfter: stored)
     }
 
     /// Re-centers the Manager on the managed playlist's cursor — the selection re-seed a scope
@@ -99,7 +99,7 @@ extension AppState {
     func reseedManagerSelection() {
         managerSelection = []
         if let playlist = managedPlaylist, let id = playlist.currentFileID,
-           displaySequenceContains(id, of: playlist) {
+           sequenceContains(id, of: playlist) {
             managerSelection = [id]
         }
         scrollSelectionToken += 1

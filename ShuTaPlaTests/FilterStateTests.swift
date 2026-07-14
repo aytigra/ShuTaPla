@@ -39,12 +39,12 @@ struct FilterStateTests {
     @Test func toggleServiceSwitchesBetweenTriageFilters() {
         var state = FilterState()
         state.toggle(service: .untagged)
-        state.toggle(service: .skipped)
-        #expect(state.serviceFilter == .skipped)
+        state.toggle(service: .invalidTagging)
+        #expect(state.serviceFilter == .invalidTagging)
     }
 
     @Test func setOnlyReplacesTheFilterWithASingleTagAndClearsTriage() {
-        var state = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .skipped)
+        var state = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .invalidTagging)
         state.setOnly(tag: "beach")
         #expect(state.selectedTags == ["beach"])
         #expect(state.serviceFilter == nil)
@@ -52,10 +52,10 @@ struct FilterStateTests {
     }
 
     @Test func clearTagsLeavesTheTriageFilterInPlace() {
-        var state = FilterState(selectedTags: ["a", "b"], filterMode: .and, serviceFilter: .skipped)
+        var state = FilterState(selectedTags: ["a", "b"], filterMode: .and, serviceFilter: .invalidTagging)
         state.clearTags()
         #expect(state.selectedTags.isEmpty)
-        #expect(state.serviceFilter == .skipped)
+        #expect(state.serviceFilter == .invalidTagging)
     }
 
     // MARK: - Persistence (the embedded JSON blob)
@@ -75,6 +75,25 @@ struct FilterStateTests {
         #expect(decoded.selectedTags == ["beach"])
         #expect(decoded.filterMode == .or)
         #expect(decoded.serviceFilter == nil)
+    }
+
+    @Test func filterStateCoercesAnUnrecognizedServiceFilterToNil() throws {
+        // A blob holding a serviceFilter value no longer in the enum (a removed case) loads as
+        // "no filter" rather than failing the whole composite decode: synthesized decodeIfPresent
+        // throws on a present-but-unknown raw value, so FilterState decodes serviceFilter
+        // leniently. This is the load path a stored `.skipped` takes once that case is removed.
+        let json = Data(#"{"selectedTags":["beach"],"filterMode":"or","serviceFilter":"removedCase"}"#.utf8)
+        let decoded = try JSONDecoder().decode(FilterState.self, from: json)
+        #expect(decoded.selectedTags == ["beach"])
+        #expect(decoded.filterMode == .or)
+        #expect(decoded.serviceFilter == nil)
+    }
+
+    @Test func filterStateDecodesARecognizedServiceFilter() throws {
+        // The lenient decode still keeps a valid triage filter — it only nils out unknown values.
+        let json = Data(#"{"selectedTags":[],"filterMode":"and","serviceFilter":"untagged"}"#.utf8)
+        let decoded = try JSONDecoder().decode(FilterState.self, from: json)
+        #expect(decoded.serviceFilter == .untagged)
     }
 
     // MARK: - Mode helpers

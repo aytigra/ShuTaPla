@@ -516,18 +516,15 @@ private struct CenterActionsBar: View {
     @ViewBuilder
     private func visualActions(_ playlist: Playlist) -> some View {
         @Bindable var playlist = playlist
-        let _ = appState.sequenceVersion   // re-derive the Play affordance when membership changes
+        let _ = appState.sequences.version   // re-derive the Play affordance when membership changes
 
-        // The skipped triage filter leaves no playable sequence, so the Play affordance is hidden.
-        if playlist.filterState.serviceFilter != .skipped {
-            Button {
-                appState.startPlayback(of: playlist)
-            } label: {
-                Label("Play", systemImage: "play.fill")
-            }
-            .disabled(!playlist.hasPlaybackFiles)
-            .help("Play")
+        Button {
+            appState.startPlayback(of: playlist)
+        } label: {
+            Label("Play", systemImage: "play.fill")
         }
+        .disabled(!playlist.sequenceNotEmpty)
+        .help("Play")
 
         Button {
             appState.reshuffle(playlist)

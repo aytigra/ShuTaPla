@@ -54,9 +54,11 @@ extension PlaylistFile {
 
     /// Whether every field this file's type can carry is already cached, so re-extracting
     /// would open the file only to learn nothing new. Audio carries no pixel dimensions;
-    /// images no duration.
+    /// images no duration. A skipped file is wrong-type for its playlist, so its
+    /// duration/dimensions can never be read — only size is recorded, so size alone completes it.
     func hasCompleteMetadata(for mediaType: MediaType) -> Bool {
         guard fileSizeBytes != nil else { return false }
+        if isSkipped { return true }
         switch mediaType {
         case .video: return duration != nil && width != nil && height != nil
         case .audio: return duration != nil

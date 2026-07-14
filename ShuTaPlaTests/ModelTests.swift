@@ -200,11 +200,11 @@ struct ModelTests {
     // MARK: - FilterState coding
 
     @Test func filterStateRoundTripsServiceFilter() throws {
-        let original = FilterState(selectedTags: ["beach"], filterMode: .or, serviceFilter: .skipped)
+        let original = FilterState(selectedTags: ["beach"], filterMode: .or, serviceFilter: .invalidTagging)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(FilterState.self, from: data)
         #expect(decoded == original)
-        #expect(decoded.serviceFilter == .skipped)
+        #expect(decoded.serviceFilter == .invalidTagging)
     }
 
     /// A filter persisted before triage filters were stored has no `serviceFilter` key;
@@ -269,7 +269,6 @@ struct ModelTests {
     @Test(arguments: [
         (ServiceFilter.untagged, "tag.slash", "untagged files"),
         (ServiceFilter.invalidTagging, "exclamationmark.triangle", "files with invalid tagging"),
-        (ServiceFilter.skipped, "nosign", "skipped files"),
     ])
     func serviceFilterDisplay(_ filter: ServiceFilter, _ image: String, _ label: String) {
         #expect(filter.systemImage == image)

@@ -2,10 +2,10 @@
 //  PlaylistPlaybackTests.swift
 //  ShuTaPlaTests
 //
-//  The effective-filter rule, derived store-side on `ModelContext`: `displayFiles` (what file
-//  lists show), `playbackFiles` (what playback walks), and `hasPlaybackFiles`. The triage filter,
-//  when set, overrides the tag filter for all three; playback always drops skipped files, so the
-//  skipped triage filter shows its files but plays none. The derivations fetch with
+//  The effective-filter rule, derived store-side on `ModelContext` and exercised through the
+//  model-resolving `sequenceFiles` / `sequenceNotEmpty`. The triage filter, when set, overrides
+//  the tag filter; skipped (wrong-type) files are excluded from the sequence entirely and reached
+//  only through `skippedSequence`, the review list. The derivations fetch with
 //  `includePendingChanges: false`, so each scenario saves before deriving.
 //
 
@@ -50,24 +50,22 @@ struct PlaylistPlaybackTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4", "untagged.mp4", "invalid [ab].mp4"])
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4", "untagged.mp4", "invalid [ab].mp4"])
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4", "untagged.mp4", "invalid [ab].mp4"])
+        #expect(context.sequenceNotEmpty(in: playlist))
     }
 
-    @Test func tagFilterNarrowsDisplayAndPlayback() throws {
+    @Test func tagFilterNarrowsTheSequence() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
         try context.save()
 
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
+        #expect(context.sequenceNotEmpty(in: playlist))
     }
 
-    @Test func untaggedServiceFilterDrivesDisplayAndPlayback() throws {
+    @Test func untaggedServiceFilterOverridesTagFilter() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
@@ -75,33 +73,30 @@ struct PlaylistPlaybackTests {
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and, serviceFilter: .untagged)
         try context.save()
 
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["untagged.mp4"])
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["untagged.mp4"])
-        #expect(context.hasPlaybackFiles(in: playlist))   // untagged files are playable — loop them to fix
+        #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["untagged.mp4"])
+        #expect(context.sequenceNotEmpty(in: playlist))   // untagged files are playable — loop them to fix
     }
 
-    @Test func invalidTaggingServiceFilterPlaybackHonored() throws {
+    @Test func invalidTaggingServiceFilterDrivesTheSequence() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
         playlist.filterState.serviceFilter = .invalidTagging
         try context.save()
 
-        #expect(context.playbackFiles(of: playlist).map(\.fileName) == ["invalid [ab].mp4"])
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["invalid [ab].mp4"])
+        #expect(context.sequenceNotEmpty(in: playlist))
     }
 
-    @Test func skippedServiceFilterShowsSkippedButPlaysNothing() throws {
+    @Test func skippedFilesAreExcludedFromTheSequenceAndListedForReview() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
-        playlist.filterState.serviceFilter = .skipped
-        try context.save()
 
-        // The file list shows the skipped files for triage, but the playable sequence is
-        // empty — the state the Play affordances guard against.
-        #expect(context.displayFiles(of: playlist).map(\.fileName) == ["skip.jpg"])
-        #expect(context.playbackFiles(of: playlist).isEmpty)
-        #expect(!context.hasPlaybackFiles(in: playlist))
+        // A wrong-type file never enters the sequence (it can't be played); it surfaces only in the
+        // skipped-review list, for delete / show-in-folder / rename.
+        #expect(!context.sequenceFiles(of: playlist).map(\.fileName).contains("skip.jpg"))
+        let skipped = context.skippedSequence(of: playlist).compactMap { context.model(for: $0) as? PlaylistFile }
+        #expect(skipped.map(\.fileName) == ["skip.jpg"])
     }
 }

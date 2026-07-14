@@ -65,10 +65,13 @@ import SwiftData
         return playlist
     }
 
-    /// A coordinator whose mpv channels use the window-free audio engine.
-    private func makeCoordinator(_ bookmarks: BookmarkService) -> PlaybackCoordinator {
+    /// A coordinator whose mpv channels use the window-free audio engine, deriving its sequences
+    /// from `context` through a fresh provider (the app injects a shared one; here each test builds
+    /// its own over its in-memory store).
+    private func makeCoordinator(_ bookmarks: BookmarkService, _ context: ModelContext) -> PlaybackCoordinator {
         PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: bookmarks),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
@@ -83,7 +86,7 @@ import SwiftData
         let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
         let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(video)
@@ -105,7 +108,7 @@ import SwiftData
         let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
         let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(video)
@@ -126,7 +129,7 @@ import SwiftData
         let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
         let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
         coordinator.play(video)
         coordinator.play(audio)
@@ -149,7 +152,7 @@ import SwiftData
         let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
         let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
         coordinator.play(video)
         coordinator.play(audio)
@@ -178,7 +181,7 @@ import SwiftData
         video.playbackState = .stopped
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.reconstruct(image)
@@ -205,10 +208,10 @@ import SwiftData
             files: [("1.mp4", []), ("2.mp4", []), ("3.mp4", [])], in: context
         )
         try context.save()
-        let files = context.playbackFiles(of: playlist)
+        let files = context.sequenceFiles(of: playlist)
         #expect(files.count == 3)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         #expect(coordinator.fileAfter(files[0]) === files[1])
         #expect(coordinator.fileAfter(files[2]) === files[0])    // past the last → first
         #expect(coordinator.fileBefore(files[0]) === files[2])   // before the first → last
@@ -226,10 +229,10 @@ import SwiftData
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
         try context.save()
 
-        let sequence = context.playbackFiles(of: playlist)
+        let sequence = context.sequenceFiles(of: playlist)
         #expect(sequence.map(\.fileName) == ["1.mp4", "3.mp4"])   // city file filtered out
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         #expect(coordinator.fileAfter(sequence[0]) === sequence[1])
         #expect(coordinator.fileAfter(sequence[1]) === sequence[0])   // wraps within matches
     }
@@ -290,7 +293,7 @@ import SwiftData
             files: [("0.jpg", []), ("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
         )
         try context.save()
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
         files[1].cloudStatus = .inCloud
         files[2].cloudStatus = .local        // already on disk — skipped
         files[3].cloudStatus = .downloading
@@ -300,6 +303,7 @@ import SwiftData
         let coordinator = PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
             cloudFileService: cloud,
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
@@ -322,13 +326,14 @@ import SwiftData
         let folder = try makeFolder(["0.jpg", "1.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("0.jpg", []), ("1.jpg", [])], in: context)
         try context.save()
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
         files[1].cloudStatus = .inCloud
 
         var requested: [URL] = []
         let coordinator = PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
             cloudFileService: CloudFileService(requester: { requested.append($0) }),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
@@ -348,7 +353,7 @@ import SwiftData
         let container = try makeContainer()
         let context = container.mainContext
         let file = makeCloudFile("held.jpg", .inCloud, in: context)   // evicted → held pending
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         #expect(coordinator.visualCloudPendingFile == nil)
@@ -416,36 +421,34 @@ import SwiftData
             .image, folder: folder,
             files: [("0.jpg", []), ("1.jpg", []), ("2.jpg", [])], in: context
         )
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
         // Hold scoped access so the coordinator's existence check can resolve the folder.
         #expect(coordinator.folderAccess.begin(for: image) != nil)
 
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
         // The missing middle file is skipped in both directions before any engine sees it.
         #expect(coordinator.fileAfter(files[0]) === files[2])
         #expect(coordinator.fileBefore(files[2]) === files[0])
     }
 
-    @Test func startsARequestedFileOutsideThePlaybackSequence() throws {
+    @Test func ignoresARequestToStartOnASkippedFile() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let folder = try makeFolder(["skip.jpg"])
-        let image = makePlaylist(.image, folder: folder, files: [], in: context)
-        // A skipped file shows in the Manager's display sequence but is dropped from the
-        // playback sequence, so double-clicking it (under the `.skipped` filter) requests a
-        // start at a file `availableFile` can't find in the sequence.
-        let skipped = insertFile("skip.jpg", skipped: true, order: 0, to: image, in: context)
+        let folder = try makeFolder(["skip.jpg", "0.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("0.jpg", [])], in: context)
+        // A skipped (wrong-type) file is never in the playback sequence, so a request to start on
+        // it must be ignored: playback starts on the first playable file instead of loading a
+        // file no engine can play.
+        let skipped = insertFile("skip.jpg", skipped: true, order: 1, to: image, in: context)
         try context.save()
-        #expect(context.playbackSequence(of: image).isEmpty)
+        #expect(!context.sequence(of: image).contains(skipped.persistentModelID))
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image, startingAt: skipped)
-        // The requested file must load rather than the start resolving to nil and the claimed
-        // channel showing nothing.
-        #expect(coordinator.visualCurrentFile?.id == skipped.id)
+        #expect(coordinator.visualCurrentFile?.fileName == "0.jpg")
     }
 
     // MARK: - Player controls surface (Task 14)
@@ -456,7 +459,7 @@ import SwiftData
         let folder = try makeFolder(["i.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.setVolume(image, to: 0.4)
@@ -473,7 +476,7 @@ import SwiftData
         let folder = try makeFolder(["i.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         // Not the active visual channel, so no live timer starts — only the preference.
@@ -491,7 +494,7 @@ import SwiftData
         let folder = try makeFolder(["i.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         #expect(image.preferences.imageFitMode == nil)      // unset → inherits the global default
@@ -507,7 +510,7 @@ import SwiftData
         let folder = try makeFolder(["i.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         // Starts from the inherited global default (Fit); each cycle persists the next mode.
@@ -530,7 +533,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -540,9 +543,10 @@ import SwiftData
         // jumps to the first file that still matches.
         image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
         try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: image)
 
-        let matching = context.playbackFiles(of: image)
+        let matching = context.sequenceFiles(of: image)
         #expect(matching.map(\.fileName) == ["2.jpg", "3.jpg"])
         #expect(coordinator.visualCurrentFile?.id == matching.first?.id)
         #expect(coordinator.visualCurrentFile?.id != firstID)
@@ -558,7 +562,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -581,7 +585,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -592,9 +596,10 @@ import SwiftData
         // so a later advance/seek can't act on a file no longer in the playlist.
         image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
         try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: image)
 
-        #expect(context.playbackFiles(of: image).isEmpty)
+        #expect(context.sequenceFiles(of: image).isEmpty)
         #expect(coordinator.liveVisualPlaylist === image)   // still in Player mode
         #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
     }
@@ -606,7 +611,7 @@ import SwiftData
         let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
         let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         coordinator.play(video)
         coordinator.play(audio)
         coordinator.suppress()
@@ -626,7 +631,7 @@ import SwiftData
         let folder = try makeFolder(["1.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -643,9 +648,9 @@ import SwiftData
         let folder = try makeFolder(["1.jpg", "2.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
         try context.save()
-        let frames = context.playbackFiles(of: image)
+        let frames = context.sequenceFiles(of: image)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -675,9 +680,9 @@ import SwiftData
             files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
         )
         try context.save()
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -696,9 +701,9 @@ import SwiftData
         let folder = try makeFolder(["1.jpg", "2.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", []), ("2.jpg", [])], in: context)
         try context.save()
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -716,7 +721,7 @@ import SwiftData
         let folder = try makeFolder(["1.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -735,7 +740,7 @@ import SwiftData
         let folder = try makeFolder(["1.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -755,9 +760,9 @@ import SwiftData
         let folder = try makeFolder(["a1.mp3", "a2.mp3"])
         let audio = makePlaylist(.audio, folder: folder, files: [("a1.mp3", []), ("a2.mp3", [])], in: context)
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -774,7 +779,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -782,9 +787,10 @@ import SwiftData
 
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
         try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)
 
-        let matching = context.playbackFiles(of: audio)
+        let matching = context.sequenceFiles(of: audio)
         #expect(matching.map(\.fileName) == ["2.mp3", "3.mp3"])
         #expect(coordinator.audioCurrentFile?.id == matching.first?.id)
         #expect(coordinator.audioCurrentFile?.id != firstID)
@@ -797,7 +803,7 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", ["a"]), ("2.mp3", ["a"])], in: context)
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -805,13 +811,14 @@ import SwiftData
 
         audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
         try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)
 
         // Unlike the visual channel (which stays live and empty so the player can show a "no files"
         // placeholder and the user can lift the filter from there), the audio channel has no such
         // placeholder, so an emptied audio sequence stops the playlist outright — easy to restart
         // from the same overlay.
-        #expect(context.playbackFiles(of: audio).isEmpty)
+        #expect(context.sequenceFiles(of: audio).isEmpty)
         #expect(coordinator.liveAudioPlaylist == nil)           // the channel stops
         #expect(audio.playbackState == .stopped)
         #expect(coordinator.audioCurrentFile == nil)
@@ -823,9 +830,9 @@ import SwiftData
         let folder = try makeFolder(["1.mp3", "2.mp3"])
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         // Nothing is playing yet — the extended overlay opened on a restored playlist, or the
@@ -846,7 +853,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -879,6 +886,7 @@ import SwiftData
         let recorder = try RecordingAudioEngine()
         let coordinator = PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )
@@ -893,6 +901,7 @@ import SwiftData
         // channel must stay paused — loading the new file can't silently resume playback.
         audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
         try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)
 
         #expect(coordinator.audioCurrentFile?.fileName == "2.mp3")   // jumped to the survivor
@@ -918,7 +927,7 @@ import SwiftData
         )
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -947,6 +956,7 @@ import SwiftData
         let recorder = try RecordingAudioEngine()
         let coordinator = PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )
@@ -970,9 +980,9 @@ import SwiftData
             files: [("1.jpg", []), ("2.jpg", []), ("3.jpg", [])], in: context
         )
         try context.save()
-        let files = context.playbackFiles(of: image)
+        let files = context.sequenceFiles(of: image)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
@@ -995,9 +1005,10 @@ import SwiftData
         }
     }
 
-    private func makeRecordingCoordinator(_ recorder: RecordingLoadEngine) -> PlaybackCoordinator {
+    private func makeRecordingCoordinator(_ recorder: RecordingLoadEngine, _ context: ModelContext) -> PlaybackCoordinator {
         PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { recorder },
             makeAudioEngine: { recorder }
         )
@@ -1010,12 +1021,12 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 30
         audio.currentFileID = tracks[0].id
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)   // resumes the remembered track, no explicit file
@@ -1029,12 +1040,12 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // No per-playlist preference and the global default is off → no resume.
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 30
         audio.currentFileID = tracks[0].id
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -1051,12 +1062,12 @@ import SwiftData
         // being Stopped.
         audio.playbackState = .playing
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 42
         audio.currentFileID = tracks[0].id
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.reconstruct(audio)   // relaunch's analog: resumes the live channel
@@ -1071,12 +1082,12 @@ import SwiftData
         // A playlist paused at quit returns paused at its file and offset, with no setting needed.
         audio.playbackState = .paused
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 17
         audio.currentFileID = tracks[0].id
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.reconstruct(audio)
@@ -1091,11 +1102,11 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[1].lastPosition = 30
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         // A double-click starting a Stopped playlist is a fresh entry into the file: with the
@@ -1111,11 +1122,11 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // Persistence off (no preference, default off).
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[1].lastPosition = 30
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio, startingAt: tracks[1])
@@ -1129,11 +1140,11 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[1].lastPosition = 45
 
         let recorder = try RecordingLoadEngine()
-        let coordinator = makeRecordingCoordinator(recorder)
+        let coordinator = makeRecordingCoordinator(recorder, context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)                     // live on its channel, on tracks[0]
@@ -1148,9 +1159,9 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)   // loads tracks[0]; its position starts unknown
@@ -1168,10 +1179,10 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         // Persistence off (no preference, default off).
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 99   // a sentinel the write replaces
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -1188,9 +1199,9 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)   // loads tracks[0]; its position starts unknown
@@ -1211,11 +1222,11 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 58
         audio.currentFileID = tracks[0].id
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)            // resumes tracks[0] at 58; the empty file never reports time-pos
@@ -1235,12 +1246,12 @@ import SwiftData
         let audio = makePlaylist(.audio, folder: folder, files: [("1.mp3", []), ("2.mp3", [])], in: context)
         audio.preferences.filePositionPersistence = true
         try context.save()
-        let tracks = context.playbackFiles(of: audio)
+        let tracks = context.sequenceFiles(of: audio)
         tracks[0].lastPosition = 58
         tracks[0].cloudStatus = .inCloud    // evicted → the gate holds the load pending; startFile never runs
         audio.currentFileID = tracks[0].id
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)             // held pending: currentFile set, currentTime still 0
@@ -1257,7 +1268,7 @@ import SwiftData
         // position is kept current for lifecycle resume.
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)
@@ -1272,7 +1283,7 @@ import SwiftData
         audio.preferences.filePositionPersistence = true
         try context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(audio)

@@ -508,6 +508,34 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
     }
 
+    // MARK: - Skipped files
+
+    /// A skipped file is wrong-type for its playlist, so its content can't be decoded into a
+    /// thumbnail. The service returns the placeholder without resolving the bookmark, opening the
+    /// file, or touching the cache, and reports empty metadata — so the gallery keeps its icon and
+    /// the file's size comes solely from the metadata service.
+    @MainActor @Test
+    func skippedFileYieldsNoThumbnailAndNoRead() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)   // a perfectly readable file — only the flag skips it
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let service = ThumbnailService(cacheDirectory: cacheDir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.isSkipped = true
+
+        let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image == nil)                    // no decode → placeholder
+        #expect(result.metadata.fileSizeBytes == nil)   // the file was never opened
+        #expect(result.metadata.fingerprint == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)   // nothing rendered
+    }
+
     // MARK: - Cloud-aware generation
 
     /// An evicted file (`cloudStatus != .local`) whose record carries no fingerprint can't be

@@ -32,7 +32,7 @@ extension AppState {
         // playlist snaps the highlight back to the playing file — the one way to do so without
         // leaving it. Skipped when the resume file is filtered out (or none has played yet).
         if let currentID = playlist.currentFileID,
-           displaySequenceContains(currentID, of: playlist) {
+           sequenceContains(currentID, of: playlist) {
             managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change
@@ -82,7 +82,7 @@ extension AppState {
         // Manager mode) would otherwise leave the engine on files about to be deleted, and
         // its next advance would dereference a destroyed model.
         coordinator.stop(playlist)
-        if managedPlaylist === playlist { setDuplicateSearch(false); managedPlaylist = nil }
+        if managedPlaylist === playlist { exitReviewModes(); managedPlaylist = nil }
         let mediaType = playlist.mediaType
         // A playlist can only sit in its own type's remembered slot, so clearing that one slot
         // covers every reference the delete must drop.
@@ -215,7 +215,7 @@ extension AppState {
         // fetch refaults it in place so the tag UI (which reads `playlist.tagFrequency`) and any
         // `files` walk see the new state. The version bump re-derives the store-side file lists.
         modelContext.refreshFromStore(playlist)
-        sequenceVersion &+= 1
+        sequences.bump()
         // A re-scan can drop either channel's playing file; advance off it just like a delete
         // does, so neither engine holds a file that's no longer in the playlist.
         coordinator.reconcile(playlistThatChanged: playlist)

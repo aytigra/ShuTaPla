@@ -2,11 +2,13 @@
 //  ModelContext+Sequence.swift
 //  ShuTaPla
 //
-//  The order a playlist's file lists show and playback walks, derived store-side. One rule —
+//  The order a playlist's file list shows and playback walks, derived store-side. One rule —
 //  the playlist's *effective filter*: the triage filter when one is set, otherwise the
 //  persisted tag filter — expressed as a `#Predicate` so the store does the filtering, sorts
-//  by `sortOrder`, and returns just the ordered `PersistentIdentifier`s. No whole-set
-//  materialization: a caller resolves only the rows it actually shows via `model(for:)`.
+//  by `sortOrder`, and returns just the ordered `PersistentIdentifier`s. Skipped (wrong-type)
+//  files are excluded from every filter, so one sequence serves both the file list and playback;
+//  the skipped files themselves are reached only through `skippedSequence`, the review tool's list.
+//  No whole-set materialization: a caller resolves only the rows it actually shows via `model(for:)`.
 //
 //  The triage filter and `taggingStatus` ride scalar columns (`isSkipped`,
 //  `taggingStatusCode`) and the tag filter rides the `Tag` relationship, all of which a
@@ -21,22 +23,25 @@ import Foundation
 import SwiftData
 
 extension ModelContext {
-    /// Ordered identifiers a file list shows under the playlist's effective filter: the triage
-    /// filter's set when one is set (untagged / invalid-tagging / skipped), otherwise the
-    /// tag-filtered playable files. Can include skipped files (under the skipped filter).
-    func displaySequence(of playlist: Playlist) -> [PersistentIdentifier] {
-        identifiers(matching: displayPredicate(for: playlist))
+    /// Ordered identifiers a file list shows and playback walks under the playlist's effective
+    /// filter: the triage filter's set when one is set (untagged / invalid-tagging), otherwise the
+    /// tag-filtered files. Skipped files are excluded throughout.
+    func sequence(of playlist: Playlist) -> [PersistentIdentifier] {
+        identifiers(matching: sequencePredicate(for: playlist))
     }
 
-    /// Ordered identifiers playback walks: `displaySequence` with skipped files removed, so
-    /// advancing wraps the playable set. Empty under the skipped filter.
-    func playbackSequence(of playlist: Playlist) -> [PersistentIdentifier] {
-        identifiers(matching: playbackPredicate(for: playlist))
+    /// The playlist's *skipped* files — wrong-type/unplayable rows a scan flagged — in `sortOrder`.
+    /// The skipped-review tool's list, swapped in for `sequence` while its mode is active. Skipped
+    /// files never appear in `sequence`, so this is the only surface that lists them (for delete /
+    /// show-in-folder / rename); they are unplayable, so there is no playback counterpart.
+    func skippedSequence(of playlist: Playlist) -> [PersistentIdentifier] {
+        let pid = playlist.persistentModelID
+        return identifiers(matching: #Predicate { $0.playlist?.persistentModelID == pid && $0.isSkipped })
     }
 
     /// The playlist's *duplicate* files — those whose content fingerprint recurs (count ≥ 2) —
     /// grouped by fingerprint so each duplicate set is adjacent, ordered by fingerprint. The
-    /// find-duplicates tool's sequence, swapped in for `displaySequence` while its mode is active.
+    /// find-duplicates tool's sequence, swapped in for `sequence` while its mode is active.
     /// The grouping is a pass in Swift, not a `#Predicate` sorted by `sortOrder`, so it sits here
     /// rather than in the effective-filter machinery. Only the thumbnail producer fills a
     /// fingerprint, so a file never shown in the gallery (and every file of a list-only audio
@@ -59,47 +64,37 @@ extension ModelContext {
         }
     }
 
-    /// `displaySequence` resolved to models, in order.
+    /// `sequence` resolved to models, in order.
     ///
     /// Test-only helper — must never be used in the app: it faults **every** row of the sequence
     /// into the context on the main actor, exactly the O(folder) materialization the identifier
-    /// sequences exist to avoid. Production holds `displaySequence` and resolves only the rows a
-    /// surface shows via `model(for:)`, or fetches the one row it needs (`displayMember`).
-    func displayFiles(of playlist: Playlist) -> [PlaylistFile] {
-        displaySequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
+    /// sequences exist to avoid. Production holds `sequence` and resolves only the rows a surface
+    /// shows via `model(for:)`, or fetches the one row it needs (`sequenceMember`).
+    func sequenceFiles(of playlist: Playlist) -> [PlaylistFile] {
+        sequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
     }
 
-    /// `playbackSequence` resolved to models, in order.
-    ///
-    /// Test-only helper — must never be used in the app: it faults **every** row of the sequence
-    /// into the context on the main actor. Production walks `playbackSequence` and resolves lazily
-    /// through `model(for:)` (the coordinator's next/previous/start selectors), or fetches the one
-    /// row it needs (`playbackResumeTarget`, `playbackMember`).
-    func playbackFiles(of playlist: Playlist) -> [PlaylistFile] {
-        playbackSequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
-    }
-
-    /// The file a filter change resumes to, resolved store-side: the first playback file whose
-    /// `sortOrder` is at or after `minSortOrder`, wrapping to the first playback file when none
-    /// qualify, `nil` when the playback sequence is empty. At most two one-row fetches — the
-    /// bounded `fetchLimit: 1`, and (only on wrap) the sequence's first identifier — never the
-    /// whole sequence materialized.
-    func playbackResumeTarget(of playlist: Playlist, atOrAfter minSortOrder: Int) -> PlaylistFile? {
+    /// The file a filter change resumes to, resolved store-side: the first sequence file whose
+    /// `sortOrder` is at or after `minSortOrder`, wrapping to the first sequence file when none
+    /// qualify, `nil` when the sequence is empty. At most two one-row fetches — the bounded
+    /// `fetchLimit: 1`, and (only on wrap) the sequence's first identifier — never the whole
+    /// sequence materialized.
+    func resumeTarget(of playlist: Playlist, atOrAfter minSortOrder: Int) -> PlaylistFile? {
         var descriptor = FetchDescriptor<PlaylistFile>(
-            predicate: playbackPredicate(for: playlist, atOrAfter: minSortOrder),
+            predicate: sequencePredicate(for: playlist, atOrAfter: minSortOrder),
             sortBy: [SortDescriptor(\.sortOrder)]
         )
         descriptor.fetchLimit = 1
         descriptor.includePendingChanges = false
         if let bounded = (try? fetch(descriptor))?.first { return bounded }
         // Nothing at or after the bound — wrap to the sequence's first file, already an ordered id.
-        return playbackSequence(of: playlist).first.flatMap { model(for: $0) as? PlaylistFile }
+        return sequence(of: playlist).first.flatMap { model(for: $0) as? PlaylistFile }
     }
 
-    /// Whether `playbackSequence` would contain any file, answered with a `fetchCount` rather
-    /// than building the sequence.
-    func hasPlaybackFiles(in playlist: Playlist) -> Bool {
-        count(playbackPredicate(for: playlist)) > 0
+    /// Whether `sequence` would contain any file, answered with a `fetchCount` rather than
+    /// building the sequence.
+    func sequenceNotEmpty(in playlist: Playlist) -> Bool {
+        count(sequencePredicate(for: playlist)) > 0
     }
 
     /// The playlist's total file count, answered with a `fetchCount` — the sidebar row badge, so
@@ -135,34 +130,19 @@ extension ModelContext {
         return (untagged, invalidTagging, skipped)
     }
 
-    /// The file with app id `fileID` if it survives `playlist`'s effective *display* filter,
-    /// else nil — the display-view membership test for one file (the Visual Overlay's
-    /// current file, a scope/selection re-seed). Resolves just that one file and evaluates the
-    /// effective filter on it, rather than building the whole sequence to scan for it.
-    func displayMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
-        member(fileID, matching: displayPredicate(for: playlist))
-    }
-
-    /// The file with app id `fileID` if it survives `playlist`'s effective *playback* filter,
-    /// else nil — the playback-view counterpart of `displayMember` (the audio overlay's current
-    /// track), so a skipped track is never current.
-    func playbackMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
-        member(fileID, matching: playbackPredicate(for: playlist))
-    }
-
-    /// Resolves the one file with app id `fileID` and returns it only if it satisfies
-    /// `predicate`. The predicate is evaluated in memory on the single resolved model — callers
-    /// read this right after a `persistAndRefresh`, so the live model equals the saved row the
-    /// sequence accessors (`includePendingChanges: false`) would return.
-    private func member(_ fileID: UUID, matching predicate: Predicate<PlaylistFile>) -> PlaylistFile? {
+    /// The file with app id `fileID` if it survives `playlist`'s effective filter, else nil — the
+    /// membership test for one file (a channel's current file, a scope/selection re-seed). Resolves
+    /// just that one file and evaluates the effective filter on it, rather than building the whole
+    /// sequence to scan for it. A skipped file never survives, so it is never a channel's current file.
+    func sequenceMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
         guard let pid = identifier(of: fileID), let file = model(for: pid) as? PlaylistFile,
-              (try? predicate.evaluate(file)) == true else { return nil }
+              (try? sequencePredicate(for: playlist).evaluate(file)) == true else { return nil }
         return file
     }
 
     /// The persistent identifier of the file with app id `fileID`, or nil if none exists — a
-    /// one-row fetch used to resolve a single file (and back the `displayMember`/`playbackMember`
-    /// membership tests) without resolving the whole set.
+    /// one-row fetch used to resolve a single file (and back the `sequenceMember` membership test)
+    /// without resolving the whole set.
     func identifier(of fileID: UUID) -> PersistentIdentifier? {
         var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.id == fileID })
         descriptor.fetchLimit = 1
@@ -184,13 +164,15 @@ extension ModelContext {
         return (try? fetchCount(descriptor)) ?? 0
     }
 
-    // MARK: - Effective-filter predicates
+    // MARK: - Effective-filter predicate
 
-    /// The effective-filter predicate for the file list: triage filter when set, otherwise the
-    /// tag filter (or all non-skipped files when no filter is active). `atOrAfter` adds a lower
-    /// `sortOrder` bound — `.min` (the default) means no bound, so every list/sequence caller keeps
-    /// its behavior; `playbackResumeTarget` passes a real bound to fetch the first file from a point.
-    private func displayPredicate(for playlist: Playlist, atOrAfter minSortOrder: Int = .min) -> Predicate<PlaylistFile> {
+    /// The effective-filter predicate the file list and playback share: triage filter when set,
+    /// otherwise the tag filter (or all non-skipped files when no filter is active). Skipped files
+    /// are excluded throughout — they are never listed or played, only reached via `skippedSequence`.
+    /// `atOrAfter` adds a lower `sortOrder` bound — `.min` (the default) means no bound, so every
+    /// list/sequence caller keeps its behavior; `resumeTarget` passes a real bound to fetch the
+    /// first file from a point.
+    private func sequencePredicate(for playlist: Playlist, atOrAfter minSortOrder: Int = .min) -> Predicate<PlaylistFile> {
         let pid = playlist.persistentModelID
         let filter = playlist.filterState
 
@@ -200,8 +182,6 @@ extension ModelContext {
                 return triagePredicate(pid: pid, code: TaggingStatus.untagged.code, atOrAfter: minSortOrder)
             case .invalidTagging:
                 return triagePredicate(pid: pid, code: TaggingStatus.invalid.code, atOrAfter: minSortOrder)
-            case .skipped:
-                return #Predicate { $0.playlist?.persistentModelID == pid && $0.isSkipped && $0.sortOrder >= minSortOrder }
             }
         }
 
@@ -240,22 +220,12 @@ extension ModelContext {
     }
 
     /// A triage-filter predicate: the playlist's non-skipped files with a given tagging-status
-    /// code. Shared by the untagged / invalid-tagging display arms and their notice-bar counts.
-    /// `atOrAfter` threads the same optional `sortOrder` bound as `displayPredicate`.
+    /// code. Shared by the untagged / invalid-tagging filter arms and their notice-bar counts.
+    /// `atOrAfter` threads the same optional `sortOrder` bound as `sequencePredicate`.
     private func triagePredicate(pid: PersistentIdentifier, code: Int, atOrAfter minSortOrder: Int = .min) -> Predicate<PlaylistFile> {
         #Predicate {
             $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.taggingStatusCode == code
                 && $0.sortOrder >= minSortOrder
         }
-    }
-
-    /// Playback drops skipped files. The skipped triage filter therefore plays nothing; every
-    /// other effective filter already excludes skipped files, so its display predicate is its
-    /// playback predicate. `atOrAfter` threads through to the display predicate's `sortOrder` bound.
-    private func playbackPredicate(for playlist: Playlist, atOrAfter minSortOrder: Int = .min) -> Predicate<PlaylistFile> {
-        if playlist.filterState.serviceFilter == .skipped {
-            return #Predicate { _ in false }
-        }
-        return displayPredicate(for: playlist, atOrAfter: minSortOrder)
     }
 }

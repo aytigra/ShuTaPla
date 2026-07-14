@@ -34,24 +34,27 @@ final class MediaMetadataService {
         let found = await Self.extract(
             bookmark: playlist.folderBookmark,
             relativePath: file.relativePath,
-            mediaType: playlist.mediaType
+            mediaType: playlist.mediaType,
+            isSkipped: file.isSkipped
         )
         file.merge(found)
         return file.cachedMetadata
     }
 
     /// Resolves the file and reads its metadata: on-disk size for every type, plus
-    /// duration and dimensions from the type-appropriate decoder. Returns an empty
-    /// bundle when the file is gone.
+    /// duration and dimensions from the type-appropriate decoder. A skipped file is
+    /// wrong-type for its playlist, so the decoder can't read it — `isSkipped` records
+    /// only the size and skips the decode. Returns an empty bundle when the file is gone.
     ///
     /// `@concurrent` so the resolve + decode lands on the cooperative pool: under
     /// MainActor-default isolation a plain `nonisolated async` would run on the caller's
     /// actor (the main actor for `metadata(for:in:)`), freezing the UI while the file
     /// list populates uncached metadata.
-    @concurrent nonisolated static func extract(bookmark: Data, relativePath: String, mediaType: MediaType) async -> MediaMetadata {
+    @concurrent nonisolated static func extract(bookmark: Data, relativePath: String, mediaType: MediaType, isSkipped: Bool) async -> MediaMetadata {
         (try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
             var metadata = MediaMetadata()
             metadata.fileSizeBytes = fileURL.fileSizeBytes
+            guard !isSkipped else { return metadata }
             switch mediaType {
             case .image:
                 if let size = fileURL.imagePixelSize {

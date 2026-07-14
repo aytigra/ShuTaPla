@@ -15,16 +15,16 @@ extension AppState {
 
     // MARK: - Manager center list
 
-    /// The managed playlist's display-ordered file identifiers under its effective filter — the
-    /// Manager center list/gallery, resolved row-by-row as it scrolls. In find-duplicates mode it
-    /// derives the duplicate grouping instead; routing through the same memoization keeps it a live
-    /// derivation, so a delete re-derives it and collapses a resolved group rather than going stale.
+    /// The managed playlist's ordered file identifiers under its effective filter — the Manager
+    /// center list/gallery, resolved row-by-row as it scrolls. A transient review mode swaps the
+    /// derivation: find-duplicates derives the duplicate grouping, skipped-review lists the skipped
+    /// files. Routing all three through the same memoization keeps it a live derivation, so a delete
+    /// re-derives it and collapses a resolved group rather than going stale.
     var managerFileIDs: [PersistentIdentifier] {
-        memoizedSequence(&managerFileIDsMemo, for: managedPlaylist) {
-            duplicateSearchActive
-                ? modelContext.duplicateSequence(of: $0)
-                : modelContext.displaySequence(of: $0)
-        }
+        guard let playlist = managedPlaylist else { return [] }
+        if duplicateSearchActive { return sequences.duplicateSequence(of: playlist) }
+        if skippedReviewActive { return sequences.skippedSequence(of: playlist) }
+        return sequences.sequence(of: playlist)
     }
 
     /// Enters the find-duplicates mode of the Manager center for `playlist` (making it managed if
@@ -38,24 +38,49 @@ extension AppState {
         setDuplicateSearch(true)
     }
 
-    /// Enters or leaves the find-duplicates mode. A no-op when already in the requested state;
-    /// otherwise clears the selection (made against the other sequence) and bumps `sequenceVersion`
-    /// so `managerFileIDs` re-derives through the swapped closure. Filter edits and a managed
-    /// switch call this to leave; a delete only bumps the version, so it recomputes *within* the
-    /// mode and collapses a resolved group instead of exiting.
+    /// Enters the skipped-review mode of the Manager center for `playlist` (already the managed
+    /// playlist — the center notice bar's "N skipped").
+    func reviewSkipped(in playlist: Playlist) {
+        if managedPlaylist !== playlist { setManaged(playlist) }
+        setSkippedReview(true)
+    }
+
+    /// Enters or leaves the find-duplicates review mode, exiting skipped-review when it enters.
     func setDuplicateSearch(_ active: Bool) {
-        guard active != duplicateSearchActive else { return }
-        duplicateSearchActive = active
+        setReviewMode(duplicates: active, skipped: active ? false : skippedReviewActive)
+    }
+
+    /// Enters or leaves the skipped-review mode, exiting find-duplicates when it enters.
+    func setSkippedReview(_ active: Bool) {
+        setReviewMode(duplicates: active ? false : duplicateSearchActive, skipped: active)
+    }
+
+    /// Leaves whichever review mode is active — the exit a filter edit, a managed-playlist switch,
+    /// and a scope switch share.
+    func exitReviewModes() {
+        setReviewMode(duplicates: false, skipped: false)
+    }
+
+    /// Applies the two mutually-exclusive review-mode flags together. A no-op when neither changes;
+    /// otherwise clears the selection (made against the outgoing sequence) and bumps the sequence
+    /// version so `managerFileIDs` re-derives through the swapped mode. A delete only bumps the
+    /// version, so it recomputes *within* the mode and collapses a resolved group instead of exiting.
+    private func setReviewMode(duplicates: Bool, skipped: Bool) {
+        guard duplicates != duplicateSearchActive || skipped != skippedReviewActive else { return }
+        duplicateSearchActive = duplicates
+        skippedReviewActive = skipped
         managerSelection = []
-        sequenceVersion &+= 1
+        sequences.bump()
     }
 
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
     var managerScrollToken: Int { scrollSelectionToken }
 
     /// A double-click in the Manager center: a visual playlist enters the fullscreen player at
-    /// the file; an audio playlist starts the audio channel there, staying in Manager.
+    /// the file; an audio playlist starts the audio channel there, staying in Manager. A no-op in
+    /// skipped-review — its files are wrong-type/unplayable, so the review surface is list-only.
     func playFromManager(of playlist: Playlist, startingAt file: PlaylistFile) {
+        guard !skippedReviewActive else { return }
         if playlist.mediaType == .audio {
             coordinator.play(playlist, startingAt: file)
         } else {
@@ -66,61 +91,46 @@ extension AppState {
     // MARK: - Channel-derived surfaces
 
     /// The audio channel playlist's file identifiers under its effective filter — the audio
-    /// overlay's list, resolved row-by-row as it scrolls. This is the *playback* sequence, so
-    /// skipped tracks never appear: the audio overlay is a transport list (no triage toggles),
-    /// and a track the engine won't play has no place in it. Under the Skipped filter the list
-    /// is therefore empty. The service filter set in Manager still applies (e.g. Untagged
-    /// narrows the channel to its untagged playable tracks).
+    /// overlay's list, resolved row-by-row as it scrolls. The service filter set in Manager still
+    /// applies (e.g. Untagged narrows the channel to its untagged tracks).
     var audioChannelFileIDs: [PersistentIdentifier] {
-        memoizedSequence(&audioChannelFileIDsMemo, for: audioChannelPlaylist) {
-            modelContext.playbackSequence(of: $0)
-        }
+        guard let playlist = audioChannelPlaylist else { return [] }
+        return sequences.sequence(of: playlist)
     }
 
-    /// The visual channel playlist's display-ordered file identifiers — the Visual
-    /// Overlay's list, resolved row-by-row. This is the *display* sequence (it keeps skipped
-    /// files under the Skipped filter), because the Visual Overlay is an editing surface
-    /// where skipped rows are triaged and un-skipped.
+    /// The visual channel playlist's file identifiers — the Visual Overlay's list, resolved
+    /// row-by-row.
     var visualChannelFileIDs: [PersistentIdentifier] {
-        memoizedSequence(&visualChannelFileIDsMemo, for: coordinator.liveVisualPlaylist) {
-            modelContext.displaySequence(of: $0)
-        }
+        guard let playlist = coordinator.liveVisualPlaylist else { return [] }
+        return sequences.sequence(of: playlist)
     }
 
     /// The audio channel's current track — the audio overlay's analog of `managerSelection`.
     /// Resolved from the playlist's persisted `currentFileID`, not the live engine, so it
     /// survives Stop: a stopped audio playlist still shows (and resumes from) where it left off.
-    /// `nil` when the remembered file is filtered out of the playback view.
+    /// `nil` when the remembered file is filtered out of the sequence.
     var currentAudioFile: PlaylistFile? {
-        _ = sequenceVersion
-        return currentFile(of: audioChannelPlaylist, view: .playback)
+        _ = sequences.version
+        return currentFile(of: audioChannelPlaylist)
     }
 
     /// The visual channel's current file — the Visual Overlay's analog of
     /// `currentAudioFile`. Resolved from the playing playlist's persisted `currentFileID`, not
     /// the live engine, so it's available synchronously when the overlay's file list re-centers
     /// after a playlist switch (the video engine reports its current file asynchronously).
-    /// `nil` when the remembered file is filtered out of the display view.
+    /// `nil` when the remembered file is filtered out of the sequence.
     var currentVisualFile: PlaylistFile? {
-        _ = sequenceVersion
-        return currentFile(of: coordinator.liveVisualPlaylist, view: .display)
+        _ = sequences.version
+        return currentFile(of: coordinator.liveVisualPlaylist)
     }
-
-    /// Which effective-filter view a channel's current file is tested against: the audio overlay
-    /// is a transport list (playback view, no skipped tracks); the Visual Overlay is an
-    /// editing surface (display view, keeps skipped rows under the Skipped filter).
-    private enum SequenceView { case display, playback }
 
     /// A live channel's current/last file, resolved from its playlist's persisted `currentFileID`
     /// and returned only if it survives the playlist's effective filter — the shared core of
     /// `currentAudioFile`/`currentVisualFile`. Resolves only that one file (no whole-sequence
     /// materialization).
-    private func currentFile(of playlist: Playlist?, view: SequenceView) -> PlaylistFile? {
+    private func currentFile(of playlist: Playlist?) -> PlaylistFile? {
         guard let playlist, let id = playlist.currentFileID else { return nil }
-        switch view {
-        case .display: return modelContext.displayMember(id, of: playlist)
-        case .playback: return modelContext.playbackMember(id, of: playlist)
-        }
+        return modelContext.sequenceMember(id, of: playlist)
     }
 
     // MARK: - Starting & exiting playback

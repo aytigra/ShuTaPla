@@ -105,7 +105,7 @@ struct FileCollectionView: View {
     var body: some View {
         ScrollViewReader { proxy in
             // Bind the sequence once so the ForEach and the empty-state overlay share it rather
-            // than reading `managerFileIDs` twice. Reading it here registers the `sequenceVersion`
+            // than reading `managerFileIDs` twice. Reading it here registers the `sequences.version`
             // Observation dependency that drives re-renders.
             let ids = visibleFileIDs
             ScrollView {

@@ -84,6 +84,10 @@ final class ThumbnailService {
     /// the caller falls back to the values persisted on the model). `maxPixelSize` is the
     /// longest edge in pixels.
     func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> (image: NSImage?, metadata: MediaMetadata) {
+        // A skipped file is wrong-type for its playlist: the decoder can't read it, so there is no
+        // thumbnail to render. Keep the placeholder icon without resolving the bookmark or opening
+        // the file — its size comes from the metadata service, which reads that alone.
+        guard !file.isSkipped else { return (nil, MediaMetadata()) }
         let bookmark = playlist.folderBookmark
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video

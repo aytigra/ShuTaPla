@@ -117,10 +117,11 @@ import SwiftData
         return playlist
     }
 
-    private func makeCoordinator(_ bookmarks: BookmarkService) -> PlaybackCoordinator {
+    private func makeCoordinator(_ bookmarks: BookmarkService, _ context: ModelContext) -> PlaybackCoordinator {
         // Image-only here, but the mpv slots stay window-free in case the channel is probed.
         PlaybackCoordinator(
             folderAccess: ScopedFolderAccess(bookmarkService: bookmarks),
+            sequences: PlaybackSequences(modelContext: context),
             makeVideoEngine: { try AudioPlaybackEngine() },
             makeAudioEngine: { try AudioPlaybackEngine() }
         )
@@ -132,7 +133,7 @@ import SwiftData
         let folder = try makeFolder(["img0.jpg", "img1.jpg", "img2.jpg"])
         let playlist = makeImagePlaylist(tags: [], folder: folder, in: context)
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(playlist)
@@ -151,7 +152,7 @@ import SwiftData
         playlist.filterState = FilterState(selectedTags: ["a"], filterMode: .and)   // no saved search → ad-hoc
         try? context.save()
 
-        let coordinator = makeCoordinator(BookmarkService())
+        let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(playlist)

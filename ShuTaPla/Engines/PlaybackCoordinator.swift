@@ -11,7 +11,7 @@
 //  were Playing, leaving Paused ones paused.
 //
 //  It is the engines' `PlaybackSource`: an engine asks it for the next/previous
-//  file (the owning playlist's `playbackSequence`, found from the current file's
+//  file (the owning playlist's `sequence`, found from the current file's
 //  `playlist`) and for a URL to load, resolved through the folder's scoped-access
 //  session. The mpv engines are built on first use so an images-only or audio-only
 //  session never spins up an unused libmpv instance.
@@ -80,6 +80,12 @@ final class PlaybackCoordinator: PlaybackSource {
     /// whichever playlist is live on it.
     let cloudFileService: CloudFileService
 
+    /// The shared sequence provider. The find-target reads (`startFile`, `fileAfter`/`fileBefore`,
+    /// `jump`, `reconcile`) and the prefetch read in `setCurrentFile` all resolve a playlist's
+    /// sequence through it, so within one synchronous advance they hit a single memoized entry —
+    /// the same one the Manager and overlays bind to.
+    let sequences: PlaybackSequences
+
     /// The repeating "write the live position" loop, run while a timeline channel plays so a
     /// crash or hard quit still leaves a recent resume point. Started lazily, cancelled on shutdown.
     var positionPersistTask: Task<Void, Never>?
@@ -98,6 +104,7 @@ final class PlaybackCoordinator: PlaybackSource {
         folderAccess: ScopedFolderAccess,
         globalSettings: GlobalSettings = GlobalSettings(),
         cloudFileService: CloudFileService = CloudFileService(),
+        sequences: PlaybackSequences,
         imageEngine: ImagePlaybackEngine = ImagePlaybackEngine(),
         makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try VideoPlaybackEngine() },
         makeAudioEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() }
@@ -105,6 +112,7 @@ final class PlaybackCoordinator: PlaybackSource {
         self.folderAccess = folderAccess
         self.globalSettings = globalSettings
         self.cloudFileService = cloudFileService
+        self.sequences = sequences
         self.imageEngine = imageEngine
         self.makeVideoEngine = makeVideoEngine
         self.makeAudioEngine = makeAudioEngine
@@ -354,20 +362,19 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// The file to start at: the explicit request, else the remembered current file if it is still
     /// in the sequence, else the first file — then skipped forward to the next available file, so a
-    /// missing local start never reaches an engine.
+    /// missing local start never reaches an engine. A `requested` file outside the sequence — a
+    /// skipped (wrong-type) file — is ignored rather than force-loaded: playback only ever walks
+    /// playable files, so it starts at the first playable file instead.
     private func startFile(for playlist: Playlist, requested: PlaylistFile?) -> PlaylistFile? {
-        let ids = playlist.playbackSequence
-        let currentID = playlist.currentFileID
-            .flatMap { playlist.modelContext?.identifier(of: $0) }
-            .flatMap { ids.contains($0) ? $0 : nil }
-        guard let preferred = requested?.persistentModelID ?? currentID ?? ids.first else { return nil }
-        // A requested file outside the playback sequence (a skipped file started under the
-        // `.skipped` filter) isn't found by `availableFile`; fall back to it as `jump` does so it
-        // still plays rather than the claimed channel loading nothing.
+        let ids = sequences.sequence(of: playlist)
+        let inSequence = { (id: PersistentIdentifier?) in id.flatMap { ids.contains($0) ? $0 : nil } }
+        let requestedID = inSequence(requested?.persistentModelID)
+        let currentID = inSequence(playlist.currentFileID.flatMap { playlist.modelContext?.identifier(of: $0) })
+        guard let preferred = requestedID ?? currentID ?? ids.first else { return nil }
         return Self.availableFile(
             in: ids, from: preferred, forward: true, includeStart: true,
             resolve: resolveFile(in: playlist), isAvailable: isAvailable
-        ) ?? requested
+        )
     }
 
     /// mpv volume (0–100) from the playlist's stored 0.0–1.0 preference.

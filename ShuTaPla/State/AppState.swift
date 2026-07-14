@@ -27,6 +27,11 @@ final class AppState {
     let modelContext: ModelContext
     let fileSystem: FileSystemProviding
 
+    /// The shared sequence provider: owns the memoized file-ID sequences and their version counter,
+    /// injected into the coordinator so its engine-facing reads reuse the same cache the Manager and
+    /// overlays derive against. `persistAndRefresh` bumps it after every persisted mutation.
+    let sequences: PlaybackSequences
+
     /// Security-scoped folder access: the coordinator's per-playlist playback sessions and the
     /// file-edit flows' one-shot editing access, over one reference-counted `BookmarkService`.
     let folderAccess: ScopedFolderAccess
@@ -103,10 +108,14 @@ final class AppState {
     /// The tag inspector reads this.
     var managerSelection: Set<UUID> = []
 
-    /// True while the Manager center shows the find-duplicates grouping instead of the ordinary
-    /// display sequence — a transient, runtime-only mode (never persisted). Set through
-    /// `setDuplicateSearch`; cleared by any filter edit and by a managed-playlist switch.
+    /// The two transient Manager review modes — find-duplicates and skipped-review — each a
+    /// runtime-only swap of the center sequence (never persisted), mutually exclusive. Set through
+    /// `setDuplicateSearch` / `setSkippedReview`; both cleared by `exitReviewModes` on any filter
+    /// edit, managed-playlist switch, or scope switch. Skipped-review lists the wrong-type files a
+    /// scan flagged (delete / show-in-folder / rename only) — they are unplayable, never in the
+    /// ordinary sequence.
     var duplicateSearchActive = false
+    var skippedReviewActive = false
 
     /// Bumped by `manage` to ask the file list to scroll its selection into view,
     /// even when the selection itself didn't change — so re-clicking the current
@@ -117,29 +126,6 @@ final class AppState {
     /// `playOnAudioChannel` so the extended overlay's file list scrolls the current track
     /// into view when a playlist is (re-)selected while the overlay is already open.
     var audioScrollToken = 0
-
-    /// Bumped after every persisted mutation that can change a file sequence's membership or
-    /// order. The store-side identifier accessors (`managerFileIDs`, `visualChannelFileIDs`,
-    /// `audioChannelFileIDs`) read it so SwiftUI re-derives them on the change: their fetches use
-    /// `includePendingChanges: false` and aren't tracked by Observation on their own, unlike a
-    /// walk over the `files` relationship would be.
-    var sequenceVersion = 0
-
-    /// One memoized file-ID sequence: the identifiers plus the `sequenceVersion` and source
-    /// playlist they were derived against, so `memoizedSequence` can reuse them while both match.
-    struct SequenceMemo {
-        var version: Int
-        var playlistID: PersistentIdentifier?
-        var ids: [PersistentIdentifier]
-    }
-
-    // Per-accessor memo slots for the whole-playlist sequence fetches in `AppState+Playback`
-    // (`managerFileIDs`, `audioChannelFileIDs`, `visualChannelFileIDs`). `@ObservationIgnored`:
-    // caching is not a tracked write — `sequenceVersion`, read inside `memoizedSequence`, is the
-    // Observation gate. Each accessor reads a single playlist per pass, so one slot each suffices.
-    @ObservationIgnored var managerFileIDsMemo: SequenceMemo?
-    @ObservationIgnored var audioChannelFileIDsMemo: SequenceMemo?
-    @ObservationIgnored var visualChannelFileIDsMemo: SequenceMemo?
 
     /// A user-facing message when persisting a mutation fails. Set by `persistAndRefresh` when the
     /// save throws; the failed edit is rolled back so it can't be flushed by a later save, and the
@@ -222,10 +208,13 @@ final class AppState {
         let folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService, prompt: FolderReaccessPanel())
         self.folderAccess = folderAccess
         self.cloudFileService = cloudFileService
+        let sequences = PlaybackSequences(modelContext: modelContext)
+        self.sequences = sequences
         self.coordinator = PlaybackCoordinator(
             folderAccess: folderAccess,
             globalSettings: settings,
             cloudFileService: cloudFileService,
+            sequences: sequences,
             makeVideoEngine: makeVideoEngine
         )
         self.preview = MediaPreview(
@@ -245,7 +234,7 @@ final class AppState {
 
     // MARK: - Persist / fetch plumbing
 
-    /// Saves pending changes and bumps `sequenceVersion`, so the store-side derivations (which
+    /// Saves pending changes and bumps the sequence version, so the store-side derivations (which
     /// ignore pending changes) see the change and re-derive. Mutation paths call this once they
     /// have reshaped file membership, order, tags, or triage/filter state — and before any
     /// coordinator reconcile/advance that re-derives a sequence.
@@ -262,28 +251,7 @@ final class AppState {
             modelContext.rollback()
             saveError = Self.saveErrorText(error.localizedDescription)
         }
-        sequenceVersion &+= 1
-    }
-
-    /// Returns the identifier sequence `compute(playlist)` memoized in `slot`, re-running the
-    /// store fetch only when a persisted mutation bumped `sequenceVersion` or the source playlist
-    /// changed — so repeated reads within one render pass reuse the last result instead of
-    /// re-fetching the whole sequence. Reading `sequenceVersion` here is the Observation dependency
-    /// that drives re-derivation, exactly as the bare `_ = sequenceVersion` gate did before, and it
-    /// is no staler: every mutation that changes a sequence bumps that version.
-    func memoizedSequence(
-        _ slot: inout SequenceMemo?,
-        for playlist: Playlist?,
-        compute: (Playlist) -> [PersistentIdentifier]
-    ) -> [PersistentIdentifier] {
-        _ = sequenceVersion
-        let id = playlist?.persistentModelID
-        if let slot, slot.version == sequenceVersion, slot.playlistID == id {
-            return slot.ids
-        }
-        let ids = playlist.map(compute) ?? []
-        slot = SequenceMemo(version: sequenceVersion, playlistID: id, ids: ids)
-        return ids
+        sequences.bump()
     }
 
     /// The user-facing message the app-root alert presents for a save failure, wrapping the
@@ -300,10 +268,10 @@ final class AppState {
         modelContext.model(for: id) as? PlaylistFile
     }
 
-    /// Whether `fileID` survives `playlist`'s effective display filter — a store-side membership
-    /// test that resolves only that one file, rather than materializing the whole sequence.
-    func displaySequenceContains(_ fileID: UUID, of playlist: Playlist) -> Bool {
-        modelContext.displayMember(fileID, of: playlist) != nil
+    /// Whether `fileID` survives `playlist`'s effective filter — a store-side membership test that
+    /// resolves only that one file, rather than materializing the whole sequence.
+    func sequenceContains(_ fileID: UUID, of playlist: Playlist) -> Bool {
+        modelContext.sequenceMember(fileID, of: playlist) != nil
     }
 
     /// The selected manager files (the small selection set), resolved from the store in

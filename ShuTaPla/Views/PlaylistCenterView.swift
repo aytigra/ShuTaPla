@@ -108,13 +108,15 @@ struct PlaylistCenterView: View {
 
     // MARK: - Counter notices
 
-    /// The find-duplicates banner while that mode is active, otherwise the triage counts.
+    /// A review mode's banner while one is active, otherwise the triage counts.
     @ViewBuilder
     private func noticeBar(_ playlist: Playlist) -> some View {
-        let _ = appState.sequenceVersion   // re-derive the counts (or the mode) when the sequence changes
+        let _ = appState.sequences.version   // re-derive the counts (or the mode) when the sequence changes
         if cacheOverLimit { cacheBanner }
         if appState.duplicateSearchActive {
             duplicateNotice
+        } else if appState.skippedReviewActive {
+            skippedReviewNotice
         } else {
             serviceFilterNotices(playlist)
         }
@@ -154,17 +156,40 @@ struct PlaylistCenterView: View {
         Divider()
     }
 
-    /// Untagged / invalid-tagging / skipped counts. Each acts as a toggle for the
-    /// matching service filter, which overrides the tag filter while active.
+    /// Signals the skipped-review mode and gives an explicit way out; a filter interaction or
+    /// playlist switch also leaves it.
+    @ViewBuilder
+    private var skippedReviewNotice: some View {
+        HStack(spacing: 8) {
+            Label("Showing skipped", systemImage: "nosign")
+            Spacer()
+            Button("Done") { appState.setSkippedReview(false) }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        Divider()
+    }
+
+    /// Untagged / invalid-tagging counts each toggle the matching service filter (which overrides
+    /// the tag filter while active); the skipped count enters the skipped-review mode instead —
+    /// skipped files are wrong-type/unplayable, reviewed as a list rather than filtered into playback.
     @ViewBuilder
     private func serviceFilterNotices(_ playlist: Playlist) -> some View {
         let (untagged, invalid, skipped) = playlist.serviceFilterCounts
 
         if untagged > 0 || invalid > 0 || skipped > 0 {
             HStack(spacing: 8) {
-                if untagged > 0 { notice("\(untagged) untagged", filter: .untagged, on: playlist) }
-                if invalid > 0 { notice("\(invalid) invalid tagging", filter: .invalidTagging, on: playlist) }
-                if skipped > 0 { notice("\(skipped) skipped", filter: .skipped, on: playlist) }
+                if untagged > 0 { filterNotice("\(untagged) untagged", filter: .untagged, on: playlist) }
+                if invalid > 0 { filterNotice("\(invalid) invalid tagging", filter: .invalidTagging, on: playlist) }
+                if skipped > 0 {
+                    notice("\(skipped) skipped", systemImage: "nosign", isActive: false, help: "Review skipped files") {
+                        appState.reviewSkipped(in: playlist)
+                    }
+                }
                 Spacer()
             }
             .font(.caption)
@@ -174,18 +199,25 @@ struct PlaylistCenterView: View {
         }
     }
 
-    private func notice(_ text: String, filter: ServiceFilter, on playlist: Playlist) -> some View {
+    private func filterNotice(_ text: String, filter: ServiceFilter, on playlist: Playlist) -> some View {
         let isActive = playlist.filterState.serviceFilter == filter
-        return Button {
+        return notice(text, systemImage: filter.systemImage, isActive: isActive,
+                      help: isActive ? "Show all files" : "Show only these") {
             appState.toggleServiceFilter(filter, on: playlist)
-        } label: {
-            Label(text, systemImage: filter.systemImage)
+        }
+    }
+
+    private func notice(
+        _ text: String, systemImage: String, isActive: Bool, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(text, systemImage: systemImage)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(isActive ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-        .help(isActive ? "Show all files" : "Show only these")
+        .help(help)
     }
 }

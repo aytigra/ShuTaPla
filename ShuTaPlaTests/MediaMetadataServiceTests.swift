@@ -71,7 +71,7 @@ import UniformTypeIdentifiers
     @Test func extractReturnsEmptyForMissingFile() async throws {
         let bookmark = try BookmarkService.makeBookmark(for: Self.videosDirectory)
         let metadata = await MediaMetadataService.extract(
-            bookmark: bookmark, relativePath: "does-not-exist.mp4", mediaType: .video
+            bookmark: bookmark, relativePath: "does-not-exist.mp4", mediaType: .video, isSkipped: false
         )
         #expect(metadata.duration == nil)
         #expect(metadata.width == nil)
@@ -88,7 +88,7 @@ import UniformTypeIdentifiers
         let url = try Self.sample(prefix: prefix)
         let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
         let metadata = await MediaMetadataService.extract(
-            bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video
+            bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: false
         )
         #expect(try #require(metadata.duration) > 0)
         #expect(try #require(metadata.width) > 0)
@@ -104,11 +104,26 @@ import UniformTypeIdentifiers
         let bookmark = try BookmarkService.makeBookmark(for: directory)
 
         let metadata = await MediaMetadataService.extract(
-            bookmark: bookmark, relativePath: fileName, mediaType: .image
+            bookmark: bookmark, relativePath: fileName, mediaType: .image, isSkipped: false
         )
         #expect(metadata.width == 64)
         #expect(metadata.height == 48)
         #expect(metadata.duration == nil)
+        #expect(try #require(metadata.fileSizeBytes) > 0)
+    }
+
+    // A skipped file is wrong-type for its playlist, so the type decoder can't read it. `extract`
+    // records only the on-disk size and skips the decode entirely — no duration, no dimensions —
+    // even for a real video that would otherwise decode fully.
+    @Test func extractReadsOnlySizeForSkippedFile() async throws {
+        let url = try Self.sample(prefix: "h264")
+        let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
+        let metadata = await MediaMetadataService.extract(
+            bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: true
+        )
+        #expect(metadata.duration == nil)
+        #expect(metadata.width == nil)
+        #expect(metadata.height == nil)
         #expect(try #require(metadata.fileSizeBytes) > 0)
     }
 
@@ -167,6 +182,18 @@ import UniformTypeIdentifiers
         file.fileSizeBytes = nil
         #expect(!file.hasCompleteMetadata(for: .audio))
         #expect(!file.hasCompleteMetadata(for: .image))
+    }
+
+    // A skipped file is wrong-type for its playlist, so its duration/dimensions can never be read;
+    // only size is ever recorded for it. It is complete the moment the size is known — otherwise the
+    // metadata service would re-open it on every display forever, chasing fields it can't obtain.
+    @MainActor @Test func skippedFileCompleteOnceSized() throws {
+        let file = PlaylistFile(relativePath: "a", fileName: "a")
+        file.isSkipped = true
+
+        #expect(!file.hasCompleteMetadata(for: .video))   // no size yet → still incomplete
+        file.fileSizeBytes = 1
+        #expect(file.hasCompleteMetadata(for: .video))     // size alone completes it, despite no duration/dims
     }
 
     // MARK: - Model-facing caching

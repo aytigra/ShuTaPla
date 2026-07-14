@@ -2,10 +2,10 @@
 //  SequenceStoreTests.swift
 //  ShuTaPlaTests
 //
-//  Task 17 (Stage B) — the store-side derivation on `ModelContext`: ordered display/playback
-//  identifiers and the triage counts, under no filter, each service filter, and tag AND/OR.
-//  The fetches use `includePendingChanges: false`, so every scenario saves before deriving; a
-//  separate case pins that an unsaved insert is not yet visible.
+//  Task 17 (Stage B) — the store-side derivation on `ModelContext`: the ordered sequence
+//  identifiers, the skipped-review list, and the triage counts, under no filter, each service
+//  filter, and tag AND/OR. The fetches use `includePendingChanges: false`, so every scenario
+//  saves before deriving; a separate case pins that an unsaved insert is not yet visible.
 //
 
 import Testing
@@ -56,9 +56,8 @@ struct SequenceStoreTests {
         let playlist = try seededPlaylist(in: context)
 
         let nonSkipped = ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"]
-        #expect(names(context.displaySequence(of: playlist), in: context) == nonSkipped)
-        #expect(names(context.playbackSequence(of: playlist), in: context) == nonSkipped)
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(names(context.sequence(of: playlist), in: context) == nonSkipped)
+        #expect(context.sequenceNotEmpty(in: playlist))
 
         let counts = context.serviceFilterCounts(for: playlist)
         #expect(counts.untagged == 1)
@@ -73,21 +72,24 @@ struct SequenceStoreTests {
 
         playlist.filterState.serviceFilter = .untagged
         try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == ["untagged.jpg"])
-        #expect(names(context.playbackSequence(of: playlist), in: context) == ["untagged.jpg"])
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(names(context.sequence(of: playlist), in: context) == ["untagged.jpg"])
+        #expect(context.sequenceNotEmpty(in: playlist))
 
         playlist.filterState.serviceFilter = .invalidTagging
         try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == ["invalid [ab].jpg"])
-        #expect(names(context.playbackSequence(of: playlist), in: context) == ["invalid [ab].jpg"])
-        #expect(context.hasPlaybackFiles(in: playlist))
+        #expect(names(context.sequence(of: playlist), in: context) == ["invalid [ab].jpg"])
+        #expect(context.sequenceNotEmpty(in: playlist))
+    }
 
-        playlist.filterState.serviceFilter = .skipped
-        try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == ["skip.txt"])
-        #expect(context.playbackSequence(of: playlist).isEmpty)
-        #expect(!context.hasPlaybackFiles(in: playlist))
+    @Test func skippedSequenceListsSkippedFilesAbsentFromTheSequence() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = try seededPlaylist(in: context)
+
+        // The skipped file is the review tool's only surface — it never appears in the ordinary
+        // sequence (no filter shows it), so a wrong-type file is listed for triage but not played.
+        #expect(names(context.skippedSequence(of: playlist), in: context) == ["skip.txt"])
+        #expect(!names(context.sequence(of: playlist), in: context).contains("skip.txt"))
     }
 
     @Test func tagOrFilterMatchesAnySelectedTag() throws {
@@ -98,7 +100,7 @@ struct SequenceStoreTests {
         playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .or)
         try context.save()
         // OR matches any of beach/sunny: all three tagged files.
-        #expect(names(context.displaySequence(of: playlist), in: context)
+        #expect(names(context.sequence(of: playlist), in: context)
             == ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg"])
     }
 
@@ -110,7 +112,7 @@ struct SequenceStoreTests {
         playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .and)
         try context.save()
         // AND matches files carrying both tags: only the doubly-tagged file.
-        #expect(names(context.displaySequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
+        #expect(names(context.sequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
     }
 
     @Test func tagNotAnyFilterExcludesEverySelectedTag() throws {
@@ -122,7 +124,7 @@ struct SequenceStoreTests {
         try context.save()
         // Complement of OR: files carrying neither tag — the two untagged files are included
         // (honest "has none of the selected tags"), the three tagged ones excluded.
-        #expect(names(context.displaySequence(of: playlist), in: context)
+        #expect(names(context.sequence(of: playlist), in: context)
             == ["untagged.jpg", "invalid [ab].jpg"])
     }
 
@@ -135,7 +137,7 @@ struct SequenceStoreTests {
         try context.save()
         // Complement of AND: only the doubly-tagged file has both, so every other non-skipped file
         // (missing at least one — including the untagged ones) is included.
-        #expect(names(context.displaySequence(of: playlist), in: context)
+        #expect(names(context.sequence(of: playlist), in: context)
             == ["a [beach].jpg", "c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"])
     }
 
@@ -148,11 +150,11 @@ struct SequenceStoreTests {
         let expected = ["c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"]
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAll)
         try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == expected)
+        #expect(names(context.sequence(of: playlist), in: context) == expected)
 
         playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAny)
         try context.save()
-        #expect(names(context.displaySequence(of: playlist), in: context) == expected)
+        #expect(names(context.sequence(of: playlist), in: context) == expected)
     }
 
     @Test func playlistForwardersMatchTheContextMethods() throws {
@@ -161,30 +163,25 @@ struct SequenceStoreTests {
         let playlist = try seededPlaylist(in: context)
 
         // The thin `Playlist` members forward to the same context derivation, so they agree.
-        #expect(playlist.playbackFiles.map(\.fileName)
-            == context.playbackFiles(of: playlist).map(\.fileName))
-        #expect(playlist.hasPlaybackFiles == context.hasPlaybackFiles(in: playlist))
+        #expect(playlist.sequenceFiles.map(\.fileName)
+            == context.sequenceFiles(of: playlist).map(\.fileName))
+        #expect(playlist.sequenceNotEmpty == context.sequenceNotEmpty(in: playlist))
         #expect(playlist.serviceFilterCounts == context.serviceFilterCounts(for: playlist))
         #expect(playlist.fileCount == context.fileCount(in: playlist))
     }
 
-    @Test func playbackResumeTargetResolvesAtOrAfterElseWraps() throws {
+    @Test func resumeTargetResolvesAtOrAfterElseWraps() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        // Playback order (skipped excluded): a(0) b(1) c(2) untagged(3) invalid(4).
-        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 2)?.fileName == "c [sunny].jpg")
-        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 3)?.fileName == "untagged.jpg")
-        // The skipped file at order 5 is not a playback file, so nothing qualifies at/after 5 → wrap.
-        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 5)?.fileName == "a [beach].jpg")
-        // No lower bound resolves the first playback file.
-        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: .min)?.fileName == "a [beach].jpg")
-
-        // Under the skipped service filter playback is empty — no resume target at all.
-        playlist.filterState.serviceFilter = .skipped
-        try context.save()
-        #expect(context.playbackResumeTarget(of: playlist, atOrAfter: 0) == nil)
+        // Sequence order (skipped excluded): a(0) b(1) c(2) untagged(3) invalid(4).
+        #expect(context.resumeTarget(of: playlist, atOrAfter: 2)?.fileName == "c [sunny].jpg")
+        #expect(context.resumeTarget(of: playlist, atOrAfter: 3)?.fileName == "untagged.jpg")
+        // The skipped file at order 5 is not in the sequence, so nothing qualifies at/after 5 → wrap.
+        #expect(context.resumeTarget(of: playlist, atOrAfter: 5)?.fileName == "a [beach].jpg")
+        // No lower bound resolves the first sequence file.
+        #expect(context.resumeTarget(of: playlist, atOrAfter: .min)?.fileName == "a [beach].jpg")
     }
 
     @Test func fileCountMatchesRelationshipCount() throws {
@@ -234,12 +231,12 @@ struct SequenceStoreTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        let before = context.displaySequence(of: playlist).count
+        let before = context.sequence(of: playlist).count
         addFile("d [beach].jpg", tags: ["beach"], status: .valid, order: 6, to: playlist, in: context)
         // includePendingChanges: false — the pending insert is invisible until saved.
-        #expect(context.displaySequence(of: playlist).count == before)
+        #expect(context.sequence(of: playlist).count == before)
 
         try context.save()
-        #expect(context.displaySequence(of: playlist).count == before + 1)
+        #expect(context.sequence(of: playlist).count == before + 1)
     }
 }

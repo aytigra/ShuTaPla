@@ -133,14 +133,12 @@ nonisolated enum CloudStatus: String, Sendable {
 nonisolated enum ServiceFilter: String, Codable, Sendable {
     case untagged
     case invalidTagging
-    case skipped
 
     /// SF Symbol shown in the filter banner and the center-panel counter notices.
     var systemImage: String {
         switch self {
         case .untagged: return "tag.slash"
         case .invalidTagging: return "exclamationmark.triangle"
-        case .skipped: return "nosign"
         }
     }
 
@@ -149,7 +147,6 @@ nonisolated enum ServiceFilter: String, Codable, Sendable {
         switch self {
         case .untagged: return "untagged files"
         case .invalidTagging: return "files with invalid tagging"
-        case .skipped: return "skipped files"
         }
     }
 }
