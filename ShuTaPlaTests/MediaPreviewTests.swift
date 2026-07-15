@@ -136,6 +136,81 @@ import SwiftData
         #expect(recorder.loadedPositions.last == .some(nil))        // from the beginning
     }
 
+    // MARK: - Seeking
+
+    @Test func videoPreviewForwardsSeekToEngine() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["v.mp4"], in: context)
+        let file = video.files[0]
+
+        let recorder = try RecordingSeekEngine()
+        let preview = MediaPreview(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            makeVideoEngine: { recorder }
+        )
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        preview.seek(by: -3)
+        preview.seek(to: 12)
+        #expect(recorder.seekByDeltas == [-3])
+        #expect(recorder.seekToPositions == [12])
+    }
+
+    @Test func imagePreviewIgnoresSeek() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+
+        let preview = makePreview(ScopedFolderAccess(bookmarkService: BookmarkService()))
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        preview.seek(by: 3)         // image has no timeline; no engine to seek, no crash
+        preview.seek(to: 5)
+        #expect(preview.videoEngine == nil)
+    }
+
+    @Test func closedPreviewIgnoresSeek() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: ["v.mp4"], in: context)
+        let file = video.files[0]
+
+        let recorder = try RecordingSeekEngine()
+        let preview = MediaPreview(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            makeVideoEngine: { recorder }
+        )
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        preview.close()             // the video engine is retained but no file is previewed
+        preview.seek(by: -3)
+        preview.seek(to: 8)
+        #expect(recorder.seekByDeltas.isEmpty)   // the guard blocks a seek with nothing open
+        #expect(recorder.seekToPositions.isEmpty)
+    }
+
+    // MARK: - Progress-strip seek target
+
+    @Test(arguments: [
+        (x: 0.0, width: 100.0, expected: 0.0),        // leading edge → start
+        (x: 100.0, width: 100.0, expected: 60.0),     // trailing edge → end
+        (x: 25.0, width: 100.0, expected: 15.0),      // quarter in → quarter of the duration
+        (x: -20.0, width: 100.0, expected: 0.0),      // left of the strip clamps to start
+        (x: 140.0, width: 100.0, expected: 60.0),     // right of the strip clamps to end
+        (x: 50.0, width: 0.0, expected: 0.0),         // no width yet (pre-layout) → start, no divide
+    ] as [(x: CGFloat, width: CGFloat, expected: TimeInterval)])
+    func seekTargetMapsClampedFractionToDuration(x: CGFloat, width: CGFloat, expected: TimeInterval) {
+        #expect(MediaPreviewView.seekTarget(forX: x, width: width, duration: 60) == expected)
+    }
+
     // MARK: - Scoped session
 
     @Test func closeReleasesTheScopedSession() throws {

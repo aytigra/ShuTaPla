@@ -28,4 +28,10 @@ extension AppState {
     func closePreview() {
         preview.close()
     }
+
+    /// Seeks the open preview's video by a relative offset — the ±3 s `[arrow left]`/`[arrow right]`
+    /// keys the router sends while the lightbox is open. A no-op when it's closed or showing an image.
+    func seekPreview(by delta: TimeInterval) {
+        preview.seek(by: delta)
+    }
 }

@@ -153,6 +153,22 @@ final class MediaPreview {
         videoEngine = nil
     }
 
+    // MARK: - Seeking
+
+    /// Seeks the previewed video by a relative offset — the ±3 s `[arrow left]`/`[arrow right]`
+    /// keys. A no-op for an image preview or a closed one; only video has a timeline.
+    func seek(by delta: TimeInterval) {
+        guard mediaType == .video else { return }
+        videoEngine?.seek(by: delta)
+    }
+
+    /// Seeks the previewed video to an absolute position — the progress strip's click/scrub maps
+    /// its x-fraction to `fraction * duration`. A no-op unless a video is previewed.
+    func seek(to seconds: TimeInterval) {
+        guard mediaType == .video else { return }
+        videoEngine?.seek(to: seconds)
+    }
+
     private func ensureVideoEngine() -> MPVPlaybackEngine? {
         if let videoEngine { return videoEngine }
         guard let engine = try? makeVideoEngine() else { return nil }

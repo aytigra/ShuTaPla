@@ -25,6 +25,7 @@ struct MediaPreviewView: View {
     private static let edgeInset: CGFloat = 40
     private static let cornerRadius: CGFloat = 12
     private static let progressStripHeight: CGFloat = 3
+    private static let progressHitHeight: CGFloat = 16
 
     /// The card's fallback shape while a file with no cached dimensions downloads — just enough to
     /// carry the placeholder, latched to the media's true shape once it arrives.
@@ -87,8 +88,10 @@ struct MediaPreviewView: View {
         .shadow(radius: 24)
     }
 
-    /// A non-interactive fill scaled to the video's play position, growing from the leading
-    /// edge along the card's bottom. Hidden until the duration is known.
+    /// A thin fill scaled to the video's play position, growing from the leading edge along the
+    /// card's bottom, inside a taller transparent hit zone. One `DragGesture` serves both
+    /// click-to-seek and drag-to-scrub, mapping the pointer's x-fraction to the timeline. Hidden
+    /// until the duration is known.
     @ViewBuilder
     private var progressStrip: some View {
         let duration = preview.duration
@@ -96,10 +99,26 @@ struct MediaPreviewView: View {
             GeometryReader { proxy in
                 Rectangle()
                     .fill(.white.opacity(0.8))
-                    .frame(width: proxy.size.width * min(1, preview.currentTime / duration))
+                    .frame(width: proxy.size.width * min(1, preview.currentTime / duration),
+                           height: Self.progressStripHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0).onChanged { value in
+                            preview.seek(to: Self.seekTarget(
+                                forX: value.location.x, width: proxy.size.width, duration: duration))
+                        }
+                    )
             }
-            .frame(height: Self.progressStripHeight)
+            .frame(height: Self.progressHitHeight)
         }
+    }
+
+    /// Maps a horizontal hit position on the progress strip to a seek target: the x-fraction of the
+    /// strip's width, clamped to 0…1, times the duration. A zero width (before layout) maps to 0.
+    static func seekTarget(forX x: CGFloat, width: CGFloat, duration: TimeInterval) -> TimeInterval {
+        guard width > 0 else { return 0 }
+        return min(1, max(0, x / width)) * duration
     }
 }
 

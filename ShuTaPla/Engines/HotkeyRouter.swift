@@ -209,12 +209,15 @@ final class HotkeyRouter {
         }
 
         // The Manager preview lightbox owns the keyboard while open: `[space]`/`[esc]` close
-        // it, and every other key is swallowed so nothing acts on the file list behind it. It
-        // has no native buttons, so — unlike a confirmation alert — the router acts on the keys
-        // itself rather than passing them through.
+        // it, `[arrow left]`/`[arrow right]` seek the previewed video ∓3 s, and every other key
+        // is swallowed so nothing acts on the file list behind it. It has no native buttons, so —
+        // unlike a confirmation alert — the router acts on the keys itself rather than passing them
+        // through.
         if appState?.preview.isOpen == true {
             switch Hotkey(event: event) {
             case .space, .escape: appState?.closePreview()
+            case .arrowLeft: appState?.seekPreview(by: -3)
+            case .arrowRight: appState?.seekPreview(by: 3)
             default: break
             }
             return nil

@@ -102,8 +102,11 @@ import AppKit
 
     /// Substitutes the window-free audio engine for the video slot so a `.video` playlist can
     /// go live in the test host without spinning up a GL surface (CLAUDE.md trap class 3).
-    private func makeAppState(_ context: ModelContext) -> AppState {
-        AppState(modelContext: context, makeVideoEngine: { try AudioPlaybackEngine() })
+    private func makeAppState(
+        _ context: ModelContext,
+        makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() }
+    ) -> AppState {
+        AppState(modelContext: context, makeVideoEngine: makeVideoEngine)
     }
 
     /// Everything a routing test drives. The container is held here so its in-memory
@@ -143,13 +146,14 @@ import AppKit
     /// the playlist is managed, for view-mode tweaks (e.g. gallery) that change the file list.
     private func managerFixture(
         _ type: MediaType, files: [String],
+        makeVideoEngine: @escaping () throws -> MPVPlaybackEngine = { try AudioPlaybackEngine() },
         configure: (AppState, Playlist) -> Void = { _, _ in }
     ) throws -> Fixture {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(files)
         let playlist = makePlaylist(type, folder: folder, files: files, in: context)
-        let appState = makeAppState(context)
+        let appState = makeAppState(context, makeVideoEngine: makeVideoEngine)
         appState.mode = .manager
         appState.managedPlaylist = playlist
         configure(appState, playlist)
@@ -566,9 +570,9 @@ import AppKit
 
     @Test func galleryArrowsNavigateInTwoDimensions() throws {
         let names = (1...6).map { "\($0).jpg" }
-        let f = try managerFixture(.image, files: names) { _, playlist in
+        let f = try managerFixture(.image, files: names, configure: { _, playlist in
             playlist.preferences.viewMode = .gallery
-        }
+        })
         f.appState.fileGridColumns = 3
         defer { f.appState.coordinator.shutdown() }
 
@@ -638,6 +642,23 @@ import AppKit
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) == nil)
         #expect(!f.appState.preview.isOpen)
+    }
+
+    @Test func openVideoPreviewSeeksOnArrowKeysAndStaysOpen() throws {
+        let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"],
+                                   makeVideoEngine: { try RecordingSeekEngine() })
+        defer { f.appState.preview.shutdown(); f.appState.coordinator.shutdown() }
+
+        f.appState.managerSelection = [f.appState.managerFiles[0].id]
+        f.router.route(.space, rightOption: false)
+        #expect(f.appState.preview.isOpen)
+        let engine = try #require(f.appState.preview.videoEngine as? RecordingSeekEngine)
+
+        // Arrow keys seek the previewed video ∓3 s and are consumed; the lightbox stays open.
+        #expect(f.router.handle(keyEvent(keyCode: 123)) == nil)   // [arrow left]  → −3 s
+        #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] → +3 s
+        #expect(engine.seekByDeltas == [-3, 3])
+        #expect(f.appState.preview.isOpen)
     }
 
     @Test func managerEnterDoesNothingWithoutSelection() throws {
