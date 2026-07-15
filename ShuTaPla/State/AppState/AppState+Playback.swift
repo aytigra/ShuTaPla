@@ -55,6 +55,11 @@ extension AppState {
         setReviewMode(duplicates: active ? false : duplicateSearchActive, skipped: active)
     }
 
+    /// Whether the Manager center is showing one of the transient review surfaces (a duplicate
+    /// grouping or the wrong-type skipped files) rather than the real playback sequence — the
+    /// condition every play affordance gates on, since neither surface is playable.
+    var inReviewMode: Bool { duplicateSearchActive || skippedReviewActive }
+
     /// Leaves whichever review mode is active — the exit a filter edit, a managed-playlist switch,
     /// and a scope switch share.
     func exitReviewModes() {
@@ -76,16 +81,17 @@ extension AppState {
     /// The token the Manager center file list re-centers on (a re-select or scope switch).
     var managerScrollToken: Int { scrollSelectionToken }
 
-    /// A double-click in the Manager center: a visual playlist enters the fullscreen player at
-    /// the file; an audio playlist starts the audio channel there, staying in Manager. A no-op in
-    /// skipped-review — its files are wrong-type/unplayable, so the review surface is list-only.
-    func playFromManager(of playlist: Playlist, startingAt file: PlaylistFile) {
-        guard !skippedReviewActive else { return }
-        if playlist.mediaType == .audio {
-            coordinator.play(playlist, startingAt: file)
-        } else {
-            startPlayback(of: playlist, startingAt: file)
-        }
+    /// The single Manager play chokepoint — the center double-click and the `[enter]` selection
+    /// (`playSelectedFile`) both funnel through it: it gates on review mode and hands off to
+    /// `startPlayback`, which routes a visual playlist into the fullscreen player and an audio one
+    /// onto its channel. A no-op in either review mode — the surfaced set isn't a real playback
+    /// sequence, so preview (not play) is the way to inspect a file there; returns whether it
+    /// started, so the `[enter]` key only consumes when it acts.
+    @discardableResult
+    func playFromManager(of playlist: Playlist, startingAt file: PlaylistFile) -> Bool {
+        guard !inReviewMode else { return false }
+        startPlayback(of: playlist, startingAt: file)
+        return true
     }
 
     // MARK: - Channel-derived surfaces
@@ -163,9 +169,10 @@ extension AppState {
         mode = .player
     }
 
-    /// Plays the Manager file-list selection (the `[enter]` hotkey): begins playback of the
-    /// managed playlist starting at the first selected file. Returns whether there was a
-    /// selection to play, so the key only consumes when it acts.
+    /// Plays the Manager file-list selection (the `[enter]` hotkey): resolves the earliest selected
+    /// file and starts it through `playFromManager`, so the review-mode gate and audio/visual
+    /// routing are shared with the double-click. Returns whether it started, so the key only
+    /// consumes when it acts (no selection to play, or a review mode blocks it → false).
     @discardableResult
     func playSelectedFile() -> Bool {
         guard let playlist = managedPlaylist else { return false }
@@ -174,8 +181,7 @@ extension AppState {
         let selected = Set(selectedManagerFiles().map(\.persistentModelID))
         guard let pid = managerFileIDs.first(where: { selected.contains($0) }),
               let file = file(for: pid) else { return false }
-        startPlayback(of: playlist, startingAt: file)
-        return true
+        return playFromManager(of: playlist, startingAt: file)
     }
 
     /// Stops the visual playlist and returns the window to Manager mode (the pause overlay's
@@ -204,7 +210,7 @@ extension AppState {
     @discardableResult
     func moveFileSelection(_ direction: MoveDirection) -> Bool {
         let ids = managerFileIDs
-        guard !ids.isEmpty else { return false }
+        guard ids.isNotEmpty else { return false }
 
         let gallery = managedPlaylist?.preferences.viewMode == .gallery
         let columns = gallery ? max(1, fileGridColumns) : 1

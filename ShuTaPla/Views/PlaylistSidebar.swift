@@ -95,7 +95,7 @@ struct PlaylistSidebar: View {
     /// disappear once the finished playlist appears in its section.
     @ViewBuilder
     private var importingSection: some View {
-        if !appState.importingPlaylists.isEmpty {
+        if appState.importingPlaylists.isNotEmpty {
             Section {
                 ForEach(appState.importingPlaylists) { importing in
                     HStack {

@@ -265,7 +265,7 @@ final class ThumbnailService {
     /// disk-cache file before treating it as a hit. `statusComplete` distinguishes a
     /// fully written thumbnail from a partial one without forcing a full raster decode.
     private nonisolated static func isDecodableImage(_ data: Data) -> Bool {
-        guard !data.isEmpty,
+        guard data.isNotEmpty,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0,
               CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete

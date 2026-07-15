@@ -22,7 +22,7 @@ extension AppState {
     @discardableResult
     func requestDeleteSelectedFiles() -> Bool {
         let files = managerSelectionFiles()
-        guard !files.isEmpty else { return false }
+        guard files.isNotEmpty else { return false }
         pendingConfirmation = .managerDelete(files)
         return true
     }
@@ -106,7 +106,7 @@ extension AppState {
         case .playerDelete(let file): performDelete([file])
         case .audioDelete(let file): performDelete([file])
         case .audioStrip(let files):
-            guard !files.isEmpty else { return }
+            guard files.isNotEmpty else { return }
             runConfirmation {
                 if let error = await self.stripAudio(from: files) {
                     self.confirmationError = ConfirmationError(title: "Couldn't remove audio", message: error)
@@ -130,7 +130,7 @@ extension AppState {
     /// off them — surfacing the first failure as a "Couldn't move to Trash" error. Shared by the
     /// Manager, Player, and audio delete confirmations.
     private func performDelete(_ files: [PlaylistFile]) {
-        guard !files.isEmpty else { return }
+        guard files.isNotEmpty else { return }
         // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is a
         // no-op and the surface stays on the file; surface the message rather than silently
         // advancing past an undeleted file.

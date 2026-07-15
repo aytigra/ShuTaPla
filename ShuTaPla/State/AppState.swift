@@ -279,7 +279,7 @@ final class AppState {
     /// the whole managed sequence. Not restricted to the effective filter — callers that need
     /// the *visible* selection intersect with `managerFileIDs`.
     func selectedManagerFiles() -> [PlaylistFile] {
-        guard let playlist = managedPlaylist, !managerSelection.isEmpty else { return [] }
+        guard let playlist = managedPlaylist, managerSelection.isNotEmpty else { return [] }
         let pid = playlist.persistentModelID
         let ids = Array(managerSelection)
         var descriptor = FetchDescriptor<PlaylistFile>(

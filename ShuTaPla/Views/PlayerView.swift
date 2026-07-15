@@ -133,11 +133,11 @@ struct PlayerView: View {
         .transition(.opacity)
     }
 
-    /// Whether the visual playlist's filtered playback sequence is empty.
+    /// Whether the visual playlist's filtered playback sequence is empty. Reading the memoized
+    /// sequence re-derives this on a membership `bump()`, so no separate `version` read is needed.
     private var visualHasNoFiles: Bool {
-        _ = appState.sequences.version   // re-derive when the playlist's membership changes
         guard let visual = coordinator.liveVisualPlaylist else { return false }
-        return !visual.sequenceNotEmpty
+        return appState.sequences.sequence(of: visual).isEmpty
     }
 
     /// Auto-hide the cursor only during uninterrupted playback with no overlay on screen

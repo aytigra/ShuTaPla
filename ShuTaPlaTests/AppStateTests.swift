@@ -1494,6 +1494,104 @@ struct AppStateTests {
         #expect(appState.managerFileIDs == context.sequence(of: playlist))
     }
 
+    /// A double-click can't start playback from either review mode — the surfaced set is a
+    /// transient, mode-specific view (a grouping or the wrong-type skipped files), not a real
+    /// playback sequence. `playFromManager` no-ops and the mode stays put.
+    @Test(arguments: [true, false]) func reviewModesBlockPlayFromManager(duplicates: Bool) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context)
+        addFile("skip.txt", skipped: true, order: 1, to: playlist, in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        if duplicates { appState.setDuplicateSearch(true) } else { appState.setSkippedReview(true) }
+
+        appState.playFromManager(of: playlist, startingAt: a)
+
+        #expect(appState.mode == .manager)                                // never entered the player
+        #expect(appState.coordinator.liveVisualPlaylist == nil)
+        #expect(appState.duplicateSearchActive == duplicates)             // still in the same mode
+        #expect(appState.skippedReviewActive == !duplicates)
+    }
+
+    /// The `[enter]` play-selection path is blocked in either review mode too — even when the
+    /// selection is a file the mode surfaces (a duplicate, or a skipped file). It returns false so
+    /// the key isn't consumed, and the mode stays put.
+    @Test(arguments: [true, false]) func reviewModesBlockPlaySelectedFile(duplicates: Bool) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let a = addFile("a.jpg", order: 0, to: playlist, in: context); a.fingerprint = "fp1"
+        addFile("c.jpg", order: 1, to: playlist, in: context).fingerprint = "fp1"   // pairs with a
+        let skip = addFile("skip.txt", skipped: true, order: 2, to: playlist, in: context)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+
+        if duplicates { appState.setDuplicateSearch(true) } else { appState.setSkippedReview(true) }
+        // Select a file the mode surfaces (entry cleared the prior selection): the fp1 duplicate, or
+        // the skipped file — so a missing guard would actually find something to play.
+        appState.managerSelection = [duplicates ? a.id : skip.id]
+
+        let played = appState.playSelectedFile()
+
+        #expect(!played)                                                  // the key isn't consumed
+        #expect(appState.mode == .manager)                                // never entered the player
+        #expect(appState.coordinator.liveVisualPlaylist == nil)
+        #expect(appState.duplicateSearchActive == duplicates)             // still in the same mode
+        #expect(appState.skippedReviewActive == !duplicates)
+    }
+
+    /// The `[enter]` play-selection path starts the earliest selected file in display order and
+    /// consumes the key. The selection is given out of display order, so this also pins the
+    /// derivation (intersect the selection with the ordered sequence) across the funnel into
+    /// `playFromManager`.
+    @Test func playSelectedFilePlaysEarliestSelectedFileAndConsumesTheKey() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (folder, playlist, files) = try makeAudioPlaylist(tags: [[], [], []], in: context)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.setManaged(playlist)
+        appState.managerSelection = [files[2].id, files[1].id]   // given out of display order
+
+        let played = appState.playSelectedFile()
+
+        #expect(played)                                                    // the key is consumed
+        #expect(appState.coordinator.audioCurrentFile?.id == files[1].id)  // earliest selected, not files[2]
+        #expect(appState.audioChannelPlaylist === playlist)
+    }
+
+    /// Double-clicking a file in a managed audio playlist starts it on the audio channel — which
+    /// must repoint the channel to that playlist, not leave it stranded where the overlay last put
+    /// it. Managed audio A with the channel repointed to B (as `playOnAudioChannel` would); playing
+    /// A from the center makes A the channel again.
+    @Test func playFromManagerAudioRepointsChannelToTheManagedPlaylist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (folder, a, files) = try makeAudioPlaylist(tags: [[]], in: context)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        let b = Playlist(name: "B", folderBookmark: Data(), folderPath: "/b", mediaType: .audio)
+        context.insert(b)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.setManaged(a)   // managed = A (and remembers A as the channel)
+        appState.remember(b)     // the overlay repoints the audio channel to B, leaving A managed
+        #expect(appState.audioChannelPlaylist === b)
+
+        appState.playFromManager(of: a, startingAt: files[0])
+
+        #expect(appState.audioChannelPlaylist === a)   // the channel followed the playback
+    }
+
     // MARK: - Filtering (Task 7)
 
     @Test func tagFilterAppliesAndOrCorrectly() async throws {

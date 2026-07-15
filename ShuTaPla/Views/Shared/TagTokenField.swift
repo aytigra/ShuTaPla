@@ -75,7 +75,7 @@ struct TagTokenField<ChipMenu: View>: View {
             // cycling (which SwiftUI faults on).
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global).integral } action: { controlFrame = $0 }
             .overlay(alignment: .topLeading) {
-                if editing, !options.isEmpty {
+                if editing, options.isNotEmpty {
                     dropdown.offset(y: controlFrame.height + 4)
                 }
             }
@@ -167,7 +167,7 @@ struct TagTokenField<ChipMenu: View>: View {
     /// but not the layout frame, so a measured `.global` frame would point at the
     /// field, not where the dropdown actually appears.)
     private var dropdownRect: CGRect {
-        guard editing, !options.isEmpty, !controlFrame.isEmpty else { return .zero }
+        guard editing, options.isNotEmpty, !controlFrame.isEmpty else { return .zero }
         let height = CGFloat(min(options.count, 6)) * rowHeight
         return CGRect(x: controlFrame.minX, y: controlFrame.maxY + 4, width: controlFrame.width, height: height)
     }
@@ -238,7 +238,7 @@ struct TagTokenField<ChipMenu: View>: View {
     // MARK: - Caret / chip navigation (only fired at the input's caret edges)
 
     private func moveCaretLeft() {
-        guard !tokens.isEmpty else { return }
+        guard tokens.isNotEmpty else { return }
         let now = Date()
         let isDouble = lastLeft.map { now.timeIntervalSince($0) < doublePressInterval } ?? false
         lastLeft = now
@@ -254,7 +254,7 @@ struct TagTokenField<ChipMenu: View>: View {
         let isDouble = lastRight.map { now.timeIntervalSince($0) < doublePressInterval } ?? false
         lastRight = now
         if isDouble {
-            if !tokens.isEmpty { selectedChip = tokens.count - 1 }
+            if tokens.isNotEmpty { selectedChip = tokens.count - 1 }
             return
         }
         guard let chip = selectedChip else { return }
@@ -262,19 +262,19 @@ struct TagTokenField<ChipMenu: View>: View {
     }
 
     private func moveHighlightUp() {
-        guard !options.isEmpty else { return }
+        guard options.isNotEmpty else { return }
         highlighted = max(0, highlighted - 1)
     }
 
     private func moveHighlightDown() {
-        guard !options.isEmpty else { return }
+        guard options.isNotEmpty else { return }
         highlighted = min(options.count - 1, highlighted + 1)
     }
 
     /// Removes the chip at the caret (the selected one, or the last). Returns whether a
     /// chip was removed, so the input only swallows `delete` when it acts on a chip.
     private func deleteAtCaret() -> Bool {
-        guard !tokens.isEmpty else { return false }
+        guard tokens.isNotEmpty else { return false }
         let target = selectedChip ?? tokens.count - 1
         selectedChip = target > 0 ? target - 1 : nil
         onRemove(tokens[target])
@@ -285,7 +285,7 @@ struct TagTokenField<ChipMenu: View>: View {
 
     private func commit() {
         let current = options
-        if !current.isEmpty, highlighted < current.count {
+        if current.isNotEmpty, highlighted < current.count {
             add(current[highlighted])
         } else if allowsCreate {
             addCreated(input)
@@ -359,7 +359,7 @@ struct TagTokenField<ChipMenu: View>: View {
     /// Match strength against the typed string: lower sorts first. Exact match beats a
     /// prefix match beats a mid-string (substring) match; an empty query is neutral.
     private static func matchRank(_ tag: String, needle: String) -> Int {
-        guard !needle.isEmpty else { return 1 }
+        guard needle.isNotEmpty else { return 1 }
         if tag == needle { return 0 }
         if tag.hasPrefix(needle) { return 1 }
         return 2

@@ -39,6 +39,9 @@ nonisolated struct FilterState: Codable, Sendable, Equatable {
     /// No tags selected — the tag filter matches everything.
     var isEmpty: Bool { selectedTags.isEmpty }
 
+    /// At least one tag selected — the positive reading of `!isEmpty`.
+    var isNotEmpty: Bool { !isEmpty }
+
     /// Adds or removes `tag` from the tag filter, clearing any active triage filter — editing the
     /// tag filter and holding a triage filter are mutually exclusive.
     mutating func toggle(tag: String) {

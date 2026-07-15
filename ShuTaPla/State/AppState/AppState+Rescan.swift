@@ -66,7 +66,7 @@ extension AppState {
     /// Renames a playlist; an empty or whitespace-only name is rejected.
     func rename(_ playlist: Playlist, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard trimmed.isNotEmpty else { return }
         playlist.name = trimmed
     }
 
@@ -123,7 +123,7 @@ extension AppState {
     /// key either way).
     @discardableResult
     func cancelInProgressOperation() -> Bool {
-        guard !busyPlaylistIDs.isEmpty else { return false }
+        guard busyPlaylistIDs.isNotEmpty else { return false }
         for task in updateTasks.values { task.cancel() }
         updateTasks.removeAll()
         updateTask = nil
@@ -214,6 +214,12 @@ extension AppState {
         // The actor committed on its own context, which doesn't merge into this held playlist; a
         // fetch refaults it in place so the tag UI (which reads `playlist.tagFrequency`) and any
         // `files` walk see the new state. The version bump re-derives the store-side file lists.
+        //
+        // Acknowledged race: between the actor's background commit (in `deriveInBackground`) and this
+        // bump, a main-actor read of `sequences.sequence(of:)` serves the pre-scan memo — one stale
+        // frame. It's self-correcting: this bump re-derives every list and `coordinator.reconcile`
+        // advances the channels off any dropped file, so the store and the surfaces reconverge the
+        // moment this hop runs. No membership decision is finalized from the stale window.
         modelContext.refreshFromStore(playlist)
         sequences.bump()
         // A re-scan can drop either channel's playing file; advance off it just like a delete

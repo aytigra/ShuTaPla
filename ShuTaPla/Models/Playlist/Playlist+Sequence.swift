@@ -32,6 +32,10 @@ extension Playlist {
     var sequenceNotEmpty: Bool {
         modelContext?.sequenceNotEmpty(in: self) ?? false
     }
+  
+    var sequenceEmpty: Bool {
+        !sequenceNotEmpty
+    }
 
     /// The total file count for the sidebar row badge, answered with a `fetchCount` — never
     /// faults the whole `files` relationship. Falls back to the in-memory relationship only

@@ -44,7 +44,7 @@ nonisolated struct ScanResult: Sendable, Equatable {
     let dominantType: MediaType?
 
     var isEmpty: Bool { files.isEmpty }
-    var isMixed: Bool { !files.isEmpty && dominantType == nil }
+    var isMixed: Bool { files.isNotEmpty && dominantType == nil }
 }
 
 /// Result of a (best-effort) trash operation. Files that failed are left on
@@ -111,7 +111,7 @@ actor FileSystemService {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         // Reject empty, path-separated, and dot/hidden names (a leading dot covers
         // ".", "..", and extension-only names like ".mp4" that have no base).
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("."), !trimmed.contains("/") else {
+        guard trimmed.isNotEmpty, !trimmed.hasPrefix("."), !trimmed.contains("/") else {
             throw FileSystemError.invalidName
         }
         guard fm.fileExists(atPath: url.path) else { throw FileSystemError.fileNotFound }

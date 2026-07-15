@@ -516,14 +516,16 @@ private struct CenterActionsBar: View {
     @ViewBuilder
     private func visualActions(_ playlist: Playlist) -> some View {
         @Bindable var playlist = playlist
-        let _ = appState.sequences.version   // re-derive the Play affordance when membership changes
 
         Button {
             appState.startPlayback(of: playlist)
         } label: {
             Label("Play", systemImage: "play.fill")
         }
-        .disabled(!playlist.sequenceNotEmpty)
+        // A review mode surfaces an unplayable set, so its play affordance is unavailable — matching
+        // the double-click and `[enter]` no-ops. Reading the memoized sequence re-derives the
+        // affordance on a membership `bump()`, so no separate `version` read is needed.
+        .disabled(appState.sequences.sequence(of: playlist).isEmpty || appState.inReviewMode)
         .help("Play")
 
         Button {

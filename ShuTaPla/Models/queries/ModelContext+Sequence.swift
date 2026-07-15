@@ -110,7 +110,7 @@ extension ModelContext {
     /// Scoped by the `(playlist, …)` index; the returned models are the context's live instances, so
     /// writing `cloudStatus` on them reaches every observer.
     func files(in playlist: Playlist, atRelativePaths paths: Set<String>) -> [PlaylistFile] {
-        guard !paths.isEmpty else { return [] }
+        guard paths.isNotEmpty else { return [] }
         let pid = playlist.persistentModelID
         let pathList = Array(paths)
         var descriptor = FetchDescriptor<PlaylistFile>(
@@ -185,7 +185,7 @@ extension ModelContext {
             }
         }
 
-        guard !filter.isEmpty else {
+        guard filter.isNotEmpty else {
             return #Predicate { $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.sortOrder >= minSortOrder }
         }
 

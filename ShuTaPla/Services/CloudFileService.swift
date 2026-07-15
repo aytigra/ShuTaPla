@@ -154,7 +154,7 @@ final class CloudFileService {
     /// update mentions keep their current status. The seam the tests drive: a status event flips
     /// the matching model and leaves the rest untouched.
     func apply(_ updates: [CloudStatusUpdate], to files: [PlaylistFile]) {
-        guard !updates.isEmpty else { return }
+        guard updates.isNotEmpty else { return }
         let byPath = Dictionary(files.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
         for update in updates {
             byPath[update.relativePath]?.cloudStatus = update.status

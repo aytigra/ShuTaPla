@@ -65,7 +65,7 @@ nonisolated extension ModelContext {
         // (appended after the survivors), then derive each file's filename tags onto the index
         // the filters query — only where it diverges, so an unchanged playlist writes nothing
         // and never fetches. New rows and re-derivations share one lazily-primed `Tag` cache.
-        var changed = !toRemove.isEmpty
+        var changed = toRemove.isNotEmpty
         var tagCache: [String: Tag]?
         for scanned in current {
             let file: PlaylistFile

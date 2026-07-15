@@ -133,7 +133,7 @@ struct PlaylistTagsView: View {
         renamingTag = nil
         // An empty entry or an unchanged name just closes the editor; a non-empty but
         // malformed entry is reported rather than silently dropped.
-        guard !new.isEmpty, !TagParser.sameTag(new, oldTag) else { return }
+        guard new.isNotEmpty, !TagParser.sameTag(new, oldTag) else { return }
         guard TagParser.isValidTag(new) else {
             errorMessage = "“\(new)” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters)."
             return

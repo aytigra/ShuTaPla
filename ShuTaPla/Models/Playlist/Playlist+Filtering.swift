@@ -15,7 +15,7 @@ extension Playlist {
     /// Remembers the current tag filter as a saved search (most-recent first, unique by tag set +
     /// operator). A no-op when the filter is empty.
     func saveCurrentSearch() {
-        guard !filterState.isEmpty else { return }
+        guard filterState.isNotEmpty else { return }
         promoteSearch(SavedSearch(tags: filterState.selectedTags, mode: filterState.filterMode))
     }
 

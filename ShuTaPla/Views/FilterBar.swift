@@ -25,7 +25,7 @@ struct FilterBar: View {
             HStack {
                 Text("Filter").font(.headline)
                 Spacer()
-                if !playlist.filterState.isEmpty, serviceFilter == nil {
+                if playlist.filterState.isNotEmpty, serviceFilter == nil {
                     Button("Clear") { appState.clearTagFilter(on: playlist) }
                         .buttonStyle(.borderless)
                         .font(.caption)
