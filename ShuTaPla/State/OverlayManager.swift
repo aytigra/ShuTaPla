@@ -42,6 +42,11 @@ final class OverlayManager: HotkeyOverlayContext {
     /// when the cursor leaves the overlay.
     private(set) var audioCompactPinned = false
 
+    /// Whether the Visual Overlay's current opening should land the caret in the tag
+    /// field. Set per open: on for the `[tab]` open, off for `[arrow up]` and the
+    /// controls-bar button. The overlay view reads it as the tag field's auto-focus.
+    private(set) var visualOverlayFocusesTag = false
+
     /// Closable overlays in topmost-first order — the ones the user explicitly opened;
     /// `[esc]`/`closeTopmostOverlay()` and `isAnyOverlayOpen` consider exactly these.
     /// Bottom controls are passive hover chrome and aren't closed by `[esc]`.
@@ -144,7 +149,10 @@ final class OverlayManager: HotkeyOverlayContext {
         hide(top)
     }
 
-    func openVisualOverlay() { show(.visualOverlay) }
+    func openVisualOverlay(focusTag: Bool = false) {
+        visualOverlayFocusesTag = focusTag
+        show(.visualOverlay)
+    }
     func closeVisualOverlay() { hide(.visualOverlay) }
 
     /// Reveals compact audio from `[arrow down]`: pinned, so it stays open until

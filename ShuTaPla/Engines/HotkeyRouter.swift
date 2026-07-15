@@ -42,7 +42,9 @@ protocol HotkeyOverlayContext: AnyObject {
     var keyContext: KeyContext { get }
 
     func closeTopmostOverlay()
-    func openVisualOverlay()
+    /// Opens the Visual Overlay. `focusTag` lands the caret in the tag field on appear —
+    /// on only for the `[tab]` open, off for `[arrow up]` and the controls-bar button.
+    func openVisualOverlay(focusTag: Bool)
     func closeVisualOverlay()
     func revealCompactAudio()
     func expandAudioToExtended()
@@ -56,7 +58,7 @@ final class NoOverlayContext: HotkeyOverlayContext {
     var isVisualOverlayOpen: Bool { false }
     var keyContext: KeyContext { .visual }
     func closeTopmostOverlay() {}
-    func openVisualOverlay() {}
+    func openVisualOverlay(focusTag: Bool) {}
     func closeVisualOverlay() {}
     func revealCompactAudio() {}
     func expandAudioToExtended() {}
@@ -315,11 +317,11 @@ final class HotkeyRouter {
         case .arrowRight: coordinator.next(visual)
         case .arrowLeft: coordinator.previous(visual)
         case .tab:
-            // Toggle: opens the Visual Overlay, or closes it however it was opened.
-            overlayContext.isVisualOverlayOpen ? overlayContext.closeVisualOverlay() : overlayContext.openVisualOverlay()
+            // Toggle: opens the Visual Overlay (caret in the tag field), or closes it however it was opened.
+            overlayContext.isVisualOverlayOpen ? overlayContext.closeVisualOverlay() : overlayContext.openVisualOverlay(focusTag: true)
         case .arrowUp:
-            // Opens the Visual Overlay, but never closes it (that's Tab / Esc / Down).
-            if !overlayContext.isVisualOverlayOpen { overlayContext.openVisualOverlay() }
+            // Opens the Visual Overlay without focusing the tag field, but never closes it (that's Tab / Esc / Down).
+            if !overlayContext.isVisualOverlayOpen { overlayContext.openVisualOverlay(focusTag: false) }
         case .arrowDown:
             if overlayContext.isVisualOverlayOpen { overlayContext.closeVisualOverlay() }
             else { overlayContext.revealCompactAudio() }

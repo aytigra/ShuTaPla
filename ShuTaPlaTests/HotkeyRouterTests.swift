@@ -72,12 +72,13 @@ import AppKit
         var keyContext: KeyContext = .visual
         var closeTopmostCalls = 0
         var openVisualOverlayCalls = 0
+        var lastOpenFocusTag: Bool?
         var closeVisualOverlayCalls = 0
         var revealCompactAudioCalls = 0
         var expandAudioCalls = 0
         var closeAudioCalls = 0
         func closeTopmostOverlay() { closeTopmostCalls += 1 }
-        func openVisualOverlay() { openVisualOverlayCalls += 1 }
+        func openVisualOverlay(focusTag: Bool) { openVisualOverlayCalls += 1; lastOpenFocusTag = focusTag }
         func closeVisualOverlay() { closeVisualOverlayCalls += 1 }
         func revealCompactAudio() { revealCompactAudioCalls += 1 }
         func expandAudioToExtended() { expandAudioCalls += 1 }
@@ -277,6 +278,7 @@ import AppKit
 
         #expect(f.router.route(.tab, rightOption: false))
         #expect(f.overlay.openVisualOverlayCalls == 1)
+        #expect(f.overlay.lastOpenFocusTag == true)   // [tab] lands the caret in the tag field
     }
 
     @Test func tabClosesVisualOverlayWhenOpen() throws {
@@ -443,6 +445,7 @@ import AppKit
 
         #expect(f.router.route(.arrowUp, rightOption: false))
         #expect(f.overlay.openVisualOverlayCalls == 1)
+        #expect(f.overlay.lastOpenFocusTag == false)   // [arrow up] opens without focusing the tag field
         #expect(f.playlist.currentFileID == current)   // opens the overlay rather than advancing
     }
 

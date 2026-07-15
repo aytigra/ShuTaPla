@@ -63,6 +63,23 @@ import Testing
         #expect(!m.active.contains(.bottomControls))
     }
 
+    // MARK: - Visual overlay tag focus
+
+    @Test func tabOpenFocusesTagField() {
+        let m = OverlayManager()
+        m.openVisualOverlay(focusTag: true)
+        #expect(m.active.contains(.visualOverlay))
+        #expect(m.visualOverlayFocusesTag)
+    }
+
+    @Test func arrowUpAndButtonOpenDoNotFocusTagField() {
+        let m = OverlayManager()
+        m.openVisualOverlay(focusTag: false)          // [arrow up]
+        #expect(!m.visualOverlayFocusesTag)
+        m.openVisualOverlay()                         // controls-bar button (default)
+        #expect(!m.visualOverlayFocusesTag)
+    }
+
     // MARK: - Esc chain helpers
 
     @Test func isAnyOverlayOpenReflectsClosableOverlaysOnly() {

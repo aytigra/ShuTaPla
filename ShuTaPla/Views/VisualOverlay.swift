@@ -50,7 +50,7 @@ struct VisualOverlay: View {
             fileIDs: appState.visualChannelFileIDs,
             currentFile: appState.currentVisualFile,
             scrollTrigger: appState.scrollSelectionToken,
-            tagAutoFocus: true,
+            tagAutoFocus: overlays.visualOverlayFocusesTag,
             onSelectPlaylist: { appState.playOnVisualChannel($0) },
             onAddPlaylist: { appState.isImportingPlaylist = true },
             onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeVisualOverlay() },
