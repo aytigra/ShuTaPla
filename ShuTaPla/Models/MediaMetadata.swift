@@ -52,12 +52,43 @@ extension PlaylistFile {
         if let lastModified = metadata.lastModified { self.lastModified = lastModified }
     }
 
+    /// Clears every derived fact so the next display re-extracts from scratch: an unconditional reset
+    /// of `duration`, `width`, `height`, `fileSizeBytes`, `lastModified`, **and** `fingerprint`. Writes
+    /// the stored properties directly — not through `merge`, whose `nil` fields are no-ops — so the
+    /// record truly forgets. Clearing the fingerprint costs no re-render: the disk thumbnail cache is
+    /// content-keyed, so unchanged bytes recompute the same fingerprint and hit it.
+    func invalidateMetadata() {
+        duration = nil
+        width = nil
+        height = nil
+        fileSizeBytes = nil
+        lastModified = nil
+        fingerprint = nil
+    }
+
+    /// Clears the cached metadata when the file's on-disk `size` or `modified` diverges from the cached
+    /// baseline (`fileSizeBytes` / `lastModified`) — the general staleness gate the scan and preview run.
+    /// A no-op when there's no baseline yet (`lastModified == nil`: nothing cached to invalidate) or when
+    /// a fact couldn't be read from disk (`nil`), so a failed stat never clears good metadata on a false
+    /// divergence. Returns whether it invalidated.
+    @discardableResult
+    func invalidateMetadataIfStale(size: Int?, modified: Date?) -> Bool {
+        guard lastModified != nil else { return false }
+        let diverged = (size != nil && size != fileSizeBytes) || (modified != nil && modified != lastModified)
+        guard diverged else { return false }
+        invalidateMetadata()
+        return true
+    }
+
     /// Whether every field this file's type can carry is already cached, so re-extracting
     /// would open the file only to learn nothing new. Audio carries no pixel dimensions;
     /// images no duration. A skipped file is wrong-type for its playlist, so its
     /// duration/dimensions can never be read — only size is recorded, so size alone completes it.
+    ///
+    /// Size and `lastModified` (the staleness baseline) are required for every type: a pre-mtime
+    /// cached row reads incomplete, so its next display re-extracts and gains a baseline.
     func hasCompleteMetadata(for mediaType: MediaType) -> Bool {
-        guard fileSizeBytes != nil else { return false }
+        guard fileSizeBytes != nil, lastModified != nil else { return false }
         if isSkipped { return true }
         switch mediaType {
         case .video: return duration != nil && width != nil && height != nil

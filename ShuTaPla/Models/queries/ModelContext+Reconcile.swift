@@ -71,6 +71,11 @@ nonisolated extension ModelContext {
             let file: PlaylistFile
             if let existing = byPath[scanned.relativePath] {
                 file = existing
+                // A survivor whose on-disk size or mtime moved has stale cached metadata — clear it so
+                // the next display re-extracts. A fresh row (below) has no baseline, so it never fires.
+                if file.invalidateMetadataIfStale(size: scanned.fileSize, modified: scanned.contentModified) {
+                    changed = true
+                }
             } else {
                 file = makeFile(from: scanned, in: playlist, sortOrder: nextOrder)
                 byPath[scanned.relativePath] = file

@@ -75,6 +75,10 @@ struct FileSystemServiceTests {
         #expect(result.counts[.audio] == 1)
         #expect(result.files.allSatisfy { !$0.relativePath.isEmpty })
         #expect(result.files.allSatisfy { $0.cloudStatus == .local })
+        // The enumerator prefetches size + mtime in the same pass — the staleness pair the reconcile
+        // compares against each file's cached baseline.
+        #expect(result.files.allSatisfy { ($0.fileSize ?? 0) > 0 })
+        #expect(result.files.allSatisfy { $0.contentModified != nil })
     }
 
     @Test func scanParsesTags() async throws {
@@ -355,7 +359,8 @@ struct FileSystemProvidingMockTests {
         let sample = ScanResult(
             files: [ScannedFile(
                 relativePath: "a.mp4", fileName: "a.mp4", mediaType: .video,
-                cloudStatus: .local, tagNames: [], taggingStatus: .untagged
+                cloudStatus: .local, fileSize: nil, contentModified: nil,
+                tagNames: [], taggingStatus: .untagged
             )],
             counts: [.video: 1],
             dominantType: .video

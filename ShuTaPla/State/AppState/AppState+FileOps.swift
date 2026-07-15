@@ -122,6 +122,12 @@ extension AppState {
                 if !ok { failed += 1 }
             }
 
+            // Each swapped file's cached facts now describe the pre-strip bytes; the swap forgot
+            // them (below), so persist the clear here — an unsaved `nil` would be refaulted back
+            // to the stored value by the next `includePendingChanges = false` object fetch. The
+            // gallery's `thumbnailKey` tracks `fingerprint`, so the cleared tile then regenerates.
+            if failed < files.count { persistAndRefresh() }
+
             guard failed == 0 else {
                 return failed == files.count
                     ? "Couldn't remove the audio."
@@ -168,6 +174,9 @@ extension AppState {
             coordinator.seek(onScreen, to: resumeAt)
             if wasPaused { coordinator.pause(onScreen) }
         }
+        // The audio-free file is different content; forget the cached facts so the next display
+        // re-extracts. The caller persists the clear once the batch completes.
+        file.invalidateMetadata()
         return true
     }
 

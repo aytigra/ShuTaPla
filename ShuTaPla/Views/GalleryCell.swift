@@ -169,8 +169,12 @@ struct GalleryCell: View {
         return isSelected ? .accentColor : .clear
     }
 
-    /// Reload when the file is replaced or renamed (path change), and when its bytes arrive from
-    /// the cloud (`cloudStatus` flips to `.local`) so the tile regenerates the thumbnail the evicted
-    /// pass skipped. Keyed on local-ness, not the full status, so it re-fires only on that boundary.
-    var thumbnailKey: String { "\(file.id)|\(file.relativePath)|\(file.cloudStatus == .local)" }
+    /// Reload when the file is replaced or renamed (path change), when its bytes arrive from the
+    /// cloud (`cloudStatus` flips to `.local`) so the tile regenerates the thumbnail the evicted pass
+    /// skipped, and when its `fingerprint` is cleared — an external staleness invalidation (scan or
+    /// strip) drops it, and tracking it here re-fires this cell's generation for an instant refresh.
+    /// Keyed on local-ness, not the full status, so it re-fires only on that boundary.
+    var thumbnailKey: String {
+        "\(file.id)|\(file.relativePath)|\(file.cloudStatus == .local)|\(file.fingerprint ?? "")"
+    }
 }

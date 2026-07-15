@@ -210,6 +210,53 @@ import SwiftData
         #expect(preview.contentSize == nil)
     }
 
+    // MARK: - Staleness invalidation on open
+
+    @Test func openInvalidatesStaleCachedShape() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+        // A cached shape whose baseline size no longer matches the 0-byte placeholder on disk.
+        file.width = 1920
+        file.height = 1080
+        file.fileSizeBytes = 999
+        file.lastModified = Date(timeIntervalSince1970: 1)
+        try context.save()
+
+        let preview = makePreview(ScopedFolderAccess(bookmarkService: BookmarkService()))
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        // Opening stats the file, sees the size diverged, and clears the stale cache — so the card
+        // takes the live decoded shape (nil until it decodes) instead of the wrong aspect ratio.
+        #expect(file.width == nil)
+        #expect(file.fileSizeBytes == nil)
+        #expect(preview.contentSize == nil)
+    }
+
+    @Test func openKeepsFreshCachedShape() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg"], in: context)
+        let file = image.files[0]
+        let url = folder.url.appending(path: "1.jpg")
+        // A baseline that still matches the placeholder on disk — no divergence, cache kept.
+        file.width = 1920
+        file.height = 1080
+        file.fileSizeBytes = url.fileSizeBytes
+        file.lastModified = url.contentModificationDate
+        try context.save()
+
+        let preview = makePreview(ScopedFolderAccess(bookmarkService: BookmarkService()))
+        defer { preview.shutdown() }
+
+        preview.toggle(file)
+        #expect(preview.contentSize == CGSize(width: 1920, height: 1080))   // the true shape survives open
+    }
+
     // MARK: - Gating
 
     // MARK: - Cloud-aware preview

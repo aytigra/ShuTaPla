@@ -20,6 +20,10 @@ nonisolated struct MediaFile: Sendable, Equatable {
     let fileName: String
     let mediaType: MediaType
     let cloudStatus: CloudStatus
+    /// On-disk size and mtime, prefetched in the same enumerator pass — the staleness pair the
+    /// reconcile compares against each surviving file's cached baseline. `nil` when unreadable.
+    let fileSize: Int?
+    let contentModified: Date?
 }
 
 /// A listed media file with its filename-derived tag fields — the unit the playlist layer
@@ -31,6 +35,8 @@ nonisolated struct ScannedFile: Sendable, Equatable {
     let fileName: String
     let mediaType: MediaType
     let cloudStatus: CloudStatus
+    let fileSize: Int?
+    let contentModified: Date?
     let tagNames: [String]
     let taggingStatus: TaggingStatus
 }
@@ -166,6 +172,8 @@ actor FileSystemService {
             .isUbiquitousItemKey,
             .ubiquitousItemDownloadingStatusKey,
             .ubiquitousItemIsDownloadingKey,
+            .fileSizeKey,
+            .contentModificationDateKey,
         ]
         guard let enumerator = fm.enumerator(
             at: root,
@@ -187,7 +195,9 @@ actor FileSystemService {
                 relativePath: relativePath(of: fileURL, under: root),
                 fileName: fileURL.lastPathComponent,
                 mediaType: type,
-                cloudStatus: CloudStatus.from(values)
+                cloudStatus: CloudStatus.from(values),
+                fileSize: values?.fileSize,
+                contentModified: values?.contentModificationDate
             ))
         }
 
@@ -217,6 +227,8 @@ actor FileSystemService {
             fileName: media.fileName,
             mediaType: media.mediaType,
             cloudStatus: media.cloudStatus,
+            fileSize: media.fileSize,
+            contentModified: media.contentModified,
             tagNames: tagNames,
             taggingStatus: status
         )

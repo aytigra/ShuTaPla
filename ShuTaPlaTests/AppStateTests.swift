@@ -34,7 +34,7 @@ private func scanned(_ name: String, _ type: MediaType) -> ScannedFile {
     let (tagNames, taggingStatus) = TagParser.fields(for: name)
     return ScannedFile(
         relativePath: name, fileName: name, mediaType: type, cloudStatus: .local,
-        tagNames: tagNames, taggingStatus: taggingStatus
+        fileSize: nil, contentModified: nil, tagNames: tagNames, taggingStatus: taggingStatus
     )
 }
 

@@ -118,6 +118,11 @@ final class MediaPreview {
         cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .preview)
         let url = folder.appending(path: file.relativePath)
 
+        // A scan may not yet have checked if this file has changed; stat it once here so a
+        // stale cached `pixelSize` doesn't give the peek card the wrong aspect ratio. On divergence the
+        // cache is cleared and `contentSize` falls back to the live decoded/mpv shape.
+        file.invalidateMetadataIfStale(size: url.fileSizeBytes, modified: url.contentModificationDate)
+
         switch playlist.mediaType {
         case .image:
             imageEngine.load(file, at: url)

@@ -16,6 +16,7 @@
 import Foundation
 import AVFoundation
 import Observation
+import SwiftData
 
 @MainActor
 @Observable
@@ -38,6 +39,9 @@ final class MediaMetadataService {
             isSkipped: file.isSkipped
         )
         file.merge(found)
+        // Persist the freshly extracted facts immediately: an autosave-pending merge is discarded if a
+        // later `includePendingChanges = false` object fetch refaults the record before it flushes.
+        try? file.modelContext?.save()
         return file.cachedMetadata
     }
 
@@ -54,6 +58,9 @@ final class MediaMetadataService {
         (try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
             var metadata = MediaMetadata()
             metadata.fileSizeBytes = fileURL.fileSizeBytes
+            // The staleness baseline, read on every open for every type — before the skip guard, so even
+            // a skipped file (size-only) carries one for the scan and preview to compare against.
+            metadata.lastModified = fileURL.contentModificationDate
             guard !isSkipped else { return metadata }
             switch mediaType {
             case .image:
