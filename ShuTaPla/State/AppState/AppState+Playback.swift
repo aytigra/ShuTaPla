@@ -135,8 +135,9 @@ extension AppState {
     /// `currentAudioFile`/`currentVisualFile`. Resolves only that one file (no whole-sequence
     /// materialization).
     private func currentFile(of playlist: Playlist?) -> PlaylistFile? {
-        guard let playlist, let id = playlist.currentFileID else { return nil }
-        return modelContext.sequenceMember(id, of: playlist)
+        guard let playlist, let id = playlist.currentFileID,
+              let pid = sequences.member(id, of: playlist) else { return nil }
+        return modelContext.model(for: pid) as? PlaylistFile
     }
 
     // MARK: - Starting & exiting playback

@@ -69,6 +69,21 @@ final class PlaybackSequences {
         memoized(playlist, .skipped) { modelContext.skippedSequence(of: $0) }
     }
 
+    /// The persistent id of `fileID`'s file if it survives `playlist`'s effective filter, else nil —
+    /// the membership test one remembered file uses (a channel's current file, a selection re-seed).
+    /// A UUID→id bridge (`identifier(of:)`, an indexed point lookup) then a `.contains` against the
+    /// memoized playable sequence, so it reuses the same cache the bound surfaces hold rather than
+    /// re-deriving. A skipped file is absent from that sequence, so it is never a channel's current file.
+    func member(_ fileID: UUID, of playlist: Playlist) -> PersistentIdentifier? {
+        guard let pid = modelContext.identifier(of: fileID),
+              sequence(of: playlist).contains(pid) else { return nil }
+        return pid
+    }
+  
+    func isMember(_ fileID: UUID, of playlist: Playlist) -> Bool {
+      member(fileID, of: playlist) != nil
+    }
+
     /// Returns `compute(playlist)` memoized under `(playlist, mode)` for the current `version`,
     /// re-deriving only when a `bump()` moved the version past the cache. Reading `version` here is
     /// the Observation dependency that drives re-derivation; every consumer in a version reuses the

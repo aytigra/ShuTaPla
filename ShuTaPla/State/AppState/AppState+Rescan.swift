@@ -32,7 +32,7 @@ extension AppState {
         // playlist snaps the highlight back to the playing file — the one way to do so without
         // leaving it. Skipped when the resume file is filtered out (or none has played yet).
         if let currentID = playlist.currentFileID,
-           sequenceContains(currentID, of: playlist) {
+           sequences.isMember(currentID, of: playlist) {
             managerSelection = [currentID]
         }
         scrollSelectionToken += 1   // re-center even if the selection didn't change

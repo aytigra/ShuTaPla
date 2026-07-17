@@ -99,7 +99,7 @@ extension AppState {
     func reseedManagerSelection() {
         managerSelection = []
         if let playlist = managedPlaylist, let id = playlist.currentFileID,
-           sequenceContains(id, of: playlist) {
+           sequences.isMember(id, of: playlist) {
             managerSelection = [id]
         }
         scrollSelectionToken += 1

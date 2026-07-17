@@ -268,10 +268,11 @@ final class AppState {
         modelContext.model(for: id) as? PlaylistFile
     }
 
-    /// Whether `fileID` survives `playlist`'s effective filter — a store-side membership test that
-    /// resolves only that one file, rather than materializing the whole sequence.
-    func sequenceContains(_ fileID: UUID, of playlist: Playlist) -> Bool {
-        modelContext.sequenceMember(fileID, of: playlist) != nil
+    /// The row identity (`PersistentIdentifier`) of the file with app id `fileID`, or nil if none —
+    /// the target a `List` scrolls to (a row's `ForEach` identity). A one-row fetch that faults no
+    /// model, called only on a scroll request, never per row.
+    func fileIdentifier(for fileID: UUID) -> PersistentIdentifier? {
+        modelContext.identifier(of: fileID)
     }
 
     /// The selected manager files (the small selection set), resolved from the store in

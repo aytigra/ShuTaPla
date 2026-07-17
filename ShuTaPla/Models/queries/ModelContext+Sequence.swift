@@ -69,7 +69,7 @@ extension ModelContext {
     /// Test-only helper — must never be used in the app: it faults **every** row of the sequence
     /// into the context on the main actor, exactly the O(folder) materialization the identifier
     /// sequences exist to avoid. Production holds `sequence` and resolves only the rows a surface
-    /// shows via `model(for:)`, or fetches the one row it needs (`sequenceMember`).
+    /// shows via `model(for:)`, or resolves a single remembered file through `PlaybackSequences.member`.
     func sequenceFiles(of playlist: Playlist) -> [PlaylistFile] {
         sequence(of: playlist).compactMap { model(for: $0) as? PlaylistFile }
     }
@@ -130,19 +130,9 @@ extension ModelContext {
         return (untagged, invalidTagging, skipped)
     }
 
-    /// The file with app id `fileID` if it survives `playlist`'s effective filter, else nil — the
-    /// membership test for one file (a channel's current file, a scope/selection re-seed). Resolves
-    /// just that one file and evaluates the effective filter on it, rather than building the whole
-    /// sequence to scan for it. A skipped file never survives, so it is never a channel's current file.
-    func sequenceMember(_ fileID: UUID, of playlist: Playlist) -> PlaylistFile? {
-        guard let pid = identifier(of: fileID), let file = model(for: pid) as? PlaylistFile,
-              (try? sequencePredicate(for: playlist).evaluate(file)) == true else { return nil }
-        return file
-    }
-
     /// The persistent identifier of the file with app id `fileID`, or nil if none exists — a
-    /// one-row fetch used to resolve a single file (and back the `sequenceMember` membership test)
-    /// without resolving the whole set.
+    /// one-row fetch used to resolve a single file (and back the `PlaybackSequences.member`
+    /// membership test) without resolving the whole set.
     func identifier(of fileID: UUID) -> PersistentIdentifier? {
         var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.id == fileID })
         descriptor.fetchLimit = 1
