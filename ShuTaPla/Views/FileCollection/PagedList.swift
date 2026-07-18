@@ -2,12 +2,15 @@
 //  PagedList.swift
 //  ShuTaPla
 //
-//  A fixed-row-height windowed list that stays inert while scrolling: a `ScrollView` over a
-//  `LazyVStack` of fixed-height *pages*, each a chunk of rows. It holds no scroll-derived `@State`
-//  — the `LazyVStack` windows the pages natively and `ScrollPosition` is set only imperatively for
-//  the O(1) open-jump — so `body` never re-renders mid-scroll. It sizes its content from the row
-//  count alone (never building a row to measure) and opens on `initialTarget` with no travel.
-//  `GalleryPagedList` layers the grid on top of it, mapping items to grid rows.
+//  A fixed-row-height windowed list that stays inert while scrolling: a `ScrollView` over a `VStack`
+//  of fixed-height *pages*, each a chunk of rows. Every page reserves its exact height whether or not
+//  its rows are built, so the content size is honest and the open-jump lands on the right row; each
+//  page then windows itself, building rows only while within a viewport of the screen (page-local
+//  `@State`). The container holds no scroll-derived `@State` — `ScrollPosition` is set only
+//  imperatively for the O(1) open-jump — so its `body` never re-renders mid-scroll; only the pages
+//  crossing the resident band do. It sizes its content from the row count alone (never building a row
+//  to measure) and opens on `initialTarget` with no travel. `GalleryPagedList` layers the grid on top
+//  of it, mapping items to grid rows.
 //
 //  `FixedChunks` is the pure index chunking (rows into pages here, items into grid rows for the
 //  gallery) and `PagedListGeometry` the pixel geometry — both `nonisolated` and unit-tested.
@@ -103,23 +106,27 @@ struct ScrollCommand: Equatable {
     let token: AnyHashable
 }
 
-/// A fixed-row-height windowed list: it sizes its content from `count` rows alone, windows whole
-/// pages through the `LazyVStack`, and positions by content offset. `initialTarget` opens the list
-/// on a row with no travel (revealed only once positioned); `command` drives later programmatic
-/// scrolls. The caller resolves each row lazily in `row` and must tolerate an index momentarily out
-/// of its current range (return an empty view) while the sequence changes.
+/// A fixed-row-height windowed list: it sizes its content from `count` rows alone, windows through
+/// self-measuring pages, and positions by content offset. `initialTarget` opens the list on a row with
+/// no travel (revealed only once positioned); `command` drives later programmatic scrolls. The caller
+/// resolves each row lazily in `row` and must tolerate an index momentarily out of its current range
+/// (return an empty view) while the sequence changes.
 struct PagedList<Row: View>: View {
     let count: Int
     let rowHeight: CGFloat
-    /// Rows per page — the `LazyVStack` windowing granularity. Set by the caller to match its row
-    /// cost: a large value for cheap list rows (fewer pages, less scroll churn), a small one for
-    /// heavy gallery grid rows (each packs `columns` thumbnails, so few per page).
+    /// Rows per page — the residency windowing granularity. Set by the caller to match its row cost: a
+    /// large value for cheap list rows (fewer pages, less scroll churn), a small one for heavy gallery
+    /// grid rows (each packs `columns` thumbnails, so few per page).
     let rowsPerPage: Int
     /// Row to open at on first appearance (top-aligned, instant), or nil to open at the top.
     let initialTarget: Int?
     /// A later scroll to apply when it changes; nil issues nothing. `index` is a row index.
     let command: ScrollCommand?
     @ViewBuilder let row: (Int) -> Row
+
+    /// The scroll viewport's coordinate space; each page measures its own frame against it to decide
+    /// residency, so the container writes no scroll-derived state and only pages crossing the band re-render.
+    static var viewportSpace: String { "pagedViewport" }
 
     private var pages: FixedChunks { FixedChunks(size: rowsPerPage) }
     /// The pixel geometry — content height, the open-jump, and the keyboard reveal — at row
@@ -134,32 +141,33 @@ struct PagedList<Row: View>: View {
 
     @State private var scrollPosition = ScrollPosition()
     @State private var offset = ScrollOffset()
-    // Hidden until the first positioning pass runs, so the top never flashes before the list opens
-    // on its target — and every page renders empty until then, so the open-jump lands against the
-    // honest content height without any page above the target building a row.
+    // Hidden until the first positioning pass runs, so the top never flashes before the list opens on
+    // its target. Flips exactly once, at open — never on scroll — so the container never re-renders mid-drag.
     @State private var isPositioned = false
 
     var body: some View {
         GeometryReader { proxy in
             let height = proxy.size.height
             ScrollView {
-                LazyVStack(spacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { page in
                         PagedListPage(
                             rowIndices: pages.range(page, of: count),
                             rowHeight: rowHeight,
-                            resident: isPositioned,
+                            isPositioned: isPositioned,
+                            viewportHeight: height,
+                            viewportSpace: Self.viewportSpace,
                             row: row
                         )
                     }
                 }
             }
+            // The viewport space each page measures itself against to decide residency.
+            .coordinateSpace(.named(Self.viewportSpace))
             .scrollPosition($scrollPosition)
             // Track the raw offset off to the side (a reference write, not `@State`) so an animated
             // reveal can measure from where the list sits without re-rendering per frame.
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-                offset.y = y
-            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in offset.y = y }
             .opacity(isPositioned ? 1 : 0)
             .onAppear { openInitial(height: height) }
             .onChange(of: command) { _, cmd in apply(cmd, height: height) }
@@ -194,27 +202,49 @@ struct PagedList<Row: View>: View {
     }
 }
 
-/// One page — the rows it was handed, built as a unit. In the outer `LazyVStack` only near-viewport
-/// pages are instantiated; a non-resident page contributes just its fixed height (an empty spacer)
-/// so the content stays the right size while its rows stay unbuilt. Each row is framed to `rowHeight`
-/// top-aligned, so any inter-row gap baked into `rowHeight` falls below the row.
+/// One page — the rows it was handed, built as a unit. It measures its own frame against the scroll
+/// viewport and builds rows only once the container has positioned *and* the page is within a viewport
+/// of the screen; otherwise it contributes just its fixed height (an empty `Color.clear`) so the content
+/// stays the right size — exactly — while its rows stay unbuilt. The in-band flag is page-local `@State`,
+/// so scrolling re-renders only the pages crossing the band edge, never the container. Each row is framed
+/// to `rowHeight` top-aligned, so any inter-row gap baked into `rowHeight` falls below the row.
 private struct PagedListPage<Row: View>: View {
     /// This page's row indices, sliced by the container.
     let rowIndices: Range<Int>
     let rowHeight: CGFloat
-    /// False until the container has positioned on its target; a non-resident page builds no rows
-    /// (an empty `Color.clear` at the page's height), so the open-jump lands against the honest
-    /// content height without any page above the target building a row.
-    let resident: Bool
+    /// False until the container has jumped to its target; gates every page so nothing builds rows at
+    /// the pre-jump offset 0 — otherwise the top pages would build (and fetch thumbnails) only to be
+    /// discarded by the jump. Flips once at open, never on scroll.
+    let isPositioned: Bool
+    /// The viewport's height, and the named coordinate space anchored to it, so the page can locate
+    /// itself relative to what's on screen.
+    let viewportHeight: CGFloat
+    let viewportSpace: String
     @ViewBuilder let row: (Int) -> Row
+
+    /// Whether the page's frame overlaps the screen (expanded one viewport each side), self-measured so
+    /// only the pages entering or leaving the band re-render. Its rows build only when this and
+    /// `isPositioned` both hold.
+    @State private var inBand = false
 
     private var pageHeight: CGFloat { CGFloat(rowIndices.count) * rowHeight }
 
     var body: some View {
-        Group {
-            if resident { content } else { Color.clear }
+        // Read into Sendable locals so the nonisolated `onGeometryChange` transform captures only these,
+        // not `self` (a non-Sendable `PagedListPage<Row>` because of the `row` closure).
+        let space = viewportSpace
+        let viewport = viewportHeight
+        return Group {
+            if isPositioned && inBand { content } else { Color.clear }
         }
         .frame(height: pageHeight, alignment: .top)
+        // In band when the page's frame overlaps the viewport expanded by one viewport each side, so
+        // rows are built a screen ahead of scrolling in. `onGeometryChange` writes `inBand` only when
+        // this Bool flips — no state write, no re-render, on the ticks in between.
+        .onGeometryChange(for: Bool.self) { proxy in
+            let frame = proxy.frame(in: .named(space))
+            return frame.maxY > -viewport && frame.minY < viewport * 2
+        } action: { inBand = $0 }
     }
 
     private var content: some View {
