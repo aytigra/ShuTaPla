@@ -111,16 +111,17 @@ struct ScrollCommand: Equatable {
 struct PagedList<Row: View>: View {
     let count: Int
     let rowHeight: CGFloat
+    /// Rows per page — the `LazyVStack` windowing granularity. Set by the caller to match its row
+    /// cost: a large value for cheap list rows (fewer pages, less scroll churn), a small one for
+    /// heavy gallery grid rows (each packs `columns` thumbnails, so few per page).
+    let rowsPerPage: Int
     /// Row to open at on first appearance (top-aligned, instant), or nil to open at the top.
     let initialTarget: Int?
     /// A later scroll to apply when it changes; nil issues nothing. `index` is a row index.
     let command: ScrollCommand?
     @ViewBuilder let row: (Int) -> Row
 
-    /// Rows per page — the `LazyVStack` windowing granularity. Large enough that a page spans most of
-    /// a screenful (so few pages are resident) yet small enough to build cheaply.
-    private static var rowsPerPage: Int { 10 }
-    private var pages: FixedChunks { FixedChunks(size: Self.rowsPerPage) }
+    private var pages: FixedChunks { FixedChunks(size: rowsPerPage) }
     /// The pixel geometry — content height, the open-jump, and the keyboard reveal — at row
     /// granularity.
     private var window: PagedListGeometry { PagedListGeometry(rowHeight: rowHeight) }

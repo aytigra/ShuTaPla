@@ -40,6 +40,7 @@ struct FileListSurface: View {
         PagedList(
             count: ids.count,
             rowHeight: AppConstants.fileListRowHeight,
+            rowsPerPage: 100,
             initialTarget: targetIndex,
             command: command
         ) { index in
