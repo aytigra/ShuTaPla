@@ -37,6 +37,10 @@ extension PlaybackCoordinator {
     /// `timelineEngine(of:)`, `visualVideoEngine`, or `audioEngine`.
     func persistTimelinePosition(from engine: MPVPlaybackEngine?) {
         guard let engine, engine.cloudLoad.pendingFile == nil, let file = engine.currentFile else { return }
+        // Skip an unchanged write: a channel paused behind the overlay holds a frozen `currentTime`,
+        // and SwiftData dirties the row on a same-value set, so writing it every tick would re-fire
+        // every `Playlist` query and observer and churn the file list while nothing actually moved.
+        guard file.lastPosition != engine.currentTime else { return }
         file.lastPosition = engine.currentTime
     }
 

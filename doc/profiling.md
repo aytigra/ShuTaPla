@@ -1,6 +1,6 @@
 # Profiling
 
-How to record and read an Instruments trace for ShuTaPla. It is a macOS app, so the **host Mac is
+How to record and read an Instruments trace for Shutapla. It is a macOS app, so the **host Mac is
 the profiling device** and the **SwiftUI** template works directly (no simulator caveat).
 
 Tooling lives in the `swiftui-expert-skill`:
@@ -9,7 +9,7 @@ Tooling lives in the `swiftui-expert-skill`:
 
 ## Fixture
 
-Profile the Xcode **Debug** build (bundle id `com.aytigra.ShuTaPla.debug`) — it has its own on-disk
+Profile the Xcode **Debug** build (bundle id `com.aytigra.Shutapla.debug`) — it has its own on-disk
 store, separate from the `/Applications` release build, so it can carry realistic test data.
 
 ## Recording an interaction (warm path)
@@ -18,9 +18,9 @@ Captures anything you drive by hand — selection, switching, scrolling, edits.
 
 1. Launch **exactly one** instance and grab its pid:
    ```bash
-   APP=~/Library/Developer/Xcode/DerivedData/ShuTaPla-*/Build/Products/Debug/ShuTaPla.app
+   APP=~/Library/Developer/Xcode/DerivedData/ShuTaPla-*/Build/Products/Debug/Shutapla.app
    open -n $APP
-   pgrep -f "Build/Products/Debug/ShuTaPla.app/Contents/MacOS/ShuTaPla"   # → one pid
+   pgrep -f "Build/Products/Debug/Shutapla.app/Contents/MacOS/ShuTaPla"   # → one pid
    ```
 2. Attach the recorder (background it with a stop-file so you can end it cleanly):
    ```bash
@@ -33,7 +33,7 @@ Captures anything you drive by hand — selection, switching, scrolling, edits.
 
 ### Traps — read before recording
 
-- **Never use `--launch` on `ShuTaPla.app`.** `xctrace` resolves the launch target by the bundle's
+- **Never use `--launch` on `Shutapla.app`.** `xctrace` resolves the launch target by the bundle's
   basename, and there are two `ShuTaPla.app` on the machine (`/Applications` + DerivedData) → it
   aborts with *"process is ambiguous"*. Use `open -n` + `--attach <pid>` instead.
 - **Never profile a copied bundle.** A copy keeps the same bundle id, so LaunchServices opens *two*

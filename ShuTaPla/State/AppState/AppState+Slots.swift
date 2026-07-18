@@ -22,6 +22,7 @@ extension AppState {
         audioChannelPlaylist = appStateModel.audioChannelPlaylistId.flatMap(playlist(withID:))
         managerScope = appStateModel.managerScopeRaw.flatMap(MediaType.init(rawValue:)) ?? .video
         managedPlaylist = rememberedPlaylist(for: managerScope)
+        reseedManagerSelection()   // highlight the resume file at launch, as a playlist click does
     }
 
     private func playlist(withID id: UUID) -> Playlist? {

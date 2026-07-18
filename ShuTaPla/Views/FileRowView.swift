@@ -37,7 +37,10 @@ struct FileRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Fill the fixed row slot (`VirtualList` frames the row to `fileListRowHeight`) so the
+        // selection wash and the playback-cursor border span the whole row rather than just the
+        // text, leaving no gap between a row's separator and the next row's shade.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear)
         // A purple border marks the playback cursor, layered over the accent selection
         // wash so a current row that's also selected shows both cues.

@@ -2,10 +2,9 @@
 //  FileCollectionLayoutTests.swift
 //  ShuTaPlaTests
 //
-//  The gallery's column count drives 2D keyboard navigation, so it must match the
-//  columns `LazyVGrid` actually laid out. It is measured from the laid-out cells'
-//  leading edges: cells in one column share an edge, so the count of distinct edges
-//  (to the nearest point) is the column count. No cells floors at one column.
+//  The gallery packs its columns from the available width — the column count (which drives 2D
+//  keyboard navigation) and the tile width — replicating `LazyVGrid`'s `.adaptive` packing, and
+//  derives a fixed row height from that tile width for the windowed list.
 //
 
 import Testing
@@ -13,27 +12,6 @@ import CoreGraphics
 @testable import ShuTaPla
 
 @Suite struct FileCollectionLayoutTests {
-
-    @Test func distinctEdgesCountAsColumns() {
-        // Three columns over two rows: six cells, three distinct leading edges.
-        let minXs: [CGFloat] = [12, 174, 336, 12, 174, 336]
-        #expect(FileCollectionLayout.columnCount(fromCellMinXs: minXs) == 3)
-    }
-
-    @Test func subPixelDriftCollapsesToOneEdge() {
-        // The same column measured across rows can drift by a fraction of a point;
-        // rounding keeps it one column rather than inflating the count.
-        let minXs: [CGFloat] = [12.0, 12.4, 11.6, 12.49]
-        #expect(FileCollectionLayout.columnCount(fromCellMinXs: minXs) == 1)
-    }
-
-    @Test func noCellsFloorsAtOneColumn() {
-        #expect(FileCollectionLayout.columnCount(fromCellMinXs: []) == 1)
-    }
-
-    @Test func oneCellIsOneColumn() {
-        #expect(FileCollectionLayout.columnCount(fromCellMinXs: [12]) == 1)
-    }
 
     // MARK: - Adaptive grid metrics
 
@@ -48,5 +26,53 @@ import CoreGraphics
         let metrics = FileCollectionLayout.gridMetrics(min: chosen)
         #expect(metrics.min == CGFloat(chosen))
         #expect(metrics.max == CGFloat(chosen) * FileCollectionLayout.galleryMaxRatio)
+    }
+
+    // MARK: - Adaptive packing (column count + tile width from width)
+
+    @Test func packsAsManyMinWidthColumnsAsFit() {
+        // 800 wide, 200 min, 4 spacing: (800+4)/(200+4) = 3.94 → 3 columns, each sharing the
+        // width evenly: (800 - 2·4)/3 = 264.
+        let layout = FileCollectionLayout.gridLayout(width: 800, min: 200, max: 360, spacing: 4)
+        #expect(layout.columns == 3)
+        #expect(layout.tileWidth == 264)
+    }
+
+    @Test func floorsAtOneColumnWhenNarrowerThanMin() {
+        // Narrower than a single minimum tile still yields one column filling the width.
+        let layout = FileCollectionLayout.gridLayout(width: 150, min: 200, max: 360, spacing: 4)
+        #expect(layout.columns == 1)
+        #expect(layout.tileWidth == 150)
+    }
+
+    @Test func addsAColumnAsWidthGrows() {
+        // 1000 wide, 200 min, 4 spacing: (1004)/(204) = 4.9 → 4 columns, (1000 - 3·4)/4 = 247.
+        let layout = FileCollectionLayout.gridLayout(width: 1000, min: 200, max: 360, spacing: 4)
+        #expect(layout.columns == 4)
+        #expect(layout.tileWidth == 247)
+    }
+
+    @Test func tileWidthClampsAtMax() {
+        // Two columns whose even share (260) exceeds the max (250) clamp to the max, leaving the
+        // row unfilled rather than over-wide.
+        let layout = FileCollectionLayout.gridLayout(width: 520, min: 200, max: 250, spacing: 0)
+        #expect(layout.columns == 2)
+        #expect(layout.tileWidth == 250)
+    }
+
+    @Test func degenerateWidthIsOneColumn() {
+        let layout = FileCollectionLayout.gridLayout(width: 0, min: 200, max: 360, spacing: 4)
+        #expect(layout.columns == 1)
+    }
+
+    // MARK: - Row height from tile width
+
+    @Test func rowHeightIsThumbnailPlusChrome() {
+        // Tile 206 wide: thumbnail (206 - 2·3)·3/4 = 150, plus the 42-point caption chrome = 192.
+        #expect(FileCollectionLayout.rowHeight(tileWidth: 206) == 192)
+    }
+
+    @Test func rowHeightGrowsWithTileWidth() {
+        #expect(FileCollectionLayout.rowHeight(tileWidth: 400) > FileCollectionLayout.rowHeight(tileWidth: 200))
     }
 }

@@ -51,6 +51,11 @@ nonisolated enum AppConstants {
     /// shared by every list/grid so the selection reads consistently across them.
     static let selectionHighlightOpacity = 0.22
 
+    /// Fixed height of one file-list row (`FileRowView` + its `Divider`). `VirtualList` sizes its
+    /// content and jumps by this constant, so every row is pinned to it — a single line of text
+    /// plus vertical padding and the separator.
+    static let fileListRowHeight: CGFloat = 30
+
     /// Height of the Player-mode top-edge hover zone that reveals the audio overlay. The
     /// Visual Overlay insets its top by this much so its close button sits clear of it.
     static let audioHoverZoneHeight: CGFloat = 60

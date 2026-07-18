@@ -234,6 +234,53 @@ struct AppStateTests {
         #expect(appState.coordinator.liveAudioPlaylist == nil)
     }
 
+    /// Launch highlights the managed playlist's resume file, exactly as clicking the playlist
+    /// does — so the Manager opens with it selected (and, via the file list's init-seed,
+    /// scrolled to). The playlist stays Stopped, so the window stays in Manager mode.
+    @Test func launchHighlightsResumeFileOfManagedPlaylist() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        context.insert(video)
+        addFile("a.mp4", order: 0, to: video, in: context)
+        let resume = addFile("b.mp4", order: 1, to: video, in: context)
+        addFile("c.mp4", order: 2, to: video, in: context)
+        video.currentFileID = resume.id
+
+        let model = AppStateModel.fetchOrCreate(in: context)
+        model.lastManagedVideoPlaylistId = video.id
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.managedPlaylist === video)
+        #expect(appState.managerSelection == [resume.id])
+    }
+
+    /// A resume file that no longer survives the managed playlist's sequence leaves the launch
+    /// selection empty (the guard `reseedManagerSelection` shares) — nothing to highlight.
+    @Test func launchLeavesSelectionEmptyWhenResumeFileIsGone() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let video = Playlist(name: "Clips", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        context.insert(video)
+        addFile("a.mp4", order: 0, to: video, in: context)
+        video.currentFileID = UUID()   // not any file in the sequence
+
+        let model = AppStateModel.fetchOrCreate(in: context)
+        model.lastManagedVideoPlaylistId = video.id
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.managedPlaylist === video)
+        #expect(appState.managerSelection.isEmpty)
+    }
+
     /// Closing the window suppresses both channels without changing their states; reopening lifts it.
     @Test func windowCloseSuppressesAndReopenLifts() throws {
         let container = try makeContainer()

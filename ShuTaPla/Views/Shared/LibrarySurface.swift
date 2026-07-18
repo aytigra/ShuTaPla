@@ -53,8 +53,18 @@ struct LibrarySurface: View {
 
     @State private var fileRenamingID: UUID?
     @State private var fileDraftName = ""
+    // A switch/re-center scroll for the file list, applied by `VirtualList`. Set when the channel
+    // asks to re-center (a playlist switch bumps `scrollTrigger`).
+    @State private var fileScrollCommand: VirtualScrollCommand?
 
     private var playlists: [Playlist] { allPlaylists.filter { $0.mediaType == context.mediaType } }
+
+    /// The current track's index in the file list — where `VirtualList` opens with no travel, and
+    /// the row a re-center scroll reveals. `nil` when nothing is current or it is filtered out.
+    private var fileTargetIndex: Int? {
+        guard let pid = context.currentFile?.persistentModelID else { return nil }
+        return context.fileIDs.firstIndex(of: pid)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -163,68 +173,39 @@ struct LibrarySurface: View {
     }
 
     private var fileList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    // The lazy container resolves only on-screen identifiers, so a large list
-                    // never materializes at once.
-                    ForEach(context.fileIDs, id: \.self) { id in
-                        // The `Group` keeps one view per element however the resolve goes (a
-                        // just-fetched identifier resolves in practice).
-                        Group {
-                            if let file = appState.file(for: id) {
-                                fileRow(file).id(file.id)
-                                Divider()
-                            }
-                        }
-                    }
-                }
-            }
-            // The overlay slides in, so the rows may not be laid out when `onAppear` fires —
-            // defer a layout pass so `scrollTo` has rows to find and the list opens centered.
-            .onAppear {
-                guard let id = context.currentFile?.id else { return }
-                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
-            }
-            // Switching playlists swaps the list in place, so `onAppear` won't fire — re-center
-            // on the trigger instead, deferred a layout pass so the new rows exist for `scrollTo`.
-            .onChange(of: context.scrollTrigger) { _, _ in
-                guard let id = context.currentFile?.id else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .center) } }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func fileRow(_ file: PlaylistFile) -> some View {
-        if let playlist = context.activePlaylist {
-            FileRowView(
-                file: file,
-                playlist: playlist,
-                isSelected: context.currentFile?.id == file.id,
-                // The overlay list already conveys the current file as the selection; the
-                // playback-cursor glyph is the Manager's cue, where selection is independent.
-                isCurrent: false,
-                isRenaming: fileRenamingID == file.id,
-                isStripping: appState.strippingFileIDs.contains(file.id),
-                draftName: $fileDraftName,
-                onCommitRename: { commitFileRename(file) },
-                onCancelRename: { fileRenamingID = nil }
-            )
-            .onTapGesture {
-                guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
-                context.onPlayFile(playlist, file)
-            }
-            .contextMenu {
-                FileContextMenu(
-                    file: file,
+        VirtualList(
+            count: context.fileIDs.count,
+            rowHeight: AppConstants.fileListRowHeight,
+            initialTarget: fileTargetIndex,
+            command: fileScrollCommand
+        ) { index in
+            if context.fileIDs.indices.contains(index), let playlist = context.activePlaylist {
+                FileListRow(
+                    id: context.fileIDs[index],
                     playlist: playlist,
-                    onRename: { fileDraftName = file.fileName; fileRenamingID = file.id },
-                    onRemoveAudio: { context.onRemoveAudio(file) },
-                    onDownload: { appState.downloadFiles([file]) },
-                    onDelete: { context.onDeleteFile(file) }
+                    // The overlay list conveys the current track as the selection; the
+                    // playback-cursor glyph is the Manager's cue, where selection is separate.
+                    role: .overlay(currentID: context.currentFile?.id),
+                    renamingID: fileRenamingID,
+                    draftName: $fileDraftName,
+                    onTap: { file in
+                        guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
+                        context.onPlayFile(playlist, file)
+                    },
+                    onCommitRename: { commitFileRename($0) },
+                    onCancelRename: { fileRenamingID = nil },
+                    onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
+                    onRemoveAudio: { context.onRemoveAudio($0) },
+                    onDownload: { appState.downloadFiles([$0]) },
+                    onDelete: { context.onDeleteFile($0) }
                 )
             }
+        }
+        // A playlist switch swaps the list in place (no remount), so re-center on the new current
+        // track instantly — no travel — through the command the `VirtualList` applies.
+        .onChange(of: context.scrollTrigger) { _, trigger in
+            guard let index = fileTargetIndex else { return }
+            fileScrollCommand = VirtualScrollCommand(index: index, animated: false, token: trigger)
         }
     }
 
