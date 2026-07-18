@@ -51,7 +51,7 @@ nonisolated enum AppConstants {
     /// shared by every list/grid so the selection reads consistently across them.
     static let selectionHighlightOpacity = 0.22
 
-    /// Fixed height of one file-list row (`FileRowView` + its `Divider`). `VirtualList` sizes its
+    /// Fixed height of one file-list row (`FileRowView` + its `Divider`). `PagedList` sizes its
     /// content and jumps by this constant, so every row is pinned to it — a single line of text
     /// plus vertical padding and the separator.
     static let fileListRowHeight: CGFloat = 30

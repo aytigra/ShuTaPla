@@ -1,19 +1,18 @@
 //
-//  VirtualWindowTests.swift
+//  PagedListGeometryTests.swift
 //  ShuTaPlaTests
 //
-//  The pure windowing math behind `VirtualList`: content size from the count alone, the
-//  padded/clamped visible band, the first-row boundary signal, and the clamped jump offset.
-//  Fixed row height 20, overscan 2 unless a case says otherwise.
+//  The pure pixel geometry behind `PagedList`: content size from the count alone, a row's y, and
+//  the clamped jump / reveal offsets. Fixed row height 20 unless a case says otherwise.
 //
 
 import Testing
 import CoreGraphics
 @testable import ShuTaPla
 
-@Suite struct VirtualWindowTests {
+@Suite struct PagedListGeometryTests {
 
-    private let window = VirtualWindow(rowHeight: 20, overscan: 2)
+    private let window = PagedListGeometry(rowHeight: 20)
 
     // MARK: - Content height
 
@@ -23,65 +22,6 @@ import CoreGraphics
 
     @Test func emptyContentIsZeroHeight() {
         #expect(window.contentHeight(count: 0) == 0)
-    }
-
-    // MARK: - Visible range
-
-    @Test func bandAtTopStartsAtZeroAndPadsBelow() {
-        // Viewport 200 tall at offset 0 covers rows 0..<10; +2 overscan below, none above.
-        #expect(window.visibleRange(offset: 0, height: 200, count: 100) == 0..<12)
-    }
-
-    @Test func bandInMiddlePadsBothSides() {
-        // Offset 400 → first visible row 20; viewport 200 → last visible 30; ±2 overscan.
-        #expect(window.visibleRange(offset: 400, height: 200, count: 100) == 18..<32)
-    }
-
-    @Test func bandClampsToCountAtBottom() {
-        // Scrolled to the end: upper edge never exceeds count.
-        #expect(window.visibleRange(offset: 1800, height: 200, count: 100) == 88..<100)
-    }
-
-    @Test func partialRowOffsetRoundsToCoverBoth() {
-        // Offset 410 shows the tail of row 20 and head of row 30; rounding keeps both, then overscan.
-        #expect(window.visibleRange(offset: 410, height: 200, count: 100) == 18..<33)
-    }
-
-    @Test func negativeOffsetClampsLowerToZero() {
-        // Rubber-band overscroll above the top must not produce negative indices. The viewport's
-        // bottom edge (150) still lands in row 7, so the band is rows 0..<8 plus overscan below.
-        #expect(window.visibleRange(offset: -50, height: 200, count: 100) == 0..<10)
-    }
-
-    @Test func emptyWhenNoRows() {
-        #expect(window.visibleRange(offset: 0, height: 200, count: 0).isEmpty)
-    }
-
-    @Test func emptyWhenViewportDegenerate() {
-        #expect(window.visibleRange(offset: 0, height: 0, count: 100).isEmpty)
-    }
-
-    @Test func bandNeverExceedsCountWhenShorterThanViewport() {
-        // Only 3 rows but a tall viewport: band is exactly the 3 rows, no overrun.
-        #expect(window.visibleRange(offset: 0, height: 500, count: 3) == 0..<3)
-    }
-
-    // MARK: - First-row boundary signal
-
-    @Test func firstRowIsFlooredIndex() {
-        #expect(window.firstRow(offset: 0, count: 100) == 0)
-        #expect(window.firstRow(offset: 19, count: 100) == 0)
-        #expect(window.firstRow(offset: 20, count: 100) == 1)
-        #expect(window.firstRow(offset: 405, count: 100) == 20)
-    }
-
-    @Test func firstRowClampsToLastIndexAtBottom() {
-        // A far-past-end offset (rubber band at bottom) clamps to the last valid index.
-        #expect(window.firstRow(offset: 5000, count: 100) == 99)
-    }
-
-    @Test func firstRowIsZeroWhenEmpty() {
-        #expect(window.firstRow(offset: 0, count: 0) == 0)
     }
 
     // MARK: - Row y

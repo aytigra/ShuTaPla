@@ -2,10 +2,10 @@
 //  FileListRow.swift
 //  ShuTaPla
 //
-//  One file row keyed by a file's `PersistentIdentifier`, the row `VirtualList` builds for both the
+//  One file row keyed by a file's `PersistentIdentifier`, the row `FileListSurface` builds for both the
 //  Manager file list and the overlay file lists. A single *concrete* (non-generic) view: it resolves
 //  the model inside its own body, draws `FileRowView` + its `Divider`, and applies the tap / context
-//  menu itself. Resolving here rather than in the caller keeps each `VirtualList` band element a
+//  menu itself. Resolving here rather than in the caller keeps each `PagedList` row a
 //  single view and lets the row observe the model it draws.
 //
 //  The two surfaces differ only in data: `role` picks the selection semantics (Manager's independent

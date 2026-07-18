@@ -20,7 +20,7 @@ nonisolated struct PlaylistPreferences: Codable, Sendable, Equatable {
     /// `nil` falls back to `GlobalSettings.defaultFilePositionPersistence`.
     var filePositionPersistence: Bool?
     var viewMode: ViewMode = .list
-    /// `nil` falls back to `FileCollectionLayout.galleryMinItemWidth`. The gallery's
+    /// `nil` falls back to `GalleryGrid.galleryMinItemWidth`. The gallery's
     /// adaptive minimum tile width; the maximum is derived from it (see `gridMetrics`).
     var galleryMinItemWidth: Double?
 

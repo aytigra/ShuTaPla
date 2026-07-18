@@ -155,6 +155,16 @@ Quick playlist switching in Player mode lives in the overlays' `LibrarySurface` 
 
 Overlays are SwiftUI views composed via `.overlay()` / `.transition()` on `PlayerView`, shown/hidden with `withAnimation` driven by `OverlayManager` state. **Hover zones** use `NSTrackingArea` (via an NSView bridge), not SwiftUI `.onHover`, which doesn't fire at the screen edge in fullscreen. Exclusivity is enforced centrally in `OverlayManager` when an overlay is shown (Expanded audio is exclusive; the Visual Overlay suppresses the bottom controls' hover; Compact audio yields only to Expanded audio); the rules themselves are specified in `features.md`.
 
+### File-list windowing
+
+The Manager list and gallery and the two overlay file lists all render through one custom windowed container (`PagedList`, `Views/FileCollection/`) rather than `List` or a bare `LazyVStack`. The driving requirement is opening a list of thousands of files *already positioned at the current file* with no visible scroll travel (behavior in `features/manager-mode.md`), which neither stock container delivers:
+
+- **`LazyVStack` + `scrollTo`** windows rows but not the *jump* — `scrollTo` prefix-walks every row up to a deep target, so opening hitches in proportion to depth.
+- **`LazyVStack` + a two-way `scrollPosition` offset binding** positions in O(1) but SwiftUI rewrites the binding every frame, jittering hand-scroll and slowing switches; positioning must stay one-way.
+- **`List` (NSTableView-backed)** makes the jump but is not lazy here — switching to a large playlist eagerly builds every row (measure + display) before any scrolling, and that O(folder) build *is* the switch cost, invariant to row type.
+
+`PagedList` is a `ScrollView` over a `LazyVStack` of fixed-height **pages** (a fixed row count each): the stack windows pages natively while each page's height is known without building its rows, so the open-jump sets the scroll offset **imperatively** — one-way, never read back in `body` — against honest content height. Not-yet-positioned pages render as empty placeholders at their true page height, so no page above the target builds a cell before the jump lands. A playlist switch remounts the tree (`.id(playlist)`) to re-open from cold through the same positioned path rather than animating off a stale offset; `GalleryPagedList` wraps the same core with a grid layer. The one-shot windowing math (content height, target/reveal offsets, item↔row chunking) is pure and unit-tested.
+
 ---
 
 ## 7. File system and tags
@@ -271,15 +281,17 @@ MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, Cmpv/ (
 FFmpeg/      Cffmpeg/ (Clang module)
 Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine, CloudLoadGate
 Views/
-  Welcome/   WelcomeView
-  Manager/   ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,
-             FileCollectionView, GalleryCell, FilterBar,
-             PlaylistTagsView, TagSidebar
-  Player/    PlayerView, VideoPlayerView, ImagePlayerView, PauseOverlay, PlaybackControlsBar
-  Audio/     AudioInlet, AudioOverlay
-  Shared/    TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
-             HoverZone, ControlButtonStyle, FileSelection, FileRowView
-  Settings/  SettingsView
+  Welcome/         WelcomeView
+  Manager/         ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,
+                   FilterBar, PlaylistTagsView, TagSidebar
+  FileCollection/  FileCollectionView, PagedList + GalleryPagedList (windowed containers),
+                   FileListSurface, FileListRow, GalleryCell, FileGalleryCell, GalleryGrid,
+                   FileSelection, FileContextMenu, FileRowView
+  Player/          PlayerView, VideoPlayerView, ImagePlayerView, PauseOverlay, PlaybackControlsBar
+  Audio/           AudioInlet, AudioOverlay
+  Shared/          TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
+                   HoverZone, ControlButtonStyle, RenameFileField
+  Settings/        SettingsView
 Extensions/  URL+MediaType, URL+Fingerprint, Array+Move, NSWindow+Fullscreen
 Resources/   Assets.xcassets
 ```

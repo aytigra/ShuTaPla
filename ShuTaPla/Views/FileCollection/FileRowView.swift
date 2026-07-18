@@ -37,7 +37,7 @@ struct FileRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        // Fill the fixed row slot (`VirtualList` frames the row to `fileListRowHeight`) so the
+        // Fill the fixed row slot (`PagedList` frames the row to `fileListRowHeight`) so the
         // selection wash and the playback-cursor border span the whole row rather than just the
         // text, leaving no gap between a row's separator and the next row's shade.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

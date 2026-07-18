@@ -53,13 +53,13 @@ struct LibrarySurface: View {
 
     @State private var fileRenamingID: UUID?
     @State private var fileDraftName = ""
-    // A switch/re-center scroll for the file list, applied by `VirtualList`. Set when the channel
+    // A switch/re-center scroll for the file list, applied by `PagedList`. Set when the channel
     // asks to re-center (a playlist switch bumps `scrollTrigger`).
-    @State private var fileScrollCommand: VirtualScrollCommand?
+    @State private var fileScrollCommand: ScrollCommand?
 
     private var playlists: [Playlist] { allPlaylists.filter { $0.mediaType == context.mediaType } }
 
-    /// The current track's index in the file list — where `VirtualList` opens with no travel, and
+    /// The current track's index in the file list — where `PagedList` opens with no travel, and
     /// the row a re-center scroll reveals. `nil` when nothing is current or it is filtered out.
     private var fileTargetIndex: Int? {
         guard let pid = context.currentFile?.persistentModelID else { return nil }
@@ -150,10 +150,10 @@ struct LibrarySurface: View {
                     .zIndex(1)
             }
             Divider()
-            if context.fileIDs.isEmpty {
-                emptyFiles
+            if let playlist = context.activePlaylist, !context.fileIDs.isEmpty {
+                fileList(playlist)
             } else {
-                fileList
+                emptyFiles
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,40 +172,33 @@ struct LibrarySurface: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var fileList: some View {
-        VirtualList(
-            count: context.fileIDs.count,
-            rowHeight: AppConstants.fileListRowHeight,
-            initialTarget: fileTargetIndex,
-            command: fileScrollCommand
-        ) { index in
-            if context.fileIDs.indices.contains(index), let playlist = context.activePlaylist {
-                FileListRow(
-                    id: context.fileIDs[index],
-                    playlist: playlist,
-                    // The overlay list conveys the current track as the selection; the
-                    // playback-cursor glyph is the Manager's cue, where selection is separate.
-                    role: .overlay(currentID: context.currentFile?.id),
-                    renamingID: fileRenamingID,
-                    draftName: $fileDraftName,
-                    onTap: { file in
-                        guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
-                        context.onPlayFile(playlist, file)
-                    },
-                    onCommitRename: { commitFileRename($0) },
-                    onCancelRename: { fileRenamingID = nil },
-                    onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
-                    onRemoveAudio: { context.onRemoveAudio($0) },
-                    onDownload: { appState.downloadFiles([$0]) },
-                    onDelete: { context.onDeleteFile($0) }
-                )
-            }
-        }
-        // A playlist switch swaps the list in place (no remount), so re-center on the new current
-        // track instantly — no travel — through the command the `VirtualList` applies.
+    /// The shared `FileListSurface` in its overlay role — the current track is the selection (no
+    /// separate playback-cursor glyph), a double-click plays the file. `FileListSurface` owns the
+    /// `.id(playlist)` remount that reopens positioned on a switch; a re-selection of the active
+    /// playlist re-bumps `scrollTrigger` (without changing the playlist) to re-center the current track.
+    private func fileList(_ playlist: Playlist) -> some View {
+        FileListSurface(
+            ids: context.fileIDs,
+            playlist: playlist,
+            role: .overlay(currentID: context.currentFile?.id),
+            targetIndex: fileTargetIndex,
+            command: fileScrollCommand,
+            renamingID: fileRenamingID,
+            draftName: $fileDraftName,
+            onTap: { file in
+                guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
+                context.onPlayFile(playlist, file)
+            },
+            onCommitRename: { commitFileRename($0) },
+            onCancelRename: { fileRenamingID = nil },
+            onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
+            onRemoveAudio: { context.onRemoveAudio($0) },
+            onDownload: { appState.downloadFiles([$0]) },
+            onDelete: { context.onDeleteFile($0) }
+        )
         .onChange(of: context.scrollTrigger) { _, trigger in
             guard let index = fileTargetIndex else { return }
-            fileScrollCommand = VirtualScrollCommand(index: index, animated: false, token: trigger)
+            fileScrollCommand = ScrollCommand(index: index, mode: .jump, token: trigger)
         }
     }
 

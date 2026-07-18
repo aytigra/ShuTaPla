@@ -2,9 +2,8 @@
 //  GalleryPagingTests.swift
 //  ShuTaPlaTests
 //
-//  The pure page/row/item chunking behind `GalleryPagedList`: total rows and pages from the item
-//  count, the grid rows in a page, the item indices in a row, and the row holding an item. Four
-//  columns, ten rows per page unless a case says otherwise.
+//  The item↔row mapping behind `GalleryPagedList`: total grid rows from the item count, the item
+//  indices in a row, and the row holding an item. Four columns unless a case says otherwise.
 //
 
 import Testing
@@ -12,7 +11,7 @@ import Testing
 
 @Suite struct GalleryPagingTests {
 
-    private let paging = GalleryPaging(columns: 4, rowsPerPage: 10)
+    private let paging = GalleryPaging(columns: 4)
 
     // MARK: - Total rows
 
@@ -27,32 +26,7 @@ import Testing
     }
 
     @Test func degenerateColumnsHasNoRows() {
-        #expect(GalleryPaging(columns: 0, rowsPerPage: 10).totalRows(itemCount: 40) == 0)
-    }
-
-    // MARK: - Total pages
-
-    @Test func pagesRoundUpAPartialFinalPage() {
-        // 40 rows / 10 per page = 4 pages exactly; one more row needs a fifth.
-        #expect(paging.totalPages(itemCount: 160) == 4)
-        #expect(paging.totalPages(itemCount: 161) == 5)
-    }
-
-    @Test func emptyHasNoPages() {
-        #expect(paging.totalPages(itemCount: 0) == 0)
-    }
-
-    // MARK: - Rows in a page
-
-    @Test func fullPageSpansItsRows() {
-        // 45 items → 12 rows; page 0 is rows 0..<10, page 1 the remaining 10..<12.
-        #expect(paging.rows(inPage: 0, itemCount: 45) == 0..<10)
-        #expect(paging.rows(inPage: 1, itemCount: 45) == 10..<12)
-    }
-
-    @Test func pagePastTheEndIsEmpty() {
-        // A page index beyond the content (stale window as the sequence shrinks) yields no rows.
-        #expect(paging.rows(inPage: 5, itemCount: 45).isEmpty)
+        #expect(GalleryPaging(columns: 0).totalRows(itemCount: 40) == 0)
     }
 
     // MARK: - Items in a row
@@ -80,6 +54,6 @@ import Testing
     }
 
     @Test func degenerateColumnsMapToRowZero() {
-        #expect(GalleryPaging(columns: 0, rowsPerPage: 10).row(ofItem: 12) == 0)
+        #expect(GalleryPaging(columns: 0).row(ofItem: 12) == 0)
     }
 }

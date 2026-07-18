@@ -89,12 +89,12 @@ struct PlaylistSettingsView: View {
     // MARK: - Gallery (image + video)
 
     /// Sets the gallery's adaptive minimum tile width; the maximum tracks it by
-    /// `FileCollectionLayout.galleryMaxRatio`. The value shown is what the grid actually uses —
+    /// `GalleryGrid.galleryMaxRatio`. The value shown is what the grid actually uses —
     /// the default until the playlist chooses its own. Manager-only, so it writes straight to the
     /// model with no coordinator involvement.
     @ViewBuilder
     private func gallerySettings() -> some View {
-        let width = FileCollectionLayout.gridMetrics(min: playlist.preferences.galleryMinItemWidth).min
+        let width = GalleryGrid.gridMetrics(min: playlist.preferences.galleryMinItemWidth).min
 
         Section("Gallery") {
             LabeledContent("Tile width") {
