@@ -59,4 +59,25 @@ import Testing
     @Test func degenerateSizeMapsToChunkZero() {
         #expect(FixedChunks(size: 0).chunk(of: 12) == 0)
     }
+
+    // MARK: - Paging (rows per page from a target item span)
+
+    @Test func pagingHoldsAboutTargetItemsRegardlessOfColumns() {
+        // Target 100 items: the row span is 100/columns rounded to nearest, so the item span per page
+        // stays near 100 however wide the rows are.
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 1).size == 100)   // list: one item/row
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 3).size == 33)    // 99 items
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 7).size == 14)    // 98 items
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 10).size == 10)   // 100 items
+    }
+
+    @Test func pagingFloorsToOneRow() {
+        // A row far wider than the target still spans at least one row (round would land on 0).
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 300).size == 1)
+    }
+
+    @Test func pagingGuardsZeroItemsPerRow() {
+        // A zero row width can't divide; the guard keeps it off the target rather than trapping.
+        #expect(FixedChunks.paging(targetItems: 100, itemsPerRow: 0).size == 100)
+    }
 }

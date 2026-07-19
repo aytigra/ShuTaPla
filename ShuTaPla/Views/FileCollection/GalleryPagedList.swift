@@ -58,7 +58,7 @@ struct GalleryPagedList<ID: Hashable, Cell: View>: View {
         PagedList(
             count: paging.totalRows(itemCount: ids.count),
             rowHeight: rowPixelHeight,
-            rowsPerPage: 30,
+            itemsPerRow: columns,
             initialTarget: initialTarget.map { paging.row(ofItem: $0) },
             command: command.map {
                 ScrollCommand(index: paging.row(ofItem: $0.index), mode: $0.mode, token: $0.token)

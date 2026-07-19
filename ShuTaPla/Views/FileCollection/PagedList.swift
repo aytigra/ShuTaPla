@@ -5,8 +5,9 @@
 //  A fixed-row-height windowed list that stays inert while scrolling: a `ScrollView` over a `VStack`
 //  of fixed-height *pages*, each a chunk of rows. Every page reserves its exact height whether or not
 //  its rows are built, so the content size is honest and the open-jump lands on the right row; each
-//  page then windows itself, building rows only while within a viewport of the screen (page-local
-//  `@State`). The container holds no scroll-derived `@State` — `ScrollPosition` is set only
+//  page swaps its rows (a `LazyVStack`) into the tree only while within a viewport of the screen
+//  (page-local `@State`), and that `LazyVStack` builds each row lazily at the visible edge. The
+//  container holds no scroll-derived `@State` — `ScrollPosition` is set only
 //  imperatively for the O(1) open-jump — so its `body` never re-renders mid-scroll; only the pages
 //  crossing the resident band do. It sizes its content from the row count alone (never building a row
 //  to measure) and opens on `initialTarget` with no travel. `GalleryPagedList` layers the grid on top
@@ -43,6 +44,14 @@ nonisolated struct FixedChunks {
     func chunk(of index: Int) -> Int {
         guard size > 0 else { return 0 }
         return index / size
+    }
+
+    /// A page chunking that holds about `targetItems` items when each chunked unit (a row) packs
+    /// `itemsPerRow` items: the row span is `targetItems / itemsPerRow` rounded to nearest, floored at
+    /// one row — so the item span per page stays roughly constant however wide the rows are and the page
+    /// count doesn't swing with column count.
+    static func paging(targetItems: Int, itemsPerRow: Int) -> FixedChunks {
+        FixedChunks(size: max(1, Int((Double(targetItems) / Double(max(1, itemsPerRow))).rounded())))
     }
 }
 
@@ -114,10 +123,10 @@ struct ScrollCommand: Equatable {
 struct PagedList<Row: View>: View {
     let count: Int
     let rowHeight: CGFloat
-    /// Rows per page — the residency windowing granularity. Set by the caller to match its row cost: a
-    /// large value for cheap list rows (fewer pages, less scroll churn), a small one for heavy gallery
-    /// grid rows (each packs `columns` thumbnails, so few per page).
-    let rowsPerPage: Int
+    /// How many items each row packs — `columns` for a grid; defaults to 1 for a plain one-per-row list.
+    /// The only page-sizing input: pages hold about `targetItemsPerPage` items, so the item span per page
+    /// stays ~constant however wide the rows are and the page count doesn't swing with column count.
+    var itemsPerRow: Int = 1
     /// Row to open at on first appearance (top-aligned, instant), or nil to open at the top.
     let initialTarget: Int?
     /// A later scroll to apply when it changes; nil issues nothing. `index` is a row index.
@@ -128,7 +137,9 @@ struct PagedList<Row: View>: View {
     /// residency, so the container writes no scroll-derived state and only pages crossing the band re-render.
     static var viewportSpace: String { "pagedViewport" }
 
-    private var pages: FixedChunks { FixedChunks(size: rowsPerPage) }
+    /// Items a page holds, in the ballpark; the row span is derived from it and `itemsPerRow`.
+    private static var targetItemsPerPage: Int { 100 }
+    private var pages: FixedChunks { .paging(targetItems: Self.targetItemsPerPage, itemsPerRow: itemsPerRow) }
     /// The pixel geometry — content height, the open-jump, and the keyboard reveal — at row
     /// granularity.
     private var window: PagedListGeometry { PagedListGeometry(rowHeight: rowHeight) }
@@ -202,12 +213,14 @@ struct PagedList<Row: View>: View {
     }
 }
 
-/// One page — the rows it was handed, built as a unit. It measures its own frame against the scroll
-/// viewport and builds rows only once the container has positioned *and* the page is within a viewport
-/// of the screen; otherwise it contributes just its fixed height (an empty `Color.clear`) so the content
-/// stays the right size — exactly — while its rows stay unbuilt. The in-band flag is page-local `@State`,
-/// so scrolling re-renders only the pages crossing the band edge, never the container. Each row is framed
-/// to `rowHeight` top-aligned, so any inter-row gap baked into `rowHeight` falls below the row.
+/// One page — a fixed-height slot for the rows it was handed. It measures its own frame against the
+/// scroll viewport and swaps its rows (a `LazyVStack`) into the tree once the container has positioned
+/// *and* the page is within a viewport of the screen; otherwise it contributes just its fixed height (an
+/// empty `Color.clear`) so the content stays the right size — exactly — while its rows stay unbuilt. The
+/// resident `LazyVStack` then builds each row lazily as it nears the visible edge. The in-band flag is
+/// page-local `@State`, so scrolling re-renders only the pages crossing the band edge, never the
+/// container. Each row is framed to `rowHeight` top-aligned, so any inter-row gap baked into `rowHeight`
+/// falls below the row.
 private struct PagedListPage<Row: View>: View {
     /// This page's row indices, sliced by the container.
     let rowIndices: Range<Int>
@@ -223,8 +236,8 @@ private struct PagedListPage<Row: View>: View {
     @ViewBuilder let row: (Int) -> Row
 
     /// Whether the page's frame overlaps the screen (expanded one viewport each side), self-measured so
-    /// only the pages entering or leaving the band re-render. Its rows build only when this and
-    /// `isPositioned` both hold.
+    /// only the pages entering or leaving the band re-render. Gates the `LazyVStack` into the tree (with
+    /// `isPositioned`); the `LazyVStack` itself then builds each row lazily at the visible edge.
     @State private var inBand = false
 
     private var pageHeight: CGFloat { CGFloat(rowIndices.count) * rowHeight }
@@ -238,9 +251,11 @@ private struct PagedListPage<Row: View>: View {
             if isPositioned && inBand { content } else { Color.clear }
         }
         .frame(height: pageHeight, alignment: .top)
-        // In band when the page's frame overlaps the viewport expanded by one viewport each side, so
-        // rows are built a screen ahead of scrolling in. `onGeometryChange` writes `inBand` only when
-        // this Bool flips — no state write, no re-render, on the ticks in between.
+        // In band when the page's frame overlaps the viewport expanded by one viewport each side. The
+        // margin doesn't prebuild rows — the inner LazyVStack still builds each row at the visible edge;
+        // it keeps this `Color.clear`↔`LazyVStack` swap (and any boundary jitter) a screen away from the
+        // visible edge, so a page never restructures on a row that's on screen. `onGeometryChange` writes
+        // `inBand` only when this Bool flips — no state write, no re-render, on the ticks in between.
         .onGeometryChange(for: Bool.self) { proxy in
             let frame = proxy.frame(in: .named(space))
             return frame.maxY > -viewport && frame.minY < viewport * 2
