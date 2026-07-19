@@ -22,6 +22,9 @@ struct FileRowView: View {
 
     @Environment(MediaMetadataService.self) private var metadataService
     @Environment(AppState.self) private var appState
+    // The surface's pre-resolved folder URL, when it holds a scoped-access session open. Passed into
+    // the metadata read so it appends the relative path instead of resolving the bookmark per file.
+    @Environment(\.browsingFolderURL) private var browsingFolderURL
 
     var body: some View {
         Group {
@@ -62,7 +65,7 @@ struct FileRowView: View {
         // synchronously from the model) don't flash empty on scroll-in.
         .task(id: metadataKey) {
             guard !file.hasCompleteMetadata(for: playlist.mediaType) else { return }
-            _ = await metadataService.metadata(for: file, in: playlist)
+            _ = await metadataService.metadata(for: file, in: playlist, folderURL: browsingFolderURL)
         }
     }
 

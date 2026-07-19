@@ -93,6 +93,9 @@ struct FileCollectionView: View {
                 scrollCommand = ScrollCommand(index: index, mode: mode, token: new.token)
             }
         }
+        // Hold one scoped-access session for the browsed folder so the cells' thumbnail/metadata
+        // reads append to a pre-resolved URL instead of resolving the bookmark per file.
+        .browsingSession(for: playlist, folderAccess: appState.folderAccess)
     }
 
     // MARK: - List

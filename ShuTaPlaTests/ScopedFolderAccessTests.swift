@@ -105,6 +105,50 @@ struct ScopedFolderAccessTests {
         #expect(access.url(for: playlist.id) == nil)
     }
 
+    // MARK: - Surface browse sessions
+
+    @Test func beginBrowsingHoldsOneGrantAndResolves() throws {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let folder = try makeFolder()
+        let playlist = makePlaylist(folder.bookmark)
+
+        #expect(access.beginBrowsing(playlist) == folder.url)
+        #expect(bookmarks.referenceCount(for: folder.bookmark) == 1)
+        access.endBrowsing(playlist)
+        #expect(bookmarks.referenceCount(for: folder.bookmark) == 0)
+    }
+
+    // A browse surface and a playback session on one folder each hold an independent reference — the
+    // per-folder grant is shared, released only when the last of the two stops. This is why a browse
+    // session must forward to `BookmarkService` (reference-counted) rather than the id-keyed map.
+    @Test func browseAndPlaybackShareGrantIndependently() throws {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let folder = try makeFolder()
+        let playlist = makePlaylist(folder.bookmark)
+
+        access.begin(for: playlist)                 // a playback session
+        #expect(access.beginBrowsing(playlist) == folder.url)   // plus a browse session on the same folder
+        #expect(bookmarks.referenceCount(for: folder.bookmark) == 2)
+
+        access.endBrowsing(playlist)
+        #expect(bookmarks.referenceCount(for: folder.bookmark) == 1)   // playback still holds the grant
+        #expect(access.url(for: playlist.id) == folder.url)
+
+        access.end(for: playlist.id)
+        #expect(bookmarks.referenceCount(for: folder.bookmark) == 0)
+    }
+
+    @Test func beginBrowsingUnresolvableBookmarkYieldsNoSession() {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let playlist = makePlaylist(Data([0x01, 0x02, 0x03]))
+
+        #expect(access.beginBrowsing(playlist) == nil)
+        #expect(bookmarks.referenceCount(for: playlist.folderBookmark) == 0)
+    }
+
     // MARK: - One-shot editing access
 
     @Test func withAccessRunsBodyUnderScopedSessionAndReleases() throws {

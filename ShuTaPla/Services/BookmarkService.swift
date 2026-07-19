@@ -117,22 +117,30 @@ final class BookmarkService {
         return try await body(resolved.url)
     }
 
-    /// Resolves `bookmark`, appends `relativePath`, and runs `body` with that file
-    /// URL under a scoped-access session. Throws `.resolutionFailed` when the folder
-    /// can't be resolved and `.fileNotFound` when the file is gone; best-effort
-    /// callers fold both into a nil result with `try?`.
+    /// Appends `relativePath` to the file's folder and runs `body` with that file URL
+    /// under scoped access. When `folder` is supplied — a directory a surface already
+    /// resolved once and holds open via a reference-counted `startAccess` session — the
+    /// per-file read appends the path directly, skipping the `resolve` + start/stop that
+    /// the bookmark path pays on every call (the session's grant already covers it). When
+    /// `folder` is `nil` (tests, non-surface callers) it resolves `bookmark` per file as
+    /// before. Throws `.resolutionFailed` when the folder can't be resolved and
+    /// `.fileNotFound` when the file is gone; best-effort callers fold both into a nil
+    /// result with `try?`.
     nonisolated static func withResolvedFile<T>(
+        folder: URL? = nil,
         bookmark: Data,
         relativePath: String,
         _ body: (URL) async throws -> T
     ) async throws -> T {
-        try await withScopedAccess(to: bookmark) { folder in
-            let fileURL = folder.appending(path: relativePath)
+        func run(in directory: URL) async throws -> T {
+            let fileURL = directory.appending(path: relativePath)
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                 throw BookmarkError.fileNotFound
             }
             return try await body(fileURL)
         }
+        if let folder { return try await run(in: folder) }
+        return try await withScopedAccess(to: bookmark) { try await run(in: $0) }
     }
 
     // MARK: - Reference-counted access sessions

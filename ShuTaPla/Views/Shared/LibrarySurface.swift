@@ -81,6 +81,9 @@ struct LibrarySurface: View {
             fileRenamingID = nil
             fileDraftName = ""
         }
+        // Hold one scoped-access session for the active playlist's folder so the list rows' metadata
+        // reads append to a pre-resolved URL instead of resolving the bookmark per file.
+        .browsingSession(for: context.activePlaylist, folderAccess: appState.folderAccess)
     }
 
     // MARK: - Playlists column

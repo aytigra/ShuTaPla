@@ -620,6 +620,32 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)   // nothing rendered
     }
 
+    // MARK: - Pre-resolved folder access
+
+    /// A pre-resolved folder URL — the one scoped-access session a file surface holds open for the
+    /// browsed folder — is appended to directly, so the per-file bookmark resolve is skipped. A
+    /// deliberately unresolvable bookmark proves the folder path never touches it: with `folderURL`
+    /// supplied a thumbnail is produced; with it `nil` the same call resolves the bad bookmark and
+    /// yields nothing.
+    @Test
+    func preResolvedFolderBypassesPerFileBookmarkResolution() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        try writePNG(width: 80, height: 80, to: dir.appending(path: "img.png"))
+        let unresolvable = Data("not-a-bookmark".utf8)
+
+        let service = await ThumbnailService(cacheDirectory: cacheDir)
+        let viaFolder = await service.thumbnailData(
+            bookmark: unresolvable, relativePath: "img.png", isVideo: false, maxPixelSize: 64, folderURL: dir)
+        #expect(viaFolder != nil)    // produced via the pre-resolved folder, no per-file resolve
+
+        let viaBookmark = await service.thumbnailData(
+            bookmark: unresolvable, relativePath: "img.png", isVideo: false, maxPixelSize: 64, folderURL: nil)
+        #expect(viaBookmark == nil)  // no folder → the bad bookmark can't resolve
+    }
+
     // MARK: - Cache management
 
     /// The reported size is the whole directory's footprint — the single-writer cache folder holds

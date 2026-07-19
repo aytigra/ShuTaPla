@@ -26,13 +26,14 @@ final class MediaMetadataService {
     /// cached bundle when every field this file's type can carry is already known;
     /// otherwise opens the file once off the main actor, merges whatever it found onto
     /// the model, and returns the updated bundle.
-    func metadata(for file: PlaylistFile, in playlist: Playlist) async -> MediaMetadata {
+    func metadata(for file: PlaylistFile, in playlist: Playlist, folderURL: URL? = nil) async -> MediaMetadata {
         if file.hasCompleteMetadata(for: playlist.mediaType) { return file.cachedMetadata }
         // An evicted file isn't opened — extraction would read bytes that aren't local. Serve the
         // cached bundle (possibly partial); its next arrival as `.local` re-triggers this read.
         guard file.cloudStatus == .local else { return file.cachedMetadata }
 
         let found = await Self.extract(
+            folderURL: folderURL,
             bookmark: playlist.folderBookmark,
             relativePath: file.relativePath,
             mediaType: playlist.mediaType,
@@ -54,8 +55,8 @@ final class MediaMetadataService {
     /// MainActor-default isolation a plain `nonisolated async` would run on the caller's
     /// actor (the main actor for `metadata(for:in:)`), freezing the UI while the file
     /// list populates uncached metadata.
-    @concurrent nonisolated static func extract(bookmark: Data, relativePath: String, mediaType: MediaType, isSkipped: Bool) async -> MediaMetadata {
-        (try? await BookmarkService.withResolvedFile(bookmark: bookmark, relativePath: relativePath) { fileURL in
+    @concurrent nonisolated static func extract(folderURL: URL? = nil, bookmark: Data, relativePath: String, mediaType: MediaType, isSkipped: Bool) async -> MediaMetadata {
+        (try? await BookmarkService.withResolvedFile(folder: folderURL, bookmark: bookmark, relativePath: relativePath) { fileURL in
             var metadata = MediaMetadata()
             metadata.fileSizeBytes = fileURL.fileSizeBytes
             // The staleness baseline, read on every open for every type — before the skip guard, so even

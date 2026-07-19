@@ -95,3 +95,48 @@ thread-time removed across the pass is spread over several `@concurrent` workers
 debug-build figures, but the ratio is build-independent.
 
 **Decision: build the hoist.** Remove the timing probe as the first implementation step.
+
+### Implementation
+
+**Step 1 — probe removed.** `BookmarkService` is back to clean; no `os`/`Synchronization` imports, no
+probe.
+
+**Step 2 — the service seam (done).** `BookmarkService.withResolvedFile` gained an optional
+pre-resolved `folder: URL?` (default `nil`): supplied → append `relativePath` + `fileExists` + run
+`body`, skipping the per-file `resolve` + start/stop; `nil` → today's per-file resolve, unchanged. The
+workers thread it through: `ThumbnailService.thumbnail`/`thumbnailData` → `produceImage` →
+`produceData`, and `MediaMetadataService.metadata` → `extract`, each gaining a `folderURL: URL? = nil`.
+Confirmation/refutation test in both service suites (`preResolvedFolderBypassesPerFileBookmarkResolution`):
+with a deliberately *unresolvable* bookmark, the read succeeds when `folderURL` is supplied and fails
+when it's `nil` — proving the folder path bypasses resolution and the fallback still resolves per file.
+All existing service tests pass on the preserved `nil` path.
+
+**Step 3 — the surface session + plumbing (done).**
+
+- **Owner + lifetime.** Both file surfaces open a session in a `.task(id: playlist.persistentModelID)`:
+  `FileCollectionView` (Manager gallery + list) and `LibrarySurface` (overlay lists). The session is a
+  new pass-through on `ScopedFolderAccess` — `beginBrowsing(_:) -> URL?` / `endBrowsing(_:)` — that
+  forwards straight to `BookmarkService.startAccess`/`stopAccess` (per-URL reference-counted,
+  re-entrant across owners), *not* the id-keyed playback map. So a browse surface, a second overlay,
+  and a live playback session on one folder each hold an independent ref, and the OS grant drops only
+  when the last releases. The `.task` parks (`while !Task.isCancelled { try? await Task.sleep }`) to
+  hold the grant for the surface's lifetime; a playlist switch (new id) or the surface leaving cancels
+  it, and its `defer` calls `endBrowsing`. A stale/unresolvable bookmark → `beginBrowsing` returns
+  `nil`, no grant taken, no park — the cells fall back to per-file resolve (unchanged).
+- **Publish, id-paired.** The resolved URL reaches the leaf cells through a new
+  `EnvironmentValue browsingFolderURL: URL?` set on the surface. The published value is **paired to the
+  shown playlist**: the surface stores `(playlistID, url)` and publishes the url only while
+  `playlistID == playlist.persistentModelID`, else `nil`. This closes the switch race — the `@State`
+  set inside the async task lags the first render, so on a switch the old url is never handed to the
+  new playlist's cells (they see `nil` → safe per-file fallback until the new session's url is
+  published). `GalleryCell` reads it for both its `thumbnail(...)` and `metadata(...)` calls;
+  `FileRowView` (list + overlay) reads it for its `metadata(...)` call. The leaf wrappers
+  (`FileGalleryCell`, `FileListRow`) need no change — the environment propagates.
+- **Not optimized: the first screenful right after a switch.** Cells key their `.task` on the file id,
+  not `browsingFolderURL`, so cells that mounted during the brief `nil` window use the per-file
+  fallback and don't upgrade when the url arrives. This is deliberate: the target win is the *cold
+  scroll* over a large playlist (every later screenful is fast), and skipping a re-fire keeps each cell
+  a single produce. Correct either way; only the first ~screenful forgoes the speedup.
+- **Tests.** `ScopedFolderAccessTests` gains browse-session coverage: `beginBrowsing` holds one ref and
+  resolves the url; a browse ref and a playback `begin` on one folder share the grant (refCount 2) and
+  each is balanced independently; an unresolvable bookmark yields no session and no ref.

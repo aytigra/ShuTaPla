@@ -25,6 +25,9 @@ struct GalleryCell: View {
     @Environment(ThumbnailService.self) private var thumbnails
     @Environment(MediaMetadataService.self) private var metadataService
     @Environment(AppState.self) private var appState
+    // The surface's pre-resolved folder URL, when it holds a scoped-access session open. Passed into
+    // the services so generation/metadata append the relative path instead of resolving per file.
+    @Environment(\.browsingFolderURL) private var browsingFolderURL
     @State private var image: NSImage?
 
     /// Longest-edge size in pixels: the cell's point size scaled for Retina.
@@ -52,7 +55,7 @@ struct GalleryCell: View {
             if let cached = thumbnails.cachedThumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize) {
                 image = cached
             } else {
-                let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize)
+                let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize, folderURL: browsingFolderURL)
                 // Generation runs off-actor and always completes — cancellation can't abort it,
                 // it only flips `Task.isCancelled`. Its result must therefore be handled either
                 // way: the thumbnail is already written to disk keyed by its fingerprint, and this
@@ -70,7 +73,7 @@ struct GalleryCell: View {
             // for anything this type still needs (dimensions on a cache hit, size for a
             // memory hit), matching what the list view reads.
             if !file.hasCompleteMetadata(for: playlist.mediaType) {
-                _ = await metadataService.metadata(for: file, in: playlist)
+                _ = await metadataService.metadata(for: file, in: playlist, folderURL: browsingFolderURL)
             }
         }
     }

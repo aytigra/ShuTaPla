@@ -131,6 +131,28 @@ import UniformTypeIdentifiers
         #expect(metadata.lastModified != nil)   // mtime is read before the skip guard, so even a skip gets a baseline
     }
 
+    // A pre-resolved folder URL — the one scoped-access session a file surface holds open for the
+    // browsed folder — is appended to directly, so the per-file bookmark resolve is skipped. A
+    // deliberately unresolvable bookmark proves the folder path never touches it: with `folderURL`
+    // supplied the metadata comes back; with it `nil` the same call resolves the bad bookmark and
+    // reads nothing.
+    @Test func preResolvedFolderBypassesPerFileBookmarkResolution() async throws {
+        let (directory, fileName) = try Self.makeImage(width: 64, height: 48)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let unresolvable = Data("not-a-bookmark".utf8)
+
+        let viaFolder = await MediaMetadataService.extract(
+            folderURL: directory, bookmark: unresolvable, relativePath: fileName, mediaType: .image, isSkipped: false
+        )
+        #expect(viaFolder.width == 64)       // read via the pre-resolved folder, no per-file resolve
+        #expect(viaFolder.height == 48)
+
+        let viaBookmark = await MediaMetadataService.extract(
+            folderURL: nil, bookmark: unresolvable, relativePath: fileName, mediaType: .image, isSkipped: false
+        )
+        #expect(viaBookmark.width == nil)    // no folder → the bad bookmark can't resolve, nothing read
+    }
+
     // MARK: - The merge sink
 
     @MainActor @Test func mergeCoalescesNonNilFields() throws {

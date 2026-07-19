@@ -83,7 +83,7 @@ final class ThumbnailService {
     /// placeholder); the metadata is empty for a thumbnail served from cache (no file open —
     /// the caller falls back to the values persisted on the model). `maxPixelSize` is the
     /// longest edge in pixels.
-    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) async -> (image: NSImage?, metadata: MediaMetadata) {
+    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int, folderURL: URL? = nil) async -> (image: NSImage?, metadata: MediaMetadata) {
         // A skipped file is wrong-type for its playlist: the decoder can't read it, so there is no
         // thumbnail to render. Keep the placeholder icon without resolving the bookmark or opening
         // the file — its size comes from the metadata service, which reads that alone.
@@ -102,6 +102,7 @@ final class ThumbnailService {
         // Generation *and* decode happen off the main actor, so the cell receives a
         // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
         let produced = await Self.produceImage(
+            folderURL: folderURL,
             bookmark: bookmark,
             relativePath: relativePath,
             isVideo: isVideo,
@@ -147,8 +148,9 @@ final class ThumbnailService {
     /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative
     /// path, without the in-memory `NSImage` layer. Used by the gallery's higher
     /// level path and exercised directly by tests.
-    func thumbnailData(bookmark: Data, relativePath: String, isVideo: Bool, maxPixelSize: Int) async -> Data? {
+    func thumbnailData(bookmark: Data, relativePath: String, isVideo: Bool, maxPixelSize: Int, folderURL: URL? = nil) async -> Data? {
         await Self.produceData(
+            folderURL: folderURL,
             bookmark: bookmark,
             relativePath: relativePath,
             isVideo: isVideo,
@@ -286,6 +288,7 @@ final class ThumbnailService {
     /// unreadable file has no fingerprint, so no cache entry to name and no thumbnail — it touches
     /// the cache not at all.
     private nonisolated static func produceData(
+        folderURL: URL?,
         bookmark: Data,
         relativePath: String,
         isVideo: Bool,
@@ -296,11 +299,12 @@ final class ThumbnailService {
         isLocal: Bool = true,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
-        // One resolve + scoped-access session for the whole produce: form the cache name (which
-        // may compute the fingerprint), check the disk cache, and render on a miss — rather than
-        // resolving once to name and again to render.
+        // One scoped-access session for the whole produce: form the cache name (which may compute
+        // the fingerprint), check the disk cache, and render on a miss — rather than resolving once
+        // to name and again to render. When the surface supplies its already-resolved `folderURL`,
+        // the per-file resolve is skipped entirely.
         let produced = try? await BookmarkService.withResolvedFile(
-            bookmark: bookmark, relativePath: relativePath
+            folder: folderURL, bookmark: bookmark, relativePath: relativePath
         ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
             let fileSizeBytes = fileURL.fileSizeBytes
             let lastModified = fileURL.contentModificationDate
@@ -364,6 +368,7 @@ final class ThumbnailService {
     /// the metadata `produceData` reported through unchanged.
     @concurrent
     private nonisolated static func produceImage(
+        folderURL: URL?,
         bookmark: Data,
         relativePath: String,
         isVideo: Bool,
@@ -375,6 +380,7 @@ final class ThumbnailService {
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
         let produced = await produceData(
+            folderURL: folderURL,
             bookmark: bookmark,
             relativePath: relativePath,
             isVideo: isVideo,

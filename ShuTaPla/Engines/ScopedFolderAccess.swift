@@ -77,6 +77,26 @@ final class ScopedFolderAccess {
         bookmarkByPlaylist.removeAll()
     }
 
+    // MARK: - Surface browse sessions
+
+    /// Opens a scoped-access session held for as long as a *file surface* (the Manager browser, an
+    /// overlay's list) shows `playlist`'s folder, returning the resolved folder URL — so the surface's
+    /// per-file thumbnail/metadata reads append to this one URL instead of resolving the bookmark per
+    /// file. Independent of the id-keyed playback map: it forwards straight to `BookmarkService`, whose
+    /// per-folder reference count lets overlapping surfaces and a playback session on one folder each
+    /// hold a ref, released only when the last stops. Returns `nil` (no fast path; the cells resolve
+    /// per file) when the bookmark can't be resolved — no re-prompt, the passive browse path. A caller
+    /// balances a non-`nil` result with exactly one `endBrowsing`.
+    func beginBrowsing(_ playlist: Playlist) -> URL? {
+        try? bookmarkService.startAccess(to: playlist.folderBookmark)
+    }
+
+    /// Releases a browse session opened by `beginBrowsing`. Call only when `beginBrowsing` returned a
+    /// URL, so the reference this surface took is the one dropped.
+    func endBrowsing(_ playlist: Playlist) {
+        bookmarkService.stopAccess(to: playlist.folderBookmark)
+    }
+
     // MARK: - One-shot editing access
 
     /// Runs `body` under a transient scoped session for `playlist`'s folder — its own
