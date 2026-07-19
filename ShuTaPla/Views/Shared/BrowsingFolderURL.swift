@@ -44,7 +44,7 @@ private struct BrowsingSessionModifier: ViewModifier {
                 let id = playlist.persistentModelID
                 session = Session(id: id, url: url)
                 defer {
-                    folderAccess.endBrowsing(playlist)
+                    folderAccess.endBrowsing(url)
                     if session?.id == id { session = nil }
                 }
                 // Hold the grant for the surface's lifetime: park until a playlist switch (new id) or

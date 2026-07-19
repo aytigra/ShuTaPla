@@ -167,16 +167,24 @@ final class BookmarkService {
     /// Releases one reference. Scoped access is given up only when the last
     /// reference is dropped.
     func stopAccess(to bookmark: Data) {
-        guard let resolved = try? Self.resolve(bookmark),
-              var session = sessions[resolved.url] else { return }
+        guard let resolved = try? Self.resolve(bookmark) else { return }
+        stopAccess(to: resolved.url)
+    }
+
+    /// Releases one reference to an already-resolved folder URL — the form a caller holding the URL
+    /// from `startAccess` uses. Releasing by the captured URL (the key sessions are stored under)
+    /// rather than re-resolving a bookmark that may since have been refreshed to a different folder
+    /// guarantees the grant taken at `startAccess` is the one dropped.
+    func stopAccess(to url: URL) {
+        guard var session = sessions[url] else { return }
         session.refCount -= 1
         if session.refCount <= 0 {
             if session.didStartScopedAccess {
-                resolved.url.stopAccessingSecurityScopedResource()
+                url.stopAccessingSecurityScopedResource()
             }
-            sessions.removeValue(forKey: resolved.url)
+            sessions.removeValue(forKey: url)
         } else {
-            sessions[resolved.url] = session
+            sessions[url] = session
         }
     }
 

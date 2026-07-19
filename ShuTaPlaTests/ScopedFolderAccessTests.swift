@@ -113,9 +113,10 @@ struct ScopedFolderAccessTests {
         let folder = try makeFolder()
         let playlist = makePlaylist(folder.bookmark)
 
-        #expect(access.beginBrowsing(playlist) == folder.url)
+        let url = try #require(access.beginBrowsing(playlist))
+        #expect(url == folder.url)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 1)
-        access.endBrowsing(playlist)
+        access.endBrowsing(url)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 0)
     }
 
@@ -129,15 +130,37 @@ struct ScopedFolderAccessTests {
         let playlist = makePlaylist(folder.bookmark)
 
         access.begin(for: playlist)                 // a playback session
-        #expect(access.beginBrowsing(playlist) == folder.url)   // plus a browse session on the same folder
+        let url = try #require(access.beginBrowsing(playlist))   // plus a browse session on the same folder
+        #expect(url == folder.url)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 2)
 
-        access.endBrowsing(playlist)
+        access.endBrowsing(url)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 1)   // playback still holds the grant
         #expect(access.url(for: playlist.id) == folder.url)
 
         access.end(for: playlist.id)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 0)
+    }
+
+    // A folder relocation mid-surface refreshes the playlist's bookmark to a different URL. Ending the
+    // browse session must release the grant taken at begin — not re-resolve the now-different live
+    // bookmark, find no session, and leak the original grant.
+    @Test func endBrowsingReleasesGrantAfterMidSurfaceBookmarkRefresh() throws {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let original = try makeFolder()
+        let relocated = try makeFolder()
+        let playlist = makePlaylist(original.bookmark)
+
+        let url = try #require(access.beginBrowsing(playlist))
+        #expect(bookmarks.referenceCount(for: original.bookmark) == 1)
+
+        // The folder moves; a stale-bookmark refresh repoints the playlist at the new location.
+        playlist.folderBookmark = relocated.bookmark
+
+        access.endBrowsing(url)
+        #expect(bookmarks.referenceCount(for: original.bookmark) == 0)   // original grant released
+        #expect(bookmarks.referenceCount(for: relocated.bookmark) == 0)  // the new location was never opened
     }
 
     @Test func beginBrowsingUnresolvableBookmarkYieldsNoSession() {

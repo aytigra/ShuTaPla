@@ -91,10 +91,11 @@ final class ScopedFolderAccess {
         try? bookmarkService.startAccess(to: playlist.folderBookmark)
     }
 
-    /// Releases a browse session opened by `beginBrowsing`. Call only when `beginBrowsing` returned a
-    /// URL, so the reference this surface took is the one dropped.
-    func endBrowsing(_ playlist: Playlist) {
-        bookmarkService.stopAccess(to: playlist.folderBookmark)
+    /// Releases a browse session opened by `beginBrowsing`. Takes the URL `beginBrowsing` returned so
+    /// the exact grant it acquired is dropped — even if the playlist's bookmark was refreshed to a
+    /// relocated folder while the surface stayed open (re-resolving the live bookmark would miss it).
+    func endBrowsing(_ url: URL) {
+        bookmarkService.stopAccess(to: url)
     }
 
     // MARK: - One-shot editing access
