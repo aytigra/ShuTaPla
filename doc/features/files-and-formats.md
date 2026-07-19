@@ -1,4 +1,4 @@
-> Part of the ShuTaPla [feature spec](../features.md). Capitalized terms are defined in the [Terminology](../features.md#terminology) glossary.
+> Part of the Shutapla [feature spec](../features.md). Capitalized terms are defined in the [Terminology](../features.md#terminology) glossary.
 
 # Supported file formats
 

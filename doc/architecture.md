@@ -4,7 +4,7 @@ IMPORTANT!!!: This document covers system design — structure, non-obvious deci
 
 ## 1. Overview
 
-ShuTaPla is a single-window macOS media player built with SwiftUI and SwiftData. It has two modes of one window — **Manager** (browsing/organizing playlists) and **Player** (fullscreen presentation) — plus an audio layer that plays in parallel.
+Shutapla is a single-window macOS media player built with SwiftUI and SwiftData. It has two modes of one window — **Manager** (browsing/organizing playlists) and **Player** (fullscreen presentation) — plus an audio layer that plays in parallel.
 
 ### Guiding principles
 

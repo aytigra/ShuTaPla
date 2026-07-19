@@ -1,4 +1,4 @@
-# ShuTaPla
+# Shutapla
 
 macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 

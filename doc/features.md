@@ -1,10 +1,10 @@
 # Features
 
-This is the entry point to the ShuTaPla feature spec. It holds the overview, the foundational platform notes, and the **Terminology** glossary that the rest of the spec leans on. The detailed chapters live in [`doc/features/`](features/) — load only the one(s) you need (see the [Spec map](#spec-map) below).
+This is the entry point to the Shutapla feature spec. It holds the overview, the foundational platform notes, and the **Terminology** glossary that the rest of the spec leans on. The detailed chapters live in [`doc/features/`](features/) — load only the one(s) you need (see the [Spec map](#spec-map) below).
 
 ## Overview
 
-ShuTaPla is a macOS media player that works directly with files on disk. The user picks a folder, the app reads it (and its subfolders) recursively and produces a single playlist of one media type: **video**, **image**, or **audio**. Playlists are shuffled and played one file after another.
+Shutapla is a macOS media player that works directly with files on disk. The user picks a folder, the app reads it (and its subfolders) recursively and produces a single playlist of one media type: **video**, **image**, or **audio**. Playlists are shuffled and played one file after another.
 
 Files on disk are always the source of truth. Playlists are lightweight snapshots that hold ordering, last-played state, and per-playlist preferences — nothing more.
 

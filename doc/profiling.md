@@ -34,7 +34,7 @@ Captures anything you drive by hand — selection, switching, scrolling, edits.
 ### Traps — read before recording
 
 - **Never use `--launch` on `Shutapla.app`.** `xctrace` resolves the launch target by the bundle's
-  basename, and there are two `ShuTaPla.app` on the machine (`/Applications` + DerivedData) → it
+  basename, and there are two `Shutapla.app` on the machine (`/Applications` + DerivedData) → it
   aborts with *"process is ambiguous"*. Use `open -n` + `--attach <pid>` instead.
 - **Never profile a copied bundle.** A copy keeps the same bundle id, so LaunchServices opens *two*
   instances against one store.
