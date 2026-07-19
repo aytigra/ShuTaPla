@@ -18,7 +18,7 @@ extension AppState {
     func togglePreviewOfSelection() -> Bool {
         if preview.isOpen { preview.close(); return true }
         guard let playlist = managedPlaylist, playlist.mediaType != .audio else { return false }
-        let selected = managerSelectionFiles()
+        let selected = visibleSelectedManagerFiles()
         guard selected.count == 1, let file = selected.first else { return false }
         preview.toggle(file)
         return true

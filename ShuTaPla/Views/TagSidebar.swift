@@ -39,15 +39,25 @@ struct TagSidebar: View {
     }
 
     private func filterAndEdit(_ playlist: Playlist) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // Above the editor so the filter's floating tag dropdown overlays it.
-                FilterBar(playlist: playlist)
-                    .zIndex(1)
-                Divider()
-                TagEditorView(playlist: playlist, files: appState.selectedManagerFiles())
-                Spacer(minLength: 0)
-            }
+        // Not one outer `ScrollView`: the filter, editor, and preview summary stay fixed while the
+        // preview's name list owns the remaining height with its own scroll, so a long selection
+        // scrolls internally instead of growing the sidebar.
+        VStack(alignment: .leading, spacing: 0) {
+            // Both dropdowns float downward over the siblings below them, so their draw order runs
+            // top-to-bottom: the filter's dropdown must win over the editor, and the editor's over
+            // the preview.
+            FilterBar(playlist: playlist)
+                .zIndex(2)
+            Divider()
+
+            // The read-only preview of what the editor is acting on — the file(s) still selected,
+            // including any pushed out of the effective filter by an edit.
+            ManagerSelectionPreview(playlist: playlist)
+            Divider()
+
+            TagEditorView(playlist: playlist, files: appState.selectedManagerFiles())
+              .zIndex(1)
+            Spacer(minLength: 0)
         }
     }
 }

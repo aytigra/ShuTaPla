@@ -992,6 +992,31 @@ struct AppStateTests {
         #expect(appState.selectedManagerFiles().map(\.id) == [files[1].id, files[3].id, files[4].id])
     }
 
+    /// The editor-scope vs visible-scope split the Manager preview summarizes: with a filter that
+    /// hides part of a multi-file selection, `selectedManagerFiles()` still returns the whole
+    /// selection (what the editor edits), the visible variant returns only the still-in-filter rows
+    /// (the action scope), and the filtered-out count is their difference.
+    @Test func selectionScopesSplitAcrossTheEffectiveFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        // f0/f2 carry "aaa", f1/f3 carry "bbb"; the filter keeps only the "aaa" files visible.
+        let files = ["aaa", "bbb", "aaa", "bbb"].enumerated().map { index, tag in
+            addFile("f\(index) [\(tag)].jpg", tags: [tag], status: .valid, order: index, to: playlist, in: context)
+        }
+        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.managedPlaylist = playlist
+        appState.managerSelection = Set(files.map(\.id))   // select all four
+
+        #expect(appState.selectedManagerFiles().map(\.id) == files.map(\.id))          // whole selection
+        #expect(appState.visibleSelectedManagerFiles().map(\.id) == [files[0].id, files[2].id])  // in-filter only
+        #expect(appState.filteredOutSelectionCount == 2)                               // f1, f3
+    }
+
     // MARK: - Per-filter resume restore — live audio channel (Step 4)
     //
     // The restore's live branch on a real engine: a filter change on a *playing* audio playlist

@@ -21,7 +21,7 @@ extension AppState {
     /// `[delete]`). Returns whether there was anything selected to delete.
     @discardableResult
     func requestDeleteSelectedFiles() -> Bool {
-        let files = managerSelectionFiles()
+        let files = visibleSelectedManagerFiles()
         guard files.isNotEmpty else { return false }
         pendingConfirmation = .managerDelete(files)
         return true

@@ -196,10 +196,10 @@ struct FileCollectionView: View {
     }
 
     /// The files a context-menu action targets: the multi-selection when the clicked item is
-    /// part of it, otherwise just that item. `managerSelectionFiles()` is already the visible
+    /// part of it, otherwise just that item. `visibleSelectedManagerFiles()` is already the visible
     /// selection, so passing it as `visible` resolves only the selection, not the whole list.
     private func targets(for file: PlaylistFile) -> [PlaylistFile] {
-        FileSelection.actionTargets(for: file, selection: appState.managerSelection, visible: appState.managerSelectionFiles())
+        FileSelection.actionTargets(for: file, selection: appState.managerSelection, visible: appState.visibleSelectedManagerFiles())
     }
 
     // MARK: - Selection

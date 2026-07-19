@@ -293,9 +293,20 @@ final class AppState {
 
     /// The visible, selected manager files in display order — context-menu / batch-action
     /// targets. Resolves only the selection, then keeps those still in the effective filter.
-    func managerSelectionFiles() -> [PlaylistFile] {
+    func visibleSelectedManagerFiles() -> [PlaylistFile] {
         let visible = Set(managerFileIDs)
         return selectedManagerFiles().filter { visible.contains($0.persistentModelID) }
+    }
+
+    /// How many selected files fell out of the effective filter — the selection minus its visible
+    /// subset. The Manager preview's summary reads it to explain why an out-of-view file is still in
+    /// the tag editor. Resolved through identifiers only (`fileIdentifier(for:)` and `managerFileIDs`,
+    /// no object fetch), so reading it during a preview render can't refault a cell's just-merged
+    /// metadata. Reads `managerSelection` and `managerFileIDs` (via `sequences.version`), so a view
+    /// body that reads it re-renders when the selection or the filtered membership changes.
+    var filteredOutSelectionCount: Int {
+        let visible = Set(managerFileIDs)
+        return managerSelection.compactMap { fileIdentifier(for: $0) }.filter { !visible.contains($0) }.count
     }
 
     /// Every content fingerprint across all files — the live keys the thumbnail cache's orphan
