@@ -87,6 +87,19 @@ final class PlaylistFile {
     /// until first thumbnailed (a list-only audio file, or one never scrolled to, carries neither).
     var lastModified: Date?
 
+    /// Whether the file's content is HDR (transfer function PQ or HLG) — set for both video and image
+    /// on first display and cached here so the HDR badge draws without a decode. `nil` until
+    /// determined; a determined SDR file caches `false`, not `nil`, so it isn't re-examined forever.
+    var isHDR: Bool?
+
+    /// The video's colour transfer and primaries as mpv-style strings (`pq`/`hlg` gamma,
+    /// `bt.2020`/`display-p3`/`bt.709` primaries), extracted on first display and cached here so the
+    /// video layer pre-configures to the right dynamic range before the first frame decodes. `nil`
+    /// until read and always `nil` for images (which drive their layer straight off the decoded
+    /// `CGImage`).
+    var hdrGamma: String?
+    var hdrPrimaries: String?
+
     /// Pixel dimensions as a size, available only once both `width` and `height` are known.
     var pixelSize: CGSize? {
         guard let width, let height else { return nil }

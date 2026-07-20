@@ -33,6 +33,7 @@ struct FileRowView: View {
             } else {
                 HStack(spacing: 12) {
                     fileName
+                    if file.isHDR == true { hdrBadge }
                     Spacer(minLength: 8)
                     metadataColumns
                 }
@@ -78,6 +79,17 @@ struct FileRowView: View {
         Text(file.fileName)
             .lineLimit(1)
             .truncationMode(.middle)
+    }
+
+    /// The HDR marker beside the filename, shown when the content's transfer is PQ/HLG (video) or the
+    /// decode carried HDR range (image). A bordered chip so it reads as a badge, not a metadata value.
+    private var hdrBadge: some View {
+        Text("HDR")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.secondary.opacity(0.5), lineWidth: 1))
     }
 
     /// The right-aligned metadata cluster: dimensions and size for the visual types, plus

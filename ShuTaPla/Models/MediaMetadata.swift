@@ -29,13 +29,26 @@ nonisolated struct MediaMetadata: Sendable {
     /// triggers a fingerprint recompute. Travels with `fingerprint` because the gate needs a prior
     /// fingerprint to invalidate, so a file first seen in list mode carries neither.
     var lastModified: Date?
+
+    /// Whether the content is HDR (PQ/HLG transfer). For **video** it's read in either producer from
+    /// the moov colour tags (no decode), so it gates completeness and a determined SDR file reports
+    /// `false`, not `nil`. For an **image** it comes only from the gallery thumbnailer's decode — the
+    /// header-only list read never decodes a still — so it rides along like `fingerprint`: set when
+    /// the gallery sees the file, `nil` until then, and never gating completeness.
+    var isHDR: Bool?
+
+    /// The video's colour transfer / primaries as mpv-style strings, read only for video. `nil` for
+    /// images and audio, like `duration` for an image.
+    var hdrGamma: String?
+    var hdrPrimaries: String?
 }
 
 extension PlaylistFile {
     /// The metadata currently cached on the model.
     var cachedMetadata: MediaMetadata {
         MediaMetadata(duration: duration, width: width, height: height, fileSizeBytes: fileSizeBytes,
-                      fingerprint: fingerprint, lastModified: lastModified)
+                      fingerprint: fingerprint, lastModified: lastModified,
+                      isHDR: isHDR, hdrGamma: hdrGamma, hdrPrimaries: hdrPrimaries)
     }
 
     /// Folds `metadata` onto the model, coalescing non-`nil` fields: a freshly-read value overwrites
@@ -50,6 +63,9 @@ extension PlaylistFile {
         if let fileSizeBytes = metadata.fileSizeBytes { self.fileSizeBytes = fileSizeBytes }
         if let fingerprint = metadata.fingerprint { self.fingerprint = fingerprint }
         if let lastModified = metadata.lastModified { self.lastModified = lastModified }
+        if let isHDR = metadata.isHDR { self.isHDR = isHDR }
+        if let hdrGamma = metadata.hdrGamma { self.hdrGamma = hdrGamma }
+        if let hdrPrimaries = metadata.hdrPrimaries { self.hdrPrimaries = hdrPrimaries }
     }
 
     /// Clears every derived fact so the next display re-extracts from scratch: an unconditional reset
@@ -64,6 +80,9 @@ extension PlaylistFile {
         fileSizeBytes = nil
         lastModified = nil
         fingerprint = nil
+        isHDR = nil
+        hdrGamma = nil
+        hdrPrimaries = nil
     }
 
     /// Clears the cached metadata when the file's on-disk `size` or `modified` diverges from the cached
@@ -86,12 +105,15 @@ extension PlaylistFile {
     /// duration/dimensions can never be read — only size is recorded, so size alone completes it.
     ///
     /// Size and `lastModified` (the staleness baseline) are required for every type: a pre-mtime
-    /// cached row reads incomplete, so its next display re-extracts and gains a baseline.
+    /// cached row reads incomplete, so its next display re-extracts and gains a baseline. Video
+    /// additionally requires `isHDR != nil` (a determined SDR file is `false`), as its colour tags
+    /// come from the same header read; an image's HDR-ness needs a decode the list read doesn't do,
+    /// so — like `fingerprint` — it's filled by the gallery later and never gates completeness.
     func hasCompleteMetadata(for mediaType: MediaType) -> Bool {
         guard fileSizeBytes != nil, lastModified != nil else { return false }
         if isSkipped { return true }
         switch mediaType {
-        case .video: return duration != nil && width != nil && height != nil
+        case .video: return duration != nil && width != nil && height != nil && isHDR != nil
         case .audio: return duration != nil
         case .image: return width != nil && height != nil
         }

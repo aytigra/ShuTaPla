@@ -264,14 +264,17 @@ import UniformTypeIdentifiers
         file.fileSizeBytes = 1
         file.lastModified = Date()   // the staleness baseline, required for every type
 
-        // Video needs duration + dimensions; audio only duration; image only dimensions.
+        // Video needs duration + dimensions + a settled HDR flag; audio only duration; image only
+        // dimensions (its HDR flag needs a decode the list read skips, so the gallery fills it later).
         file.duration = 5
         #expect(!file.hasCompleteMetadata(for: .video))   // dimensions missing
         #expect(file.hasCompleteMetadata(for: .audio))    // duration + size suffice
         file.width = 320
         file.height = 240
+        #expect(!file.hasCompleteMetadata(for: .video))   // HDR flag still unread
+        #expect(file.hasCompleteMetadata(for: .image))    // image carries no HDR requirement
+        file.isHDR = false                                // a determined SDR settles the video flag
         #expect(file.hasCompleteMetadata(for: .video))
-        #expect(file.hasCompleteMetadata(for: .image))
 
         // Size is required for every type.
         file.fileSizeBytes = nil
@@ -288,6 +291,7 @@ import UniformTypeIdentifiers
         file.duration = 5
         file.width = 320
         file.height = 240
+        file.isHDR = false   // video's HDR flag settled, so the mtime is the only thing missing
         #expect(!file.hasCompleteMetadata(for: .video))    // no mtime → incomplete despite full facts
         #expect(!file.hasCompleteMetadata(for: .audio))
         #expect(!file.hasCompleteMetadata(for: .image))

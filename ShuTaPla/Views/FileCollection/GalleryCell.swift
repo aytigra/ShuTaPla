@@ -102,6 +102,11 @@ struct GalleryCell: View {
             .overlay(alignment: .topTrailing) {
                 if let size = file.pixelSize { badge(size.dimensionsText) }
             }
+            // The HDR marker, top-left, when the content's transfer is PQ/HLG (video) or the decode
+            // carried HDR range (image). A quality marker, not a measurement, so it reads "HDR".
+            .overlay(alignment: .topLeading) {
+                if file.isHDR == true { pill(Text("HDR").bold()) }
+            }
             // Cloud availability and on-disk size are conceptually paired, so the cloud badge
             // sits beside the size badge — shown (as its own pill) only when the file isn't local.
             .overlay(alignment: .bottomLeading) {

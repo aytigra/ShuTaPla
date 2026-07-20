@@ -9,7 +9,10 @@
 //  additive optional `fingerprint` column, which existing rows open with as `nil` and repopulate on
 //  next display. The V7→V8 stage is lightweight too: SchemaV8 adds PlaylistFile's additive optional
 //  `lastModified` column (the mtime half of the thumbnail staleness gate), opened as `nil` and
-//  repopulated on next display. The next schema change appends its pinned `SchemaVN` and a stage
+//  repopulated on next display. The V8→V9 stage is lightweight too: SchemaV9 adds PlaylistFile's additive
+//  optional HDR columns — `isHDR` (the badge fact for both media types) and the video colour strings
+//  `hdrGamma`/`hdrPrimaries` — opened as `nil` and repopulated on next display.
+//  The next schema change appends its pinned `SchemaVN` and a stage
 //  here — see `doc/versioning.md` for the recipe.
 //
 //  Tags and tagging status are filename-derived and repopulate on the next scan, so they are never
@@ -21,12 +24,13 @@ import SwiftData
 
 enum AppMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [SchemaV5.self, SchemaV6.self, SchemaV7.self, SchemaV8.self]
+        [SchemaV5.self, SchemaV6.self, SchemaV7.self, SchemaV8.self, SchemaV9.self]
     }
 
     static var stages: [MigrationStage] {
         [.lightweight(fromVersion: SchemaV5.self, toVersion: SchemaV6.self),
          .lightweight(fromVersion: SchemaV6.self, toVersion: SchemaV7.self),
-         .lightweight(fromVersion: SchemaV7.self, toVersion: SchemaV8.self)]
+         .lightweight(fromVersion: SchemaV7.self, toVersion: SchemaV8.self),
+         .lightweight(fromVersion: SchemaV8.self, toVersion: SchemaV9.self)]
     }
 }

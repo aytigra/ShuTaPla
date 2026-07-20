@@ -15,6 +15,9 @@
 //  - V7→V8 adds PlaylistFile's additive optional `lastModified` column (the mtime half of the
 //    thumbnail staleness gate) the same way; existing rows survive, keep their `fingerprint`, and
 //    open with `lastModified == nil`.
+//  - V8→V9 adds PlaylistFile's additive optional HDR columns — `isHDR` and the video colour strings
+//    `hdrGamma`/`hdrPrimaries` — the same way; existing rows survive, keep their earlier facts, and
+//    open with all three `nil`.
 //
 //  Each test lays down a store at the pinned pre-change shape, releases that container so it
 //  flushes and closes the SQLite file, then reopens the same URL through the migration plan and
@@ -239,6 +242,56 @@ struct SchemaIndexMigrationTests {
         #expect(scalarInt(atStore: url,
             query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZLASTMODIFIED IS NOT NULL") == 0,
                 "migrated rows open with lastModified == nil")
+        #expect(scalarInt(atStore: url,
+            query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZFINGERPRINT IS NOT NULL") == 2,
+                "the fingerprint survives the migration")
+    }
+
+    /// A V8 store migrates to V9, keeping its rows (and their `fingerprint` values) and gaining
+    /// PlaylistFile's HDR columns — `isHDR`, `hdrGamma`, `hdrPrimaries` — which every migrated row
+    /// opens with as `nil` (they repopulate on next display). Written at the pinned pre-HDR shape,
+    /// then reopened through SchemaV9 + `AppMigrationPlan`.
+    @Test func migratingAV8StoreAddsTheHDRColumns() throws {
+        let url = URL.temporaryDirectory.appending(path: "schema-hdr-\(UUID().uuidString).store")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Phase 1 — write at the pre-HDR shape (with fingerprints set), then release.
+        do {
+            let schema = Schema(versionedSchema: SchemaV8.self)
+            let container = try ModelContainer(
+                for: schema, migrationPlan: nil,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+            let context = container.mainContext
+            let playlist = SchemaV8.Playlist(
+                name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+            context.insert(playlist)
+            for (i, name) in ["a.jpg", "b.jpg"].enumerated() {
+                let file = SchemaV8.PlaylistFile(relativePath: name, fileName: name, sortOrder: i)
+                file.fingerprint = "fp\(i)"
+                file.playlist = playlist
+                context.insert(file)
+            }
+            try context.save()
+        }
+        #expect(!hasColumn(atStore: url, table: "ZPLAYLISTFILE", column: "ZISHDR"),
+                "the V8 store has no isHDR column")
+
+        // Phase 2 — reopen through V9 + the plan, then release so the store flushes before reads.
+        do {
+            let schema = Schema(versionedSchema: SchemaV9.self)
+            _ = try ModelContainer(
+                for: schema, migrationPlan: AppMigrationPlan.self,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+        }
+        for column in ["ZISHDR", "ZHDRGAMMA", "ZHDRPRIMARIES"] {
+            #expect(hasColumn(atStore: url, table: "ZPLAYLISTFILE", column: column),
+                    "the V8→V9 migration adds the \(column) column")
+        }
+        #expect(rowCount(atStore: url, table: "ZPLAYLISTFILE") == 2, "every row survives")
+        #expect(orderedFileNames(atStore: url) == ["a.jpg", "b.jpg"], "scalar data survives in order")
+        #expect(scalarInt(atStore: url,
+            query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZISHDR IS NOT NULL") == 0,
+                "migrated rows open with isHDR == nil")
         #expect(scalarInt(atStore: url,
             query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZFINGERPRINT IS NOT NULL") == 2,
                 "the fingerprint survives the migration")

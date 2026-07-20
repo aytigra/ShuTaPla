@@ -14,7 +14,10 @@ extension CGImage {
 
     /// True when the decoded image carries HDR range — a content headroom above SDR, or a PQ/HLG
     /// (`ITU-R 2100`) transfer function.
-    var isHDR: Bool {
+    ///
+    /// `nonisolated`: a pure read of the image, called both from the main-actor image layer and the
+    /// `@concurrent` thumbnailer, so it opts out of the project's main-actor default.
+    nonisolated var isHDR: Bool {
         if contentHeadroom > 1 { return true }
         guard let colorSpace else { return false }
         return CGColorSpaceUsesITUR_2100TF(colorSpace)

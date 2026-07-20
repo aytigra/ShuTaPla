@@ -412,12 +412,33 @@ final class ThumbnailService {
     nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, metadata: MediaMetadata) {
         if isVideo {
             let frame = await videoFrame(at: fileURL, maxPixelSize: maxPixelSize)
-            guard let cgImage = frame.image else { return (nil, frame.metadata) }
-            return (encodeHEIC(cgImage), frame.metadata)
+            var metadata = frame.metadata
+            // Settle the badge fact once the file opened as video (dimensions read), from whichever
+            // backend produced the colour tags — the single derivation point for both, matching the
+            // list-mode extractor.
+            if metadata.width != nil { metadata.isHDR = VideoColorTags.isHDR(gamma: metadata.hdrGamma) }
+            guard let cgImage = frame.image else { return (nil, metadata) }
+            return (encodeHEIC(cgImage), metadata)
         }
         guard let cgImage = imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize) else { return (nil, MediaMetadata()) }
         let size = fileURL.imagePixelSize
-        return (encodeHEIC(cgImage), MediaMetadata(width: size?.width, height: size?.height))
+        return (encodeHEIC(cgImage), MediaMetadata(width: size?.width, height: size?.height, isHDR: imageIsHDR(at: fileURL)))
+    }
+
+    /// Whether the still at `url` carries HDR range, from a small HDR-aware decode kept separate
+    /// from the display thumbnail — so the encoded/shown thumbnail stays its plain SDR self while
+    /// this still reads the flag. The natural producer of an image's `isHDR`, alongside the
+    /// fingerprint: the list-mode metadata read is header-only and never decodes a still, so the
+    /// gallery is where an image's HDR-ness is settled.
+    private nonisolated static func imageIsHDR(at url: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64,
+            kCGImageSourceDecodeRequest: kCGImageSourceDecodeToHDR,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return false }
+        return image.isHDR
     }
 
     /// Encodes a thumbnail as HEIC. HEVC intra-frame compression is several times
@@ -514,12 +535,14 @@ final class ThumbnailService {
         generator.requestedTimeToleranceAfter = .positiveInfinity
         let duration = await asset.playableDuration()
         let size = await asset.displayPixelSize()
+        let tags = await asset.hdrColorTags()
         // Sample ~10% in (past the often-black opening), the same relative position the
         // libmpv fallback uses, so the same content yields a comparable thumbnail across
         // codecs. Fall back to 1s when the duration is unknown.
         let position = duration.map { $0 * 0.1 } ?? 1
         let time = CMTime(seconds: position, preferredTimescale: 600)
         let image = try? await generator.image(at: time).image
-        return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height))
+        return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height,
+                                     hdrGamma: tags.gamma, hdrPrimaries: tags.primaries))
     }
 }

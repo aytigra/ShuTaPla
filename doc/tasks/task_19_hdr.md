@@ -179,28 +179,59 @@ stays — it's what lets EDR values exceed 1.0. The static `extendedSRGB` colors
    - Schema **V9**, a lightweight additive stage (V8→V9) mirroring the V7 `fingerprint` / V8
      `lastModified` precedents: three additive optional columns, existing rows open as `nil` and
      repopulate on next display. `MediaMetadata` gains `isHDR`/`hdrGamma`/`hdrPrimaries`, threaded
-     through `merge` / `cachedMetadata` / `invalidateMetadata` / `hasCompleteMetadata` (completeness
-     for video/image requires `isHDR != nil` — a determined SDR file is `false`, not `nil`).
+     through `merge` / `cachedMetadata` / `invalidateMetadata` / `hasCompleteMetadata`. Only **video**
+     completeness requires `isHDR != nil` (a determined SDR file is `false`, not `nil`) — its colour
+     tags ride the same moov read; an **image**'s HDR-ness needs a decode the header-only list read
+     skips, so like `fingerprint` it's filled by the gallery thumbnailer later and never gates
+     completeness (Design 1, settled with user).
 
    **Detection (either producer, per the existing split):**
-   - Video: AVFoundation format-description extensions (`ColorPrimaries` / `TransferFunction`) map to
-     the mpv-style strings from the moov atom, no frame decode; the libmpv fallback reads
-     `video-params/gamma|primaries` (the existing `MPVClient.stringProperty`) for webm/mkv. `isHDR`
-     from the gamma.
-   - Image: the thumbnailer already fully decodes each still, so it reads `CGImage.isHDR` there for
-     free (the natural producer, like `fingerprint`).
+   - Video: `AVURLAsset.hdrColorTags()` reads `ColorPrimaries`/`TransferFunction` from the format
+     description and `VideoColorTags` maps them to the mpv-style strings, no frame decode (verified:
+     HDR mp4 → `bt.2020`/`pq`; SDR mp4/mpeg carry no tags → SDR). The libmpv fallback reads
+     `video-params/gamma|primaries` for webm/mkv AVFoundation can't open: reliable in the
+     frame-decoding gallery path (read on `VIDEO_RECONFIG`), best-effort in the paused list probe
+     (often `nil` at `FILE_LOADED`, so a list-only HDR webm reads a determined SDR until the gallery
+     corrects it via the thumbnail merge). `isHDR` from the gamma.
+   - Image: the gallery thumbnailer reads `CGImage.isHDR` from a small HDR-aware decode kept separate
+     from the (SDR) display thumbnail — the natural producer, like `fingerprint`. The header-only
+     list read never decodes a still, so it sets no image `isHDR`.
 
    **Sub-steps (implement one at a time, after confirmation):**
-   - **5a. Schema + model plumbing.** `SchemaV9` + `AppMigrationPlan` stage; `PlaylistFile` fields;
-     `MediaMetadata` fields threaded through the four helpers. No detection/UI yet. Migration test
-     verifies the V9 columns via raw SQLite (trap class 5 — no live cast).
-   - **5b. Extractors populate HDR.** Video (AVFoundation extensions + mpv fallback) and image
-     (thumbnailer) set the new fields. Tests over the real samples in `test_media/videos/` and the
-     HDR stills.
-   - **5c. Video layer pre-config at load.** `VideoPlaybackEngine` runs `HDRVideoConfig.decide` from
-     the cached `hdrGamma`/`hdrPrimaries` at load (before decode), then re-runs authoritatively when
-     live `video-params` arrive. On-screen flash check by hand.
-   - **5d. HDR badge.** Gallery + list cells show a badge when `file.isHDR == true`.
+   - **5a. Schema + model plumbing.** ✅ done. `SchemaV9` (live types) + `SchemaV8` re-pinned as the
+     pre-HDR `from` copy + `AppMigrationPlan` V8→V9 lightweight stage + app schema bumped to V9;
+     `PlaylistFile.isHDR`/`hdrGamma`/`hdrPrimaries`; `MediaMetadata` fields threaded through
+     `cachedMetadata`/`merge`/`invalidateMetadata`/`hasCompleteMetadata` (video/image completeness now
+     requires `isHDR != nil`). No detection/UI yet. `migratingAV8StoreAddsTheHDRColumns` verifies the
+     V9 columns via raw SQLite (trap class 5 — no live cast); all 4 migration tests green.
+   - **5b. Extractors populate HDR.** ✅ done. `VideoColorTags` (pure CoreMedia→mpv map + `isHDR`
+     derivation) with `AVURLAsset.hdrColorTags()`; the list-mode `MediaMetadataService` and both
+     thumbnailer backends (`avAssetFrame`, `MPVThumbnailer` via `VIDEO_RECONFIG`) set
+     `hdrGamma`/`hdrPrimaries`, and `isHDR` is derived once per producer for video. The gallery
+     thumbnailer sets image `isHDR` from a small HDR decode; the header-only list read leaves it for
+     the gallery (Design 1). Image dropped from `hasCompleteMetadata`'s `isHDR` gate; the two 5a
+     completeness tests (left red by 5a's own change, never run there) corrected to the finalized
+     contract. Committed tests are the pure `VideoColorTagsTests` (8, green) — no real-decode gating,
+     since the large HDR video samples are transient; the mpv webm/mkv reads were verified once by a
+     throwaway probe against them and then removed.
+   - **5c. Video layer pre-config at load.** ✅ code done (on-screen flash check by hand pending).
+     `VideoPlaybackEngine.load` overrides the base funnel: after `super.load` sets `currentFile`, it
+     feeds `applyColorOutput(gamma:primaries:)` from the file's **cached** `hdrGamma`/`hdrPrimaries`,
+     so an HDR file opens straight to its PQ layer (and a following SDR file resets to SDR) before a
+     frame decodes. `configureColorOutput` was generalised into `applyColorOutput(gamma:primaries:)`,
+     fed from cached tags at load and from live `client.stringProperty("video-params/*")` on the
+     first positive `.videoWidth` — the authoritative pass, which corrects the cached guess either
+     way (a determined-SDR or never-displayed file caches `nil`, decides SDR, and is re-decided on
+     params). No new testable seam: the engine needs a GL surface (trap class 3), so as in step 3 the
+     only pure part is `HDRVideoConfig.decide` (already covered); the flash-kill is a by-hand check on
+     the EDR display.
+   - **5d. HDR badge.** ✅ done. Both surfaces read `file.isHDR == true` (video PQ/HLG, image HDR
+     decode) and draw an "HDR" marker: `GalleryCell` adds a top-left dark pill via the existing
+     `pill(_:)` chrome (top-right is dimensions, the bottom row cloud/size/duration); `FileRowView`
+     adds a bordered `hdrBadge` chip right after the filename, before the `Spacer`, so the fixed-width
+     right-aligned metadata columns keep their geometry. No new testable seam — the badge is a pure
+     `Bool?` gate; `isHDR` is derived and covered upstream (`VideoColorTagsTests`, `CGImage.isHDR`),
+     and rendering, like steps 3/5c, is a by-hand check.
 
 ## Testable
 

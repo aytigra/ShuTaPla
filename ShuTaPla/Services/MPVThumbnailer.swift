@@ -109,10 +109,25 @@ nonisolated enum MPVThumbnailer {
 
     /// The loaded file's duration and display dimensions, read at `FILE_LOADED` while the
     /// file is open — reading at `END_FILE` would be too late, as the properties revert as
-    /// mpv unloads the file. File size is the caller's `stat`, so it's left `nil` here.
+    /// mpv unloads the file. File size is the caller's `stat`, so it's left `nil` here. The
+    /// colour tags read here too, best-effort: `video-params` is populated once decode is up,
+    /// which under `vo=null`/pause may lag `FILE_LOADED`, so the frame path refreshes them on
+    /// `VIDEO_RECONFIG` (see `extract`).
     private static func loadedMetadata(_ handle: OpaquePointer) -> MediaMetadata {
         let dimensions = knownDimensions(handle)
-        return MediaMetadata(duration: knownDuration(handle), width: dimensions?.width, height: dimensions?.height)
+        return MediaMetadata(duration: knownDuration(handle), width: dimensions?.width, height: dimensions?.height,
+                             hdrGamma: colorTag(handle, "video-params/gamma"),
+                             hdrPrimaries: colorTag(handle, "video-params/primaries"))
+    }
+
+    /// An mpv `video-params/*` colour string, or `nil` when the property is unavailable or empty
+    /// (no frame decoded yet, or a value mpv reports as absent). The demuxer/decoder already speaks
+    /// mpv's vocabulary (`pq`/`hlg`, `bt.2020`/`display-p3`), so the value is used as-is.
+    private static func colorTag(_ handle: OpaquePointer, _ name: String) -> String? {
+        guard let raw = mpv_get_property_string(handle, name) else { return nil }
+        defer { mpv_free(raw) }
+        let value = String(cString: raw)
+        return value.isEmpty ? nil : value
     }
 
     /// The loaded file's `duration` property in seconds, or `nil` when libmpv hasn't
@@ -193,6 +208,12 @@ nonisolated enum MPVThumbnailer {
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
                 metadata = loadedMetadata(handle)
+            case MPV_EVENT_VIDEO_RECONFIG:
+                // The frame is decoded, so `video-params` is now authoritative — refresh the colour
+                // tags (they may have read `nil` at `FILE_LOADED`, before decode). Keeps the duration
+                // and dimensions captured while the file was open.
+                metadata.hdrGamma = colorTag(handle, "video-params/gamma") ?? metadata.hdrGamma
+                metadata.hdrPrimaries = colorTag(handle, "video-params/primaries") ?? metadata.hdrPrimaries
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN, MPV_EVENT_IDLE:
                 return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
             default:

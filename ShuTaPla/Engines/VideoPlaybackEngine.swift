@@ -24,24 +24,35 @@ final class VideoPlaybackEngine: MPVPlaybackEngine {
         view.attach(client)
     }
 
-    /// Reconfigures colour output when a file's decoded video params first arrive. `dwidth`
-    /// (`.videoWidth`) turning positive is that signal — decode is up, so `video-params/*` are
-    /// valid — and it is stable per file, so this runs once per file.
-    override func handle(_ event: MPVEvent) {
-        super.handle(event)
-        if case .videoWidth(let width?) = event, width > 0 { configureColorOutput() }
+    /// Pre-configures colour output from the file's cached colour tags before a frame is decoded,
+    /// so an HDR file opens straight to its PQ layer instead of flashing SDR for the first frames
+    /// (and a following SDR file resets to SDR at once, not on its first params). Cached tags are
+    /// best-effort — `nil` for a never-displayed file, or a determined SDR — and the authoritative
+    /// pass on live `video-params` (see `handle`) corrects the decision either way.
+    override func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
+        super.load(file, resource: resource, startingAt: position)
+        applyColorOutput(gamma: file?.hdrGamma, primaries: file?.hdrPrimaries)
     }
 
-    /// Reads the decoded transfer/primaries and the hosting screen's EDR headroom, decides the
-    /// output config, and applies it to both mpv (`target-*`) and the layer. In the render-API path
+    /// Re-applies colour output authoritatively when a file's decoded video params first arrive.
+    /// `dwidth` (`.videoWidth`) turning positive is that signal — decode is up, so `video-params/*`
+    /// are valid — and it is stable per file, so this runs once per file.
+    override func handle(_ event: MPVEvent) {
+        super.handle(event)
+        if case .videoWidth(let width?) = event, width > 0 {
+            applyColorOutput(gamma: client.stringProperty("video-params/gamma"),
+                             primaries: client.stringProperty("video-params/primaries"))
+        }
+    }
+
+    /// Decides the output config from the given transfer/primaries and the hosting screen's EDR
+    /// headroom, then applies it to both mpv (`target-*`) and the layer. In the render-API path
     /// mpv can't see that our layer is EDR-capable, so without this it tone-maps HDR down to SDR.
-    private func configureColorOutput() {
+    private func applyColorOutput(gamma: String?, primaries: String?) {
         let screen = renderView.window?.screen ?? NSScreen.main
         let supportsEDR = (screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1) > 1
         let config = HDRVideoConfig.decide(
-            gamma: client.stringProperty("video-params/gamma") ?? "",
-            primaries: client.stringProperty("video-params/primaries") ?? "",
-            displaySupportsEDR: supportsEDR)
+            gamma: gamma ?? "", primaries: primaries ?? "", displaySupportsEDR: supportsEDR)
         client.setStringProperty("target-prim", config.targetPrimaries)
         client.setStringProperty("target-trc", config.targetTransfer)
         client.setStringProperty("target-peak", config.targetPeak)
