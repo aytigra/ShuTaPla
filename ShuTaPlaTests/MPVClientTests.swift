@@ -14,6 +14,12 @@ import Foundation
         "av://lavfi:sine=frequency=440:duration=\(seconds)"
     }
 
+    /// A libavfilter test-pattern video of the given length, decoded with `vo=null` so it needs no
+    /// window. Its decoded `video-params/*` are what the HDR getters read.
+    private func testVideo(seconds: Int) -> String {
+        "av://lavfi:testsrc=size=320x240:rate=30:duration=\(seconds)"
+    }
+
     /// Runs `body` (which consumes `client.events`) but gives up after `timeout`, returning `nil`
     /// on expiry. Keeps a single consumer on the stream per call.
     private func withEventTimeout<T: Sendable>(
@@ -146,6 +152,54 @@ import Foundation
         // The synchronous read drains the queue (FIFO): had any write above touched the
         // destroyed handle it would have crashed before this returns.
         #expect(client.volume == 0)
+    }
+
+    @Test func targetStringPropertyRoundTrips() throws {
+        let client = try MPVClient(configuration: .audio)
+        defer { client.shutdown() }
+
+        // The setter dispatches async and the getter reads synchronously on the same serial
+        // queue, so the read observes the write (FIFO ordering) — no file needed, `target-*`
+        // are output options settable at any time.
+        client.setStringProperty("target-trc", "pq")
+        #expect(client.stringProperty("target-trc") == "pq")
+
+        client.setStringProperty("target-prim", "bt.2020")
+        #expect(client.stringProperty("target-prim") == "bt.2020")
+    }
+
+    @Test func stringPropertyReadsDecodedVideoParams() async throws {
+        let client = try MPVClient(configuration: .audio)   // vo=null: decodes video, opens no window
+        defer { client.shutdown() }
+
+        client.loadFile(testVideo(seconds: 5))
+        client.play()
+
+        // `video-params/*` only populate once a frame is decoded; `dwidth` arriving is that signal.
+        let primaries = await withEventTimeout { () -> String? in
+            for await event in client.events {
+                if case .videoWidth(let value?) = event, value > 0 {
+                    return client.stringProperty("video-params/primaries")
+                }
+            }
+            return nil
+        }
+
+        // A real decoded value (e.g. "bt.709") — the getter reaches live mpv state, not a default.
+        #expect(primaries?.isEmpty == false)
+    }
+
+    @Test func stringPropertyAfterShutdownDoesNotTouchDestroyedHandle() throws {
+        let client = try MPVClient(configuration: .audio)
+        client.setStringProperty("target-trc", "pq")
+        client.shutdown()
+
+        // The getter's `queue.sync` runs after shutdown's destroy on the same serial queue; the
+        // `isTerminated` guard returns nil instead of reading the freed handle. The setter that
+        // follows is a no-op for the same reason (it would crash before the read returns otherwise).
+        #expect(client.stringProperty("target-trc") == nil)
+        client.setStringProperty("target-prim", "bt.2020")
+        #expect(client.stringProperty("target-prim") == nil)
     }
 
     @Test func endOfFileEmittedAtNaturalEnd() async throws {

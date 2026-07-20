@@ -99,7 +99,6 @@ nonisolated final class MPVClient: @unchecked Sendable {
             // The render API draws into the app's own GL surface; mpv owns no window.
             setOption("vo", "libmpv")
             setOption("hwdec", configuration.hardwareDecoding ? "auto-safe" : "no")
-            setOption("target-colorspace-hint", "yes")   // adapt output to the EDR layer
         case .null:
             setOption("vo", "null")
             setOption("audio-display", "no")
@@ -313,6 +312,27 @@ nonisolated final class MPVClient: @unchecked Sendable {
                 guard !self.isTerminated else { return }   // handle already destroyed by shutdown
                 mpv_set_property_string(self.handle, "loop-file", newValue ? "inf" : "no")
             }
+        }
+    }
+
+    /// Reads a string-valued mpv property synchronously, or `nil` when it is unavailable (no file
+    /// loaded, property absent, or after shutdown). The HDR decision reads the decoded
+    /// `video-params/gamma` and `video-params/primaries` through this.
+    func stringProperty(_ name: String) -> String? {
+        queue.sync {
+            guard !isTerminated else { return nil }   // handle already destroyed by shutdown
+            guard let raw = mpv_get_property_string(self.handle, name) else { return nil }
+            defer { mpv_free(raw) }
+            return String(cString: raw)
+        }
+    }
+
+    /// Sets a string-valued mpv property (dispatched, like the other writes). The HDR wiring drives
+    /// `target-prim`/`target-trc`/`target-peak` through this to steer mpv's output colour space.
+    func setStringProperty(_ name: String, _ value: String) {
+        queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            mpv_set_property_string(self.handle, name, value)
         }
     }
 

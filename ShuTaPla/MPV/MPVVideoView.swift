@@ -4,8 +4,9 @@
 //
 //  The OpenGL surface the app owns and mpv renders into through the libmpv render API.
 //  mpv has no window of its own: it draws on demand into this layer's framebuffer whenever
-//  we call `mpv_render_context_render`. EDR is opted in on the layer so HDR clips can exceed
-//  SDR white on capable displays.
+//  we call `mpv_render_context_render`. The layer defaults to SDR and opts into EDR per file:
+//  the engine applies an `HDRVideoConfig` once a file's colour params are decoded, tagging the
+//  float framebuffer with a PQ colour space so HDR clips can exceed SDR white on capable displays.
 //
 //  The CGL context is created eagerly (not via CoreAnimation's lazy `copyCGLContext`), so the
 //  mpv render context exists before the first file's video output is initialised — otherwise
@@ -45,6 +46,10 @@ final class MPVVideoView: NSView {
     /// engine right after it creates both.
     func attach(_ client: MPVClient) { glLayer.attach(client) }
 
+    /// Applies the decided colour output to the layer (EDR opt-in + framebuffer colour space).
+    /// The engine calls this per file once the decoded params yield an ``HDRVideoConfig``.
+    func apply(_ config: HDRVideoConfig) { glLayer.apply(config) }
+
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         glLayer.contentsScale = window?.backingScaleFactor ?? glLayer.contentsScale
@@ -74,8 +79,7 @@ nonisolated final class MPVOpenGLLayer: CAOpenGLLayer {
         isAsynchronous = false                 // redraw on demand, driven by mpv's update callback
         isOpaque = true
         needsDisplayOnBoundsChange = true
-        wantsExtendedDynamicRangeContent = true
-        colorspace = CGColorSpace(name: CGColorSpace.extendedSRGB)
+        apply(.sdr)                            // SDR until a file's decoded params engage EDR
         createContext()
     }
 
@@ -129,6 +133,15 @@ nonisolated final class MPVOpenGLLayer: CAOpenGLLayer {
         }
     }
 
+    /// Tags the layer for the decided colour output: EDR opt-in and the framebuffer colour space
+    /// (SDR sRGB, or a PQ space that hands HDR values to the OS tone-mapper). Marks for redraw so
+    /// the change takes on the current frame.
+    func apply(_ config: HDRVideoConfig) {
+        wantsExtendedDynamicRangeContent = config.extendedDynamicRange
+        colorspace = config.colorSpace.cgColorSpace
+        setNeedsDisplay()
+    }
+
     override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj {
         if let cglPixelFormat { return CGLRetainPixelFormat(cglPixelFormat) }
         return super.copyCGLPixelFormat(forDisplayMask: mask)
@@ -161,5 +174,18 @@ nonisolated final class MPVOpenGLLayer: CAOpenGLLayer {
         super.draw(inCGLContext: context, pixelFormat: pixelFormat,
                    forLayerTime: layerTime, displayTime: displayTime)
         client?.reportSwap()
+    }
+}
+
+nonisolated extension HDRVideoConfig.ColorSpace {
+    /// The concrete `CGColorSpace` the render layer tags its float framebuffer with. The decision
+    /// stays a pure enum (unit-testable without a GL surface); this is where it resolves to a real
+    /// colour space.
+    var cgColorSpace: CGColorSpace? {
+        switch self {
+        case .sRGB: CGColorSpace(name: CGColorSpace.sRGB)
+        case .displayP3_PQ: CGColorSpace(name: CGColorSpace.displayP3_PQ)
+        case .itur_2100_PQ: CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+        }
     }
 }
