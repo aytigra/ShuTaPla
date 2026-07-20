@@ -77,7 +77,7 @@ struct MediaPreviewView: View {
                     progressStrip
                 case .image:
                     if let image = preview.image {
-                        Image(nsImage: image).resizable()
+                        EDRImageLayer(image: image, fitMode: .fit)
                     }
                 case .audio, .none:
                     EmptyView()

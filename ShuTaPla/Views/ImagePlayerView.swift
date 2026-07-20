@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ImagePlayerView: View {
     @Environment(PlaybackCoordinator.self) private var coordinator
@@ -43,7 +44,7 @@ struct ImagePlayerView: View {
     }
 
     @ViewBuilder
-    private func imageLayer(_ image: NSImage, in size: CGSize) -> some View {
+    private func imageLayer(_ image: CGImage, in size: CGSize) -> some View {
         let transform = engine.transform
         let offset = CGSize(
             width: transform.offset.width + dragTranslation.width,
@@ -58,23 +59,15 @@ struct ImagePlayerView: View {
             .offset(offset)
     }
 
-    /// The image at its fit-mode size before pan/zoom is applied.
-    @ViewBuilder
-    private func base(_ image: NSImage, in size: CGSize) -> some View {
-        switch engine.fitMode {
-        case .fit:
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: size.width, height: size.height)
-        case .cover:
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: size.width, height: size.height)
-        case .original:
-            Image(nsImage: image)
-        }
+    /// The image at its fit-mode size before pan/zoom is applied. The `contentsGravity` of the EDR
+    /// layer does the fit/cover scaling within the surface-sized frame; `.original` frames to the
+    /// image's natural point size so pan/zoom can roam a picture larger than the surface.
+    private func base(_ image: CGImage, in size: CGSize) -> some View {
+        let frame = engine.fitMode == .original
+            ? CGSize(width: image.width, height: image.height)
+            : size
+        return EDRImageLayer(image: image, fitMode: engine.fitMode)
+            .frame(width: frame.width, height: frame.height)
     }
 
     // MARK: - Gestures

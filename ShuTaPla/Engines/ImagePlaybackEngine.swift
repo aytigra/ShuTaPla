@@ -11,7 +11,6 @@
 //
 
 import Foundation
-import AppKit
 import ImageIO
 
 /// Pan offset and zoom scale applied to the displayed image. Reset to `.identity`
@@ -28,8 +27,9 @@ nonisolated struct ImageTransform: Equatable, Sendable {
 @Observable
 final class ImagePlaybackEngine: SourceNavigating {
 
-    /// The decoded image to display, or `nil` while loading / when stopped.
-    private(set) var currentImage: NSImage?
+    /// The decoded image to display, or `nil` while loading / when stopped. A `CGImage` (not an
+    /// `NSImage`) so it carries its HDR colour space straight to the player's EDR layer.
+    private(set) var currentImage: CGImage?
 
     /// The file currently shown. Anchor for advance/previous and the slideshow.
     private(set) var currentFile: PlaylistFile?
@@ -92,7 +92,7 @@ final class ImagePlaybackEngine: SourceNavigating {
         loadTask = Task { [weak self] in
             let decoded = await Self.decodeImage(at: url)
             guard !Task.isCancelled, let self else { return }
-            self.currentImage = decoded?.image
+            self.currentImage = decoded
         }
     }
 
@@ -150,19 +150,17 @@ final class ImagePlaybackEngine: SourceNavigating {
 
     // MARK: - Decode (off main)
 
-    /// Decodes a full-resolution image off the main actor. `kCGImageSourceShouldAllowFloat`
-    /// preserves wide-gamut/HDR pixel data for display in an EDR-capable layer. The
-    /// `NSImage` is built from an already-decoded `CGImage`, so the main actor never
-    /// pays a draw-time decode.
+    /// Decodes a full-resolution image off the main actor. `kCGImageSourceDecodeToHDR` applies an
+    /// HDR gain map and preserves PQ/HLG values so HDR content survives as HDR (rather than decoding
+    /// to its SDR base). The `CGImage` carries its colour space to the player's EDR layer, which on
+    /// a capable display renders it with extended range. `CGImage` is `Sendable`, so it crosses the
+    /// actor hop directly.
     @concurrent
-    private nonisolated static func decodeImage(at url: URL) async -> SendableImage? {
+    private nonisolated static func decodeImage(at url: URL) async -> CGImage? {
         await url.withSecurityScopedAccess { url in
-            let options: [CFString: Any] = [kCGImageSourceShouldAllowFloat: true]
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else {
-                return nil
-            }
-            return SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
+            let options: [CFString: Any] = [kCGImageSourceDecodeRequest: kCGImageSourceDecodeToHDR]
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
         }
     }
 }

@@ -17,7 +17,7 @@
 //
 
 import Foundation
-import AppKit
+import CoreGraphics
 
 @MainActor
 @Observable
@@ -33,7 +33,7 @@ final class MediaPreview {
     var mediaType: MediaType? { file?.playlist?.mediaType }
 
     /// The image engine's decoded picture, for the image preview. No libmpv.
-    var image: NSImage? { imageEngine.currentImage }
+    var image: CGImage? { imageEngine.currentImage }
 
     /// The surface the video engine renders into, once a video preview has run.
     var videoRenderView: MPVVideoView? { (videoEngine as? VideoPlaybackEngine)?.renderView }
@@ -52,7 +52,7 @@ final class MediaPreview {
     var contentSize: CGSize? {
         if let cached = file?.pixelSize { return cached }
         switch mediaType {
-        case .image: return image?.size
+        case .image: return image.map { CGSize(width: $0.width, height: $0.height) }
         case .video:
             let size = videoEngine?.videoSize ?? .zero
             return size.width > 0 && size.height > 0 ? size : nil
