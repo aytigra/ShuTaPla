@@ -20,7 +20,7 @@ import Cmpv
 /// into `events`. That stream has exactly one consumer — the owning playback engine.
 nonisolated final class MPVClient: @unchecked Sendable {
 
-    /// How the instance is configured at creation. Video and audio differ only by output.
+    /// How the instance is configured at creation.
     struct Configuration: Sendable {
         enum VideoOutput: Sendable {
             /// Render video through the libmpv render API (`--vo=libmpv`) into a render
@@ -30,12 +30,28 @@ nonisolated final class MPVClient: @unchecked Sendable {
             case null
         }
 
+        enum AudioOutput: Sendable {
+            /// Play through the system audio device.
+            case device
+            /// No audio output (`--ao=null`): playback runs at real-time pace but makes no
+            /// sound and touches no audio hardware — used by tests.
+            case null
+        }
+
         var videoOutput: VideoOutput
+        var audioOutput: AudioOutput = .device
         var hardwareDecoding: Bool
         var initialVolume: Double
 
-        static let video = Configuration(videoOutput: .embedded, hardwareDecoding: true, initialVolume: 100)
-        static let audio = Configuration(videoOutput: .null, hardwareDecoding: false, initialVolume: 100)
+        /// How the engine's skip hotkey seeks: `true` steps to the adjacent keyframe
+        /// (video — see ``stepKeyframe(forward:)``), `false` seeks by the full signed delta
+        /// (audio, which has no keyframes, where a relative seek is always clean — ``seek(by:)``).
+        var keyframeStepping: Bool
+
+        static let video = Configuration(videoOutput: .embedded, hardwareDecoding: true,
+                                         initialVolume: 100, keyframeStepping: true)
+        static let audio = Configuration(videoOutput: .null, hardwareDecoding: false,
+                                         initialVolume: 100, keyframeStepping: false)
     }
 
     /// `nonisolated(unsafe)`: the handle is non-`Sendable`, but every access is serialized
@@ -71,6 +87,10 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// and makes `shutdown` idempotent.
     private nonisolated(unsafe) var isTerminated = false
 
+    /// Set while a backward keyframe step waits for its anchor seek to settle so the second hop
+    /// can be issued distinctly (see ``stepKeyframe(forward:)``). Touched only on `queue`.
+    private nonisolated(unsafe) var pendingBackStep = false
+
     /// The single event stream for this instance. Consume it once from the owning engine.
     let events: AsyncStream<MPVEvent>
 
@@ -102,6 +122,10 @@ nonisolated final class MPVClient: @unchecked Sendable {
         case .null:
             setOption("vo", "null")
             setOption("audio-display", "no")
+        }
+
+        if configuration.audioOutput == .null {
+            setOption("ao", "null")
         }
 
         setOption("idle", "yes")               // stay alive between files
@@ -265,21 +289,75 @@ nonisolated final class MPVClient: @unchecked Sendable {
         }
     }
 
-    /// Seeks to an absolute position in seconds.
+    /// Seeks to an absolute position in seconds, snapping to the keyframe at or before it
+    /// (`keyframes`, not `exact`). The scrubber rides this — fast (a keyframe lands with no decode)
+    /// and within a GOP of the target, which is standard scrubbing.
     func seek(to seconds: TimeInterval) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
-            command(self.handle, "seek", String(seconds), "absolute")
+            command(self.handle, "seek", String(seconds), "absolute+keyframes")
         }
     }
 
-    /// Seeks by a relative offset in seconds (may be negative).
-    func seek(by seconds: TimeInterval) {
+    /// Seeks by a signed delta in seconds (`relative`) — the audio channel's skip hotkey.
+    /// Audio has no keyframes, so a relative seek lands cleanly at ±delta with no decode cost;
+    /// the video skip steps by keyframe instead (``stepKeyframe(forward:)``).
+    func seek(by delta: TimeInterval) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
-            command(self.handle, "seek", String(seconds), "relative")
+            command(self.handle, "seek", String(delta), "relative")
         }
     }
+
+    /// Steps to the adjacent keyframe in the given direction — the skip-forward / skip-back hotkey.
+    ///
+    /// Forward is one tiny `relative+keyframes` seek: mpv rounds a relative keyframe seek to the
+    /// keyframe *after* the target, so `+ε` lands on the next keyframe with no decode.
+    ///
+    /// Backward can't mirror that. A relative keyframe seek rounds *down* to the keyframe at or
+    /// before the target, so `−ε` floors back onto the keyframe already playing (the current GOP's
+    /// start), never the previous one. Reaching the previous keyframe takes two hops: anchor on the
+    /// current GOP's keyframe (`absolute+keyframes` at the live position), then seek just before it
+    /// (in ``completeBackStepIfPending()``). The second hop is deferred until the anchor settles —
+    /// signalled by `PLAYBACK_RESTART` — because mpv coalesces back-to-back seeks: a seek queued
+    /// behind a pending one merges into it, collapsing both onto the same keyframe.
+    func stepKeyframe(forward: Bool) {
+        queue.async {
+            guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            if forward {
+                command(self.handle, "seek", String(Self.keyframeStepEpsilon), "relative+keyframes")
+            } else {
+                self.pendingBackStep = true
+                command(self.handle, "seek", String(self.timePosition()), "absolute+keyframes")
+            }
+        }
+    }
+
+    /// Issues the second hop of a backward keyframe step once its anchor seek has settled. The
+    /// anchor floored the position onto the current GOP's keyframe; seeking just before that
+    /// keyframe now lands on the previous one. Runs on `queue` from the event drain, after the
+    /// anchor has committed, so this seek reads the settled position and can't coalesce with it.
+    private func completeBackStepIfPending() {
+        guard pendingBackStep else { return }
+        pendingBackStep = false
+        // Clamp at the start: a negative absolute target is undefined in mpv (it wraps to the end).
+        let target = max(0, timePosition() - Self.keyframeStepEpsilon)
+        command(handle, "seek", String(target), "absolute+keyframes")
+    }
+
+    /// The live playback position in seconds, read synchronously on `queue`. Anchors the backward
+    /// keyframe step; 0 when no file is loaded, where the follow-up seek simply clamps at the start.
+    private func timePosition() -> Double {
+        var value: Double = 0
+        mpv_get_property(handle, "time-pos", MPV_FORMAT_DOUBLE, &value)
+        return value
+    }
+
+    /// Magnitude of the keyframe step: the forward relative seek, and the backward anchor's
+    /// undershoot. Small enough that the backward hop clears the anchored keyframe by the slimmest
+    /// margin — so the floor lands on the immediately-previous keyframe, not one further back — yet
+    /// large enough to cross it. Tunable.
+    private static let keyframeStepEpsilon: TimeInterval = 0.1
 
     // MARK: - Properties
 
@@ -345,6 +423,13 @@ nonisolated final class MPVClient: @unchecked Sendable {
             guard let raw = mpv_wait_event(handle, 0) else { break }
             let event = raw.pointee
             if event.event_id == MPV_EVENT_NONE { break }
+            // A settled seek fires PLAYBACK_RESTART. The settled position is read (and yielded)
+            // before the backward step's deferred second hop, which moves it again; deferring
+            // that hop to here keeps mpv from coalescing it with the anchor seek (see `stepKeyframe`).
+            if event.event_id == MPV_EVENT_PLAYBACK_RESTART {
+                continuation.yield(.playbackRestart(timePosition()))
+                completeBackStepIfPending()
+            }
             if let translated = translate(event) {
                 continuation.yield(translated)
             }

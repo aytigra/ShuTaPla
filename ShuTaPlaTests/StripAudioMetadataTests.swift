@@ -6,7 +6,7 @@
 //  file (dropping audio) and swaps it in, so the cached facts no longer describe the bytes on
 //  disk. It must forget that cache and *persist* the clear — otherwise the next
 //  `includePendingChanges = false` object fetch refaults the never-saved `nil`s back to the stored
-//  values. Driven over a real h264 sample copied into a scoped temp folder; nothing is playing, so
+//  values. Driven over the h264 fixture copied into a scoped temp folder; nothing is playing, so
 //  the coordinator is never touched and no libmpv engine is created.
 //
 
@@ -17,17 +17,6 @@ import SwiftData
 
 @MainActor
 struct StripAudioMetadataTests {
-
-    /// `test_media/videos`, two levels up from this test file (the repo root).
-    private static var videosDirectory: URL {
-        URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "test_media/videos", directoryHint: .isDirectory)
-    }
-
-    private static func sample(prefix: String) throws -> URL {
-        let files = try FileManager.default.contentsOfDirectory(at: videosDirectory, includingPropertiesForKeys: nil)
-        return try #require(files.first { $0.lastPathComponent.hasPrefix(prefix) })
-    }
 
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
@@ -45,7 +34,7 @@ struct StripAudioMetadataTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let name = "clip.mp4"
-        try FileManager.default.copyItem(at: try Self.sample(prefix: "h264"), to: folder.appending(path: name))
+        try FileManager.default.copyItem(at: try MediaFixture.h264.url, to: folder.appending(path: name))
         let bookmark = try BookmarkService.makeBookmark(for: folder)
 
         let playlist = Playlist(

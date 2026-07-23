@@ -143,9 +143,16 @@ final class ImagePlaybackEngine: SourceNavigating {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled, let self else { break }
-                self.advanceToNext()
+                self.slideshowTick()
             }
         }
+    }
+
+    /// One slideshow beat: advances to the next image while the slideshow is on. The
+    /// guard covers a timer task cancelled mid-sleep whose final beat still lands.
+    func slideshowTick() {
+        guard slideshowEnabled else { return }
+        advanceToNext()
     }
 
     // MARK: - Decode (off main)

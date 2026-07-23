@@ -6,9 +6,9 @@
 //  dimensions, and on-disk size. The stateless `extract` resolves a file and reads
 //  its metadata (AVFoundation first, libmpv fallback for video; `CGImageSource` for
 //  stills); the model-facing `metadata(for:in:)` serves a cached bundle without
-//  re-reading and folds a freshly extracted one onto the model. Real codec-labeled
-//  samples in `test_media/videos` back the video paths; a synthesized PNG backs the
-//  image path.
+//  re-reading and folds a freshly extracted one onto the model. The committed
+//  per-codec fixtures (`MediaFixture`) back the video paths; a synthesized PNG backs
+//  the image path.
 //
 
 import Testing
@@ -19,25 +19,6 @@ import UniformTypeIdentifiers
 @testable import ShuTaPla
 
 @Suite struct MediaMetadataServiceTests {
-
-    /// `test_media/videos`, two levels up from this test file (the repo root).
-    private static var videosDirectory: URL {
-        URL(filePath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "test_media/videos", directoryHint: .isDirectory)
-    }
-
-    /// The first sample whose filename starts with `prefix`.
-    private static func sample(prefix: String) throws -> URL {
-        let files = try FileManager.default.contentsOfDirectory(
-            at: videosDirectory, includingPropertiesForKeys: nil
-        )
-        return try #require(
-            files.first { $0.lastPathComponent.hasPrefix(prefix) },
-            "no sample with prefix \(prefix) in \(videosDirectory.path)"
-        )
-    }
 
     /// Writes a `width`×`height` PNG into a fresh temp directory; the directory is the
     /// caller's to remove when the test ends.
@@ -69,7 +50,7 @@ import UniformTypeIdentifiers
     // MARK: - Stateless extraction
 
     @Test func extractReturnsEmptyForMissingFile() async throws {
-        let bookmark = try BookmarkService.makeBookmark(for: Self.videosDirectory)
+        let bookmark = try BookmarkService.makeBookmark(for: MediaFixture.h264.url.deletingLastPathComponent())
         let metadata = await MediaMetadataService.extract(
             bookmark: bookmark, relativePath: "does-not-exist.mp4", mediaType: .video, isSkipped: false
         )
@@ -84,9 +65,9 @@ import UniformTypeIdentifiers
     // chain reports a positive duration, positive display dimensions (the libmpv case
     // confirms `dwidth`/`dheight` populate at `FILE_LOADED` under `vo=null` for webm),
     // and the on-disk size.
-    @Test(arguments: ["h264", "vp9"])
-    func extractReadsVideoMetadata(_ prefix: String) async throws {
-        let url = try Self.sample(prefix: prefix)
+    @Test(arguments: [MediaFixture.h264, .vp9])
+    func extractReadsVideoMetadata(_ fixture: MediaFixture) async throws {
+        let url = try fixture.url
         let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
         let metadata = await MediaMetadataService.extract(
             bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: false
@@ -119,7 +100,7 @@ import UniformTypeIdentifiers
     // records only the on-disk size and skips the decode entirely — no duration, no dimensions —
     // even for a real video that would otherwise decode fully.
     @Test func extractReadsOnlySizeForSkippedFile() async throws {
-        let url = try Self.sample(prefix: "h264")
+        let url = try MediaFixture.h264.url
         let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
         let metadata = await MediaMetadataService.extract(
             bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: true
@@ -346,7 +327,7 @@ import UniformTypeIdentifiers
         let container = try makeContainer()
         let context = container.mainContext
 
-        let url = try Self.sample(prefix: "h264")
+        let url = try MediaFixture.h264.url
         let dir = url.deletingLastPathComponent()
         let bookmark = try BookmarkService.makeBookmark(for: dir)
         let playlist = Playlist(name: "V", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
@@ -375,7 +356,7 @@ import UniformTypeIdentifiers
         let container = try makeContainer()
         let context = container.mainContext
 
-        let url = try Self.sample(prefix: "h264")
+        let url = try MediaFixture.h264.url
         let dir = url.deletingLastPathComponent()
         let bookmark = try BookmarkService.makeBookmark(for: dir)
         let playlist = Playlist(name: "V", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
@@ -397,7 +378,7 @@ import UniformTypeIdentifiers
         let container = try makeContainer()
         let context = container.mainContext
 
-        let url = try Self.sample(prefix: "h264")
+        let url = try MediaFixture.h264.url
         let dir = url.deletingLastPathComponent()
         let bookmark = try BookmarkService.makeBookmark(for: dir)
         let playlist = Playlist(name: "V", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)

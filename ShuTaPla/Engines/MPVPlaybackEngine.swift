@@ -62,6 +62,12 @@ class MPVPlaybackEngine: SourceNavigating {
     /// coordinator when a playlist starts; weak so the coordinator owns the cycle.
     weak var source: PlaybackSource?
 
+    /// The `currentTime` a forward keyframe step was issued from, armed by `seek(by:)` and
+    /// consumed by the step's settled `playbackRestart` to detect the end of the file. `nil`
+    /// when no forward step is awaiting its landing; every other load/seek/stop disarms it so
+    /// an unrelated restart can't masquerade as the step's landing.
+    private var forwardStepOrigin: TimeInterval?
+
     // MARK: - Underlying client
 
     /// The libmpv wrapper this engine drives. Exposed for the coordinator and
@@ -82,6 +88,7 @@ class MPVPlaybackEngine: SourceNavigating {
     init(configuration: MPVClient.Configuration) throws {
         self.client = try MPVClient(configuration: configuration)
         self.volume = configuration.initialVolume
+        self.keyframeStepping = configuration.keyframeStepping
         observeEvents()
     }
 
@@ -120,6 +127,7 @@ class MPVPlaybackEngine: SourceNavigating {
     /// the live feed reports its arrival; a `.local` file loads at once.
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
+        forwardStepOrigin = nil        // a fresh load's restart is not a step's landing
         currentTime = 0                // no stale position while pending; `startFile` sets the real one
         videoSize = .zero              // the new file re-reports its size; don't linger on the old one
         isPlaying = false
@@ -156,13 +164,38 @@ class MPVPlaybackEngine: SourceNavigating {
         isPlaying = false
         currentTime = 0
         currentFile = nil
+        forwardStepOrigin = nil
     }
 
-    /// Seeks to an absolute position in seconds.
-    func seek(to seconds: TimeInterval) { client.seek(to: seconds) }
+    /// Seeks to an absolute position in seconds. The client snaps to the nearest keyframe at or
+    /// before it (the scrubber's target lands within a GOP — fast, standard scrubbing).
+    func seek(to seconds: TimeInterval) {
+        forwardStepOrigin = nil
+        client.seek(to: seconds)
+    }
 
-    /// Seeks by a relative offset in seconds (the ±3s hotkey passes ±3 here).
-    func seek(by delta: TimeInterval) { client.seek(by: delta) }
+    /// Whether the skip hotkey steps by keyframe (video) or seeks by the full signed delta
+    /// (audio — no keyframes, where a plain relative seek is always clean). Fixed per channel
+    /// by the configuration.
+    private let keyframeStepping: Bool
+
+    /// The skip hotkey. With `keyframeStepping` only the delta's sign is used: forward is one
+    /// keyframe seek; backward takes two (anchor on the current keyframe, then hop before it)
+    /// because mpv rounds relative keyframe seeks toward the direction of travel and can't
+    /// undershoot in one move — see ``MPVClient/stepKeyframe(forward:)``. Either way it lands on
+    /// the next / previous keyframe: no overshoot, no stall — steps are keyframe-granular
+    /// (~one GOP), not a fixed number of seconds. A forward step also arms end-of-file
+    /// detection: its settled restart is compared to the position it was issued from (see the
+    /// `.playbackRestart` handling). Without `keyframeStepping` the full delta seeks relatively.
+    func seek(by delta: TimeInterval) {
+        guard keyframeStepping else {
+            client.seek(by: delta)
+            return
+        }
+        let forward = delta > 0
+        forwardStepOrigin = forward ? currentTime : nil
+        client.stepKeyframe(forward: forward)
+    }
 
     // Advance / previous come from `SourceNavigating` (shared with the image engine).
 
@@ -207,6 +240,15 @@ class MPVPlaybackEngine: SourceNavigating {
             // here. `advanceToNext` loads the successor, or holds the last frame when
             // this file is the whole sequence (its successor is itself).
             advanceToNext()
+        case .playbackRestart(let settled):
+            // The settled landing of an armed forward keyframe step: if it didn't move
+            // ahead, the file has no next keyframe — its end — so advance instead of
+            // sticking there. Files that flip `eof-reached` on the step never get here
+            // with a stale origin (the advance's load disarms it).
+            if let origin = forwardStepOrigin {
+                forwardStepOrigin = nil
+                if Self.advanceAfterForwardStep(from: origin, to: settled) { advanceToNext() }
+            }
         case .logMessage(let text):
             print("mpv \(text)")
         case .endFile, .fileLoaded, .shutdown:
@@ -215,6 +257,16 @@ class MPVPlaybackEngine: SourceNavigating {
     }
 
     // MARK: - Helpers
+
+    /// Whether a settled forward keyframe step means the end of the file. A mid-file forward
+    /// step always lands strictly ahead of its origin (forward keyframe seeks round up to the
+    /// next keyframe), so a settled position that did not move ahead can only mean there was
+    /// no next keyframe to land on — advance instead of sticking on the last one.
+    nonisolated static func advanceAfterForwardStep(
+        from origin: TimeInterval, to settled: TimeInterval
+    ) -> Bool {
+        settled <= origin
+    }
 
     /// The string mpv's `loadfile` expects: a plain filesystem path for file URLs,
     /// the full URL for everything else (network/protocol sources).

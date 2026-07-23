@@ -4,9 +4,10 @@ import Foundation
 
 /// Exercises `MPVClient` against a real libmpv instance.
 ///
-/// Tests drive mpv's built-in libavfilter virtual sources (`av://lavfi:…`) rather than a media
-/// file on disk: they need no fixture and no subprocess, so they run inside the sandboxed test
-/// host. Every client uses the audio configuration (`--vo=null`) so nothing opens a window.
+/// Tests drive mpv's built-in libavfilter virtual sources (`av://lavfi:…`) — no fixture, no
+/// subprocess — except where a test must really *seek* (lavfi sources aren't seekable), which
+/// uses a generated WAV (`writeTempWAV`). Every client uses the silent audio configuration
+/// (`--vo=null`, `--ao=null`) so nothing opens a window or makes a sound.
 @Suite struct MPVClientTests {
 
     /// A libavfilter sine tone of the given length, addressable by mpv with no file on disk.
@@ -19,6 +20,7 @@ import Foundation
     private func testVideo(seconds: Int) -> String {
         "av://lavfi:testsrc=size=320x240:rate=30:duration=\(seconds)"
     }
+
 
     /// Runs `body` (which consumes `client.events`) but gives up after `timeout`, returning `nil`
     /// on expiry. Keeps a single consumer on the stream per call.
@@ -36,12 +38,12 @@ import Foundation
     }
 
     @Test func createsAndDestroysHandleWithoutCrashing() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         client.shutdown()
     }
 
     @Test func loadingFileEmitsDurationAndTimePosition() async throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
         client.loadFile(sine(seconds: 5))
@@ -62,7 +64,7 @@ import Foundation
     }
 
     @Test func pauseCommandEmitsPausedChanged() async throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
         client.loadFile(sine(seconds: 30))
@@ -84,13 +86,18 @@ import Foundation
     }
 
     @Test func seekMovesTimePosition() async throws {
-        let client = try MPVClient(configuration: .audio)
+        // A seekable WAV, and a timeout shorter than the seek target: reaching 9s by just
+        // playing in real time can't pass this — only the seek can.
+        let url = try writeTempWAV(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
-        client.loadFile(sine(seconds: 30))
+        client.loadFile(url.path(percentEncoded: false))
         client.play()
 
-        let seeked = await withEventTimeout(.seconds(12)) {
+        let seeked = await withEventTimeout(.seconds(8)) {
             var didSeek = false
             for await event in client.events {
                 if case .fileLoaded = event, !didSeek {
@@ -107,8 +114,37 @@ import Foundation
         #expect(seeked == true)
     }
 
+    @Test func settledSeekEmitsPlaybackRestartAtItsPosition() async throws {
+        let url = try writeTempWAV(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let client = try MPVClient(configuration: .silentAudio)
+        defer { client.shutdown() }
+
+        client.loadFile(url.path(percentEncoded: false))
+        client.play()
+
+        // The initial load also fires a restart (at ~0); the position filter selects the
+        // seek's own settle, proving the event carries the settled `time-pos`.
+        let settled = await withEventTimeout(.seconds(8)) { () -> TimeInterval? in
+            var didSeek = false
+            for await event in client.events {
+                if case .fileLoaded = event, !didSeek {
+                    client.seek(to: 10)
+                    didSeek = true
+                }
+                if didSeek, case .playbackRestart(let position) = event, position >= 9 {
+                    return position
+                }
+            }
+            return nil
+        }
+
+        #expect(settled != nil)
+    }
+
     @Test func volumeRoundTrips() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
         // The setter dispatches async and the getter reads synchronously on the same serial
@@ -121,7 +157,7 @@ import Foundation
     }
 
     @Test func propertyReadAfterShutdownDoesNotTouchDestroyedHandle() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         client.volume = 50
         client.shutdown()
 
@@ -133,7 +169,7 @@ import Foundation
     }
 
     @Test func commandAfterShutdownDoesNotTouchDestroyedHandle() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         client.loadFile(sine(seconds: 5))
         client.shutdown()
 
@@ -145,7 +181,6 @@ import Foundation
         client.pause()
         client.stop()
         client.seek(to: 3)
-        client.seek(by: 1)
         client.isLooping = true
         client.volume = 70
 
@@ -155,7 +190,7 @@ import Foundation
     }
 
     @Test func targetStringPropertyRoundTrips() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
         // The setter dispatches async and the getter reads synchronously on the same serial
@@ -169,7 +204,7 @@ import Foundation
     }
 
     @Test func stringPropertyReadsDecodedVideoParams() async throws {
-        let client = try MPVClient(configuration: .audio)   // vo=null: decodes video, opens no window
+        let client = try MPVClient(configuration: .silentAudio)   // vo=null: decodes video, opens no window
         defer { client.shutdown() }
 
         client.loadFile(testVideo(seconds: 5))
@@ -190,7 +225,7 @@ import Foundation
     }
 
     @Test func stringPropertyAfterShutdownDoesNotTouchDestroyedHandle() throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         client.setStringProperty("target-trc", "pq")
         client.shutdown()
 
@@ -203,7 +238,7 @@ import Foundation
     }
 
     @Test func endOfFileEmittedAtNaturalEnd() async throws {
-        let client = try MPVClient(configuration: .audio)
+        let client = try MPVClient(configuration: .silentAudio)
         defer { client.shutdown() }
 
         client.loadFile(sine(seconds: 1))

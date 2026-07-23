@@ -6,12 +6,12 @@ import AppKit
 /// Exercises the playback engines.
 ///
 /// The mpv-backed engines (`VideoPlaybackEngine`/`AudioPlaybackEngine`) share all
-/// their logic in `MPVPlaybackEngine`, so the shared behavior is driven through
-/// `AudioPlaybackEngine`: like `MPVClientTests` it uses the `--vo=null` audio
-/// configuration and libavfilter virtual sources (`av://lavfi:…`), so nothing
-/// opens a window and no media fixture is needed in the sandboxed test host. The
-/// video engine adds only its render view over the same base; its frame output is
-/// verified once the player views host it (Tasks 11–12).
+/// their logic in `MPVPlaybackEngine`, so the shared behavior is driven through the
+/// base engine on the silent test configurations (`--vo=null`, `--ao=null` — no
+/// window, no sound; `makeEngine`), with libavfilter virtual sources (`av://lavfi:…`)
+/// or a generated WAV where a test must really seek. The video engine adds only its
+/// render view over the same base; its frame output is verified once the player
+/// views host it (Tasks 11–12).
 @MainActor
 @Suite struct PlaybackEngineTests {
 
@@ -20,6 +20,12 @@ import AppKit
     /// A libavfilter sine tone of the given length, loadable by mpv with no file.
     private func sine(_ seconds: Int) -> String {
         "av://lavfi:sine=frequency=440:duration=\(seconds)"
+    }
+
+    /// The shared MPV engine on a silent configuration — no window, no sound. Keyframe stepping
+    /// (the video channel's skip mode) is opted into by the tests that exercise it.
+    private func makeEngine(keyframeStepping: Bool = false) throws -> MPVPlaybackEngine {
+        try MPVPlaybackEngine(configuration: keyframeStepping ? .silentKeyframeStepping : .silentAudio)
     }
 
     /// Polls `condition` on the main actor until it holds or `timeout` elapses,
@@ -64,14 +70,19 @@ import AppKit
 
     // MARK: - mpv engine (via AudioPlaybackEngine)
 
-    @Test func loadStartsPlaybackAndTimeAdvances() async throws {
-        let engine = try AudioPlaybackEngine()
+    // Loading starts playback and delivers the load-settled state — a known duration and
+    // the playing flag — through the engine's `observeEvents` stream. That the clock then
+    // really advances is proven once, at the client level
+    // (`MPVClientTests/loadingFileEmitsDurationAndTimePosition`); waiting on real-time
+    // progress here would only re-test mpv under a starved main actor.
+    @Test func loadDeliversStateThroughEventStream() async throws {
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         engine.load(nil, resource: sine(5))
 
-        let advanced = await poll(timeout: .seconds(10)) { engine.currentTime > 0 }
-        #expect(advanced)
+        let settled = await poll(timeout: .seconds(10)) { engine.duration > 0 }
+        #expect(settled)
         #expect(engine.isPlaying)
     }
 
@@ -88,7 +99,7 @@ import AppKit
         source.urlByID[first.id] = url
         source.urlByID[second.id] = url
 
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.source = source
         engine.load(first, at: url)   // anchor on the first file
@@ -109,7 +120,7 @@ import AppKit
         let source = MockPlaybackSource(files: [only])
         source.urlByID[only.id] = url
 
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.source = source
         engine.load(only, at: url)
@@ -130,7 +141,7 @@ import AppKit
         let second = makeFile("b")
         let source = MockPlaybackSource(files: [first, second])
 
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.source = source
         engine.load(first, resource: sine(5))   // anchor on the first file
@@ -154,7 +165,7 @@ import AppKit
         source.urlByID[first.id] = url
         source.urlByID[second.id] = url
 
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         engine.source = source
         engine.load(first, at: url)
         engine.shutdown()
@@ -163,8 +174,104 @@ import AppKit
         #expect(source.advancedTo.isEmpty)
     }
 
+    @Test(arguments: [
+        (origin: 50.0, settled: 53.0, advance: false),   // landed on the next keyframe: a normal step
+        (origin: 50.0, settled: 50.0, advance: true),    // did not move: no next keyframe, the end
+        (origin: 50.0, settled: 49.0, advance: true),    // floored back onto the last keyframe: the end
+    ])
+    func forwardStepDecision(_ scenario: (origin: TimeInterval, settled: TimeInterval, advance: Bool)) {
+        #expect(MPVPlaybackEngine.advanceAfterForwardStep(
+            from: scenario.origin, to: scenario.settled
+        ) == scenario.advance)
+    }
+
+    @Test func forwardStepThatCannotAdvanceSwitchesFile() throws {
+        // A forward keyframe step in the last GOP has no next keyframe to land on: mpv sticks on
+        // the last one, so the step's settled restart is not ahead of its origin. The engine must
+        // advance to the next file instead of leaving playback stuck there.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try makeEngine(keyframeStepping: true)
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, at: url)
+
+        engine.handle(.timePosition(50))
+        engine.seek(by: 3)                    // forward step issued from 50
+        engine.handle(.playbackRestart(50))   // settled where it started: no next keyframe
+
+        #expect(source.advancedTo == [second.id])
+    }
+
+    @Test func forwardStepThatLandedAheadDoesNotAdvance() throws {
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try makeEngine(keyframeStepping: true)
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, at: url)
+
+        engine.handle(.timePosition(50))
+        engine.seek(by: 3)                    // forward step issued from 50
+        engine.handle(.playbackRestart(53))   // landed on the next keyframe: a normal step
+        // The landing consumed the armed origin: a later unrelated restart (even one behind
+        // the old origin) is not the step's landing and must not advance.
+        engine.handle(.playbackRestart(50))
+
+        #expect(source.advancedTo.isEmpty)
+    }
+
+    @Test func restartsNotFromAForwardStepDoNotAdvance() throws {
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try makeEngine(keyframeStepping: true)
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, at: url)
+
+        // A backward step settles behind where it started by design — never an advance.
+        engine.handle(.timePosition(50))
+        engine.seek(by: -3)
+        engine.handle(.playbackRestart(47))
+        #expect(source.advancedTo.isEmpty)
+
+        // A scrubber seek issued after a forward step takes over: its restart (behind the
+        // step's origin here) is the scrubber's landing, not the step's.
+        engine.seek(by: 3)
+        engine.seek(to: 10)
+        engine.handle(.playbackRestart(10))
+        #expect(source.advancedTo.isEmpty)
+
+        // A fresh load's restart is not a step's landing either.
+        engine.seek(by: 3)
+        engine.load(first, at: url)
+        engine.handle(.playbackRestart(0))
+        #expect(source.advancedTo.isEmpty)
+    }
+
     @Test func loopToggleReachesClient() async throws {
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.load(nil, resource: sine(30))
 
@@ -179,7 +286,7 @@ import AppKit
     }
 
     @Test func loadingANewFileResetsLooping() async throws {
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         engine.load(makeFile("a"), resource: sine(30))
@@ -198,7 +305,7 @@ import AppKit
         // The per-file loop reset must not wait for an evicted file's bytes to arrive: while the
         // download is pending, `isLooping` already reflects the new (unlooped) file, not the previous
         // one's loop state left standing behind the downloading placeholder.
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         engine.load(makeFile("a"), resource: sine(30))
@@ -215,7 +322,7 @@ import AppKit
     @Test func loopToggledWhileEvictedFileDownloadsSurvivesArrival() async throws {
         // A loop toggled on while an evicted file is still downloading must survive the file's
         // arrival — the deferred byte-load must not undo the user's choice by re-resetting looping.
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         let evicted = makeFile("a")
@@ -234,9 +341,15 @@ import AppKit
     }
 
     @Test func seekMovesTime() async throws {
-        let engine = try AudioPlaybackEngine()
+        // A seekable WAV, and a poll shorter than the seek target: reaching 9s by just
+        // playing in real time can't pass this — only the seek can. (The lavfi sources
+        // used elsewhere are not seekable; see `writeTempWAV`.)
+        let url = try writeTempWAV(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let engine = try makeEngine()
         defer { engine.shutdown() }
-        engine.load(nil, resource: sine(30))
+        engine.load(nil, at: url)
 
         _ = await poll(timeout: .seconds(8)) { engine.duration > 0 }
         engine.seek(to: 10)
@@ -245,8 +358,54 @@ import AppKit
         #expect(seeked)
     }
 
+    @Test func audioEngineSeeksByTheFullDelta() async throws {
+        // Audio has no keyframes, so the audio channel's skip hotkey seeks by the full signed
+        // delta (a plain relative seek — always clean on audio), not by keyframe step. The
+        // backward direction proves it: playback alone can never move `currentTime` down, and a
+        // keyframe "step" back would land ~0.1s away instead of the full 3s.
+        let url = try writeTempWAV(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let engine = try makeEngine()
+        defer { engine.shutdown() }
+        engine.load(nil, at: url)
+
+        _ = await poll(timeout: .seconds(8)) { engine.duration > 0 }
+        engine.seek(to: 10)
+        #expect(await poll(timeout: .seconds(8)) { engine.currentTime >= 9.9 })
+
+        engine.seek(by: -3)
+        let landed = await poll(timeout: .seconds(8)) { (6.5...7.6).contains(engine.currentTime) }
+        #expect(landed)
+    }
+
+    @Test func audioEngineDoesNotArmEndDetection() throws {
+        // Without keyframe stepping the skip seeks relatively and `eof-reached` covers the end,
+        // so a restart that isn't ahead of the press position must not be read as "no next
+        // keyframe" — an audio skip near the start would otherwise skip whole files.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try makeEngine()
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, at: url)
+
+        engine.handle(.timePosition(50))
+        engine.seek(by: 3)
+        engine.handle(.playbackRestart(50))
+
+        #expect(source.advancedTo.isEmpty)
+    }
+
     @Test func volumeForwardsToClient() async throws {
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         engine.volume = 42
@@ -259,7 +418,7 @@ import AppKit
         // while it waits — otherwise the previous file keeps decoding and *audibly playing* behind
         // the placeholder for the whole download. Proven through the live client: once rested,
         // time-pos stops advancing, so `currentTime` no longer climbs.
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         engine.load(makeFile("a"), resource: sine(30))
@@ -281,7 +440,7 @@ import AppKit
         // pending with mpv rested. When the bytes arrive, the deferred load must honor the standing
         // pause — not auto-start playback. Otherwise relaunching a Paused playlist (or pausing while
         // an evicted file downloads) starts blaring the moment iCloud delivers the file.
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         let evicted = makeFile("a")
@@ -305,7 +464,7 @@ import AppKit
         // as stop() does. Otherwise the armed cloudStatus observation outlives teardown and its later
         // react() dereferences the pending PlaylistFile after its context is gone (trap class 2), or
         // runs a stray deferred load on the already-shut-down client at app quit.
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
 
         let evicted = makeFile("a")
         evicted.cloudStatus = .inCloud
@@ -317,7 +476,7 @@ import AppKit
     }
 
     @Test func stopClearsState() async throws {
-        let engine = try AudioPlaybackEngine()
+        let engine = try makeEngine()
         defer { engine.shutdown() }
 
         let file = makeFile("a")
@@ -381,7 +540,10 @@ import AppKit
         #expect(source.advancedTo == [second.id, first.id])
     }
 
-    @Test func slideshowAdvancesAfterInterval() async throws {
+    // The timer loop's whole body is one `slideshowTick()` per beat, so the tick is
+    // tested directly — no real timer, no wall-clock wait. (That `Task.sleep` loops is
+    // platform behavior, not ours to test.)
+    @Test func slideshowTickAdvancesWhileEnabled() throws {
         let url = try writeTempImage()
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -394,11 +556,29 @@ import AppKit
         let engine = ImagePlaybackEngine()
         engine.source = source
         engine.load(first, at: url)
-        engine.startSlideshow(interval: 0.1)
-        defer { engine.stopSlideshow() }   // always halt the timer, even if an assertion fails
+        engine.startSlideshow(interval: 60)   // long interval: the real timer never fires in-test
+        defer { engine.stopSlideshow() }
 
-        let advanced = await poll(timeout: .seconds(3)) { source.fileAfterCalls > 0 }
-        #expect(advanced)
+        engine.slideshowTick()
+        #expect(source.advancedTo == [second.id])
+    }
+
+    @Test func slideshowTickAfterStopDoesNothing() throws {
+        let url = try writeTempImage()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("1")
+        let source = MockPlaybackSource(files: [first, makeFile("2")])
+        source.urlByID[first.id] = url
+
+        let engine = ImagePlaybackEngine()
+        engine.source = source
+        engine.load(first, at: url)
+        engine.startSlideshow(interval: 60)
+        engine.stopSlideshow()
+
+        engine.slideshowTick()
+        #expect(source.advancedTo.isEmpty)
     }
 
     @Test func stopSlideshowDisablesIt() {

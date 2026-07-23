@@ -1223,20 +1223,6 @@ struct AppStateTests {
 
     // MARK: - Strip audio (orchestration around AudioStripper)
 
-    /// The first real codec-labeled sample whose filename starts with `prefix`,
-    /// from `test_media/videos` two levels up from this test file (the repo root).
-    private func videoSample(prefix: String) throws -> URL {
-        let videos = URL(filePath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "test_media/videos", directoryHint: .isDirectory)
-        let files = try FileManager.default.contentsOfDirectory(at: videos, includingPropertiesForKeys: nil)
-        return try #require(
-            files.first { $0.lastPathComponent.hasPrefix(prefix) },
-            "no sample with prefix \(prefix) in \(videos.path)"
-        )
-    }
-
     /// True when no leftover `.shutapla-strip-…` sidecar remains in `dir`.
     private func noStripSidecar(in dir: URL) throws -> Bool {
         let names = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
@@ -1253,7 +1239,7 @@ struct AppStateTests {
         // A real h264 sample copied into the playlist folder; the file isn't on screen,
         // so the swap runs without touching the coordinator's visual channel.
         let source = dir.appending(path: "clip.mp4")
-        try FileManager.default.copyItem(at: try videoSample(prefix: "h264"), to: source)
+        try FileManager.default.copyItem(at: try MediaFixture.h264.url, to: source)
 
         let bookmark = try BookmarkService.makeBookmark(for: dir)
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
