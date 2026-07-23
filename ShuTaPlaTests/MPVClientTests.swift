@@ -133,7 +133,7 @@ import Foundation
                     client.seek(to: 10)
                     didSeek = true
                 }
-                if didSeek, case .playbackRestart(let position) = event, position >= 9 {
+                if didSeek, case .playbackRestart(let position, _) = event, position >= 9 {
                     return position
                 }
             }

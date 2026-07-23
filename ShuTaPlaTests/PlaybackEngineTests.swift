@@ -175,13 +175,24 @@ import AppKit
     }
 
     @Test(arguments: [
-        (origin: 50.0, settled: 53.0, advance: false),   // landed on the next keyframe: a normal step
-        (origin: 50.0, settled: 50.0, advance: true),    // did not move: no next keyframe, the end
-        (origin: 50.0, settled: 49.0, advance: true),    // floored back onto the last keyframe: the end
+        // landed on the next keyframe, frame rendered: a normal step
+        (origin: 50.0, settled: 53.0, frames: (arm: UInt64(7), settle: UInt64(8)), advance: false),
+        // did not move: no next keyframe, the end — even though the held frame redrew
+        (origin: 50.0, settled: 50.0, frames: (arm: UInt64(7), settle: UInt64(8)), advance: true),
+        // floored back onto the last keyframe: the end
+        (origin: 50.0, settled: 49.0, frames: (arm: UInt64(7), settle: UInt64(8)), advance: true),
+        // frozen video: audio hopped ~ε ahead but no new frame — the end
+        (origin: 50.0, settled: 50.24, frames: (arm: UInt64(7), settle: UInt64(7)), advance: true),
+        // all-intra: a healthy step is also only ~ε, but its frame rendered — not the end
+        (origin: 50.0, settled: 50.24, frames: (arm: UInt64(7), settle: UInt64(8)), advance: false),
     ])
-    func forwardStepDecision(_ scenario: (origin: TimeInterval, settled: TimeInterval, advance: Bool)) {
+    func forwardStepDecision(
+        _ scenario: (origin: TimeInterval, settled: TimeInterval,
+                     frames: (arm: UInt64, settle: UInt64), advance: Bool)
+    ) {
         #expect(MPVPlaybackEngine.advanceAfterForwardStep(
-            from: scenario.origin, to: scenario.settled
+            from: scenario.origin, to: scenario.settled,
+            framesAtArm: scenario.frames.arm, framesAtSettle: scenario.frames.settle
         ) == scenario.advance)
     }
 
@@ -204,10 +215,64 @@ import AppKit
         engine.load(first, at: url)
 
         engine.handle(.timePosition(50))
-        engine.seek(by: 3)                    // forward step issued from 50
-        engine.handle(.playbackRestart(50))   // settled where it started: no next keyframe
+        engine.seek(by: 3)                               // forward step issued from 50
+        // Settled where it started: no next keyframe. frames moved (the held frame redrew) —
+        // the position signal alone must decide the advance.
+        engine.handle(.playbackRestart(50, frames: 1))
 
         #expect(source.advancedTo == [second.id])
+    }
+
+    @Test func forwardStepWithNoNewVideoFrameAdvances() throws {
+        // The frozen-video variant: a forward step past the last video keyframe puts the video
+        // track at EOF while audio keeps seeking, so the settled restart lands ~ε *ahead* of the
+        // origin — position reads as progress — but no new video frame was produced. The engine
+        // must advance on the missing frame signal. (The vo=null test client never renders, so
+        // the frame count is flat at 0 across the step, exactly the frozen shape.)
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let first = makeFile("a")
+        let second = makeFile("b")
+        let source = MockPlaybackSource(files: [first, second])
+        source.urlByID[first.id] = url
+        source.urlByID[second.id] = url
+
+        let engine = try makeEngine(keyframeStepping: true)
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(first, at: url)
+
+        engine.handle(.timePosition(50))
+        engine.seek(by: 3)                                  // forward step issued from 50
+        engine.handle(.playbackRestart(50.24, frames: 0))   // audio hopped ~ε ahead; no new frame
+
+        #expect(source.advancedTo == [second.id])
+    }
+
+    @Test func deadForwardStepWithNoSuccessorWrapsToStart() throws {
+        // The preview's source never advances (`fileAfter` is nil), and a one-file sequence's
+        // successor is itself — either way a dead forward step's advance decision has nowhere
+        // to go. The engine must wrap to the start instead of leaving the frozen frame (audio
+        // running on) stuck at the end. Observed through `seek(to:)`'s optimistic `currentTime`.
+        let url = try writeTempEmptyFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let only = makeFile("only")
+        let source = MockPlaybackSource(files: [only])
+        source.urlByID[only.id] = url
+
+        let engine = try makeEngine(keyframeStepping: true)
+        defer { engine.shutdown() }
+        engine.source = source
+        engine.load(only, at: url)
+
+        engine.handle(.timePosition(58))
+        engine.seek(by: 3)                                  // forward step issued from 58
+        engine.handle(.playbackRestart(58.5, frames: 0))    // dead: audio hopped ~ε, no new frame
+
+        #expect(source.advancedTo.isEmpty)                  // nothing to advance to
+        #expect(engine.currentTime == 0)                    // wrapped to the start instead
     }
 
     @Test func forwardStepThatLandedAheadDoesNotAdvance() throws {
@@ -226,11 +291,11 @@ import AppKit
         engine.load(first, at: url)
 
         engine.handle(.timePosition(50))
-        engine.seek(by: 3)                    // forward step issued from 50
-        engine.handle(.playbackRestart(53))   // landed on the next keyframe: a normal step
-        // The landing consumed the armed origin: a later unrelated restart (even one behind
-        // the old origin) is not the step's landing and must not advance.
-        engine.handle(.playbackRestart(50))
+        engine.seek(by: 3)                               // forward step issued from 50
+        engine.handle(.playbackRestart(53, frames: 1))   // landed on the next keyframe: a normal step
+        // The landing consumed the armed step: a later unrelated restart (even one behind the
+        // old origin, with a flat frame count) is not the step's landing and must not advance.
+        engine.handle(.playbackRestart(50, frames: 1))
 
         #expect(source.advancedTo.isEmpty)
     }
@@ -250,23 +315,24 @@ import AppKit
         engine.source = source
         engine.load(first, at: url)
 
-        // A backward step settles behind where it started by design — never an advance.
+        // A backward step settles behind where it started by design — never an advance,
+        // even with a flat frame count.
         engine.handle(.timePosition(50))
         engine.seek(by: -3)
-        engine.handle(.playbackRestart(47))
+        engine.handle(.playbackRestart(47, frames: 0))
         #expect(source.advancedTo.isEmpty)
 
         // A scrubber seek issued after a forward step takes over: its restart (behind the
         // step's origin here) is the scrubber's landing, not the step's.
         engine.seek(by: 3)
         engine.seek(to: 10)
-        engine.handle(.playbackRestart(10))
+        engine.handle(.playbackRestart(10, frames: 0))
         #expect(source.advancedTo.isEmpty)
 
         // A fresh load's restart is not a step's landing either.
         engine.seek(by: 3)
         engine.load(first, at: url)
-        engine.handle(.playbackRestart(0))
+        engine.handle(.playbackRestart(0, frames: 0))
         #expect(source.advancedTo.isEmpty)
     }
 
@@ -399,7 +465,7 @@ import AppKit
 
         engine.handle(.timePosition(50))
         engine.seek(by: 3)
-        engine.handle(.playbackRestart(50))
+        engine.handle(.playbackRestart(50, frames: 0))
 
         #expect(source.advancedTo.isEmpty)
     }

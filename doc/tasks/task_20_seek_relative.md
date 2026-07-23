@@ -130,7 +130,7 @@ the last GOP, which the in-app test of the step behavior reveals — so it is bu
    media test is added: the behavior lives in mpv's keyframe/coalescing semantics and event timing,
    which need real playback (the video engine needs a GL surface, forbidden in the test host), so it
    is validated in-app — keeping flaky media tests out.
-2. **End-of-file detection → advance — layer 1 done, in-app confirmation pending.** In-app, a
+2. **End-of-file detection → advance — done.** In-app, a
    forward step in the last GOP is file-dependent: some files flip `eof-reached` (already handled —
    natural advance), others stick on the last keyframe or freeze the video with no EOF signal.
    Detection, in two layers:
@@ -152,21 +152,56 @@ the last GOP, which the in-app test of the step behavior reveals — so it is bu
      tests (`seekMovesTimePosition`, `seekMovesTime`) had only ever passed by playing to ~9s in real
      time; both now use the WAV with timeouts shorter than the seek target, so only a real seek can
      pass them (they settle in ~0.2–0.4s).
-   - **Freeze watchdog (assess after).** If a step can still leave the video frozen *past* the start
-     (settled ahead but frames not advancing), layer 1 misses it and a `time-pos`-stall watchdog
-     would be needed. Deferred until layer 1 is tested in-app and we see whether freeze still occurs
-     — a timer here is a test-trap risk, so it isn't added speculatively.
+   - **No new video frame (layer 2) — wired and confirmed in-app.** Layer 1 was
+     confirmed in-app to miss a third variant, measured on a Dolby-Vision mkv (60.1s, ~10s GOPs,
+     last video keyframe ~51.4, audio runs to 60.1): a forward step past the last video keyframe
+     puts the **video track** in EOF (mpv logs `video EOF reached`, picture frozen) while **audio
+     seeks fine and keeps playing** — the restart settles ~ε *ahead* of the origin (the clock also
+     runs between arm and execute), so layer 1 reads it as progress on every press, and
+     `eof-reached` never flips because audio hasn't ended. Position arithmetic cannot catch this:
+     any threshold on `settled − origin` would false-advance on all-intra files, where a healthy
+     step also moves only ~ε.
+     mpv exposes no per-track EOF signal (input.rst, master: no `video-pts`; `track-list/N/*` has
+     no playback status; `demuxer-cache-state/eof` is the whole reader thread and marked
+     unstable). The one trustworthy "video produced a frame" signal is the **render-update
+     callback**: a healthy step always shows its landing frame before the restart completes
+     (`first video frame after restart shown`), the frozen restart completes with `video=eof` and
+     none. Design: `MPVClient` counts render updates (`Mutex<UInt64>` — the callback fires on an
+     mpv-internal thread); `.playbackRestart` carries the count read at the restart alongside the
+     settled position; the engine snapshots the count when arming. Advance if **either** signal
+     fires: `settled <= origin` (layer 1 — catches stick-on-last-keyframe, where the re-shown
+     frame may re-fire the callback) or the count didn't move (layer 2 — catches frozen video,
+     where the position always advances). `vo=null` clients never increment the counter, but
+     never arm either (audio's `keyframeStepping=false`); tests drive `handle(_:)` with explicit
+     counts. **Counter verified in-app before wiring** on two freezing files and one that
+     advances via layer 1: healthy steps render their landing frame (count +1/+2 across the
+     step), every frozen restart is flat; stray +1 redraws occur while frozen but landed
+     *between* presses — if one ever lands inside an arm→settle window that press is merely
+     missed (no advance; the next press is flat), never a spurious advance. Wiring: the count
+     snapshot is armed alongside the origin; `advanceAfterForwardStep(from:to:framesAtArm:framesAtSettle:)`
+     ORs the two signals. Tests: the frozen scenario red→green
+     (`forwardStepWithNoNewVideoFrameAdvances`), the decision parameterized over both axes
+     (including the all-intra ~ε step that must *not* advance), prior wiring tests carry frame
+     values isolating which signal decides.
 
-   One call covers both surfaces, with a correction to what was written above: in the **preview**,
-   `MediaPreview.fileAfter` returns `nil` and `SourceNavigating.advanceToNext()` *holds* when there
-   is no distinct successor — it does **not** reload/restart. So a preview forward step at the end
-   is a benign no-op; the preview's `loop-file=inf` wraps to 0 on its own (a seek past the end
-   raises EOF, which loop-file restarts). Whether that wrap feels right — or the preview needs an
-   explicit restart-from-0 on a dead forward step — is part of the in-app confirmation.
+   **In-app confirmed (player); preview wrap decided.** In the player, a forward press in the last
+   GOP of the freezing files now switches file. In the preview the same press logs
+   `decision advance` but nothing visibly happens: `MediaPreview.fileAfter` returns `nil` (a peek
+   is one file), so `advanceToNext()` returns `false` and holds — the frozen frame stays with
+   audio running on until the *audio* ends (the frozen class never raises whole-file EOF early, so
+   the preview's `loop-file=inf` wrap only comes at the audio's natural end — up to the rest of
+   the track late). The log also confirmed the frame counter's predicted shape in the wild: stray
+   redraws while frozen land *between* presses (arm counts climbed 173→174→175), the count flat
+   across every arm→settle window.
+   Decided with user: when the advance decision fires but `advanceToNext()` has nowhere to go
+   (returns `false` — the preview's nil successor, or a one-file sequence whose successor is
+   itself), the engine **wraps to the start** (`seek(to: 0)`), so a forward press at the end never
+   leaves playback stuck. `seek(to:)` sets `currentTime` optimistically (the pattern `startFile`
+   already uses; mpv corrects via `time-pos`), which is also the wrap's test observable.
 
-   **In-app checks remaining:** on the stick-on-last-keyframe files, a forward press in the last
-   GOP switches file in the player; no spurious advance on normal steps/scrubs/back-steps; preview
-   behavior at the end; whether any freeze case survives (→ watchdog decision).
+   **In-app confirmed:** player advance on the freezing files, preview wrap-to-start on a dead
+   forward press, no spurious advance in normal use. The `stepEOF:` instrumentation prints are
+   removed. **Step 2 done.**
 
 ## Testable
 

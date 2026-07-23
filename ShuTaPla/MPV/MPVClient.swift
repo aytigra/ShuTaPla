@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Cmpv
 
 /// A thin Swift wrapper around a single libmpv `mpv_handle`.
@@ -80,6 +81,15 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// Invoked by libmpv (on an arbitrary thread) when a new frame is ready to render. Set
     /// when the render context is created; reads it to ask the GL layer for a redraw.
     private nonisolated(unsafe) var renderUpdate: (() -> Void)?
+
+    /// Count of render-update callbacks — increments whenever mpv has a new video frame (or
+    /// redraw) to show. Incremented on an arbitrary mpv thread, read from the drain queue and
+    /// the main actor, hence the `Mutex`. Stays 0 on `vo=null` instances (no render context).
+    private let renderUpdateCount = Mutex<UInt64>(0)
+
+    /// The live render-update count — the "video produced a frame" signal the forward-step
+    /// end-of-file detection compares across a step.
+    var videoFrameCount: UInt64 { renderUpdateCount.withLock { $0 } }
 
     /// Set once, on `queue`, when the handle is being destroyed. A wakeup can schedule a drain
     /// that lands on `queue` after `shutdown` has destroyed the handle; gating both the drain
@@ -217,7 +227,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
         mpv_render_context_set_update_callback(created, { ctx in
             guard let ctx else { return }
-            Unmanaged<MPVClient>.fromOpaque(ctx).takeUnretainedValue().renderUpdate?()
+            let client = Unmanaged<MPVClient>.fromOpaque(ctx).takeUnretainedValue()
+            client.renderUpdateCount.withLock { $0 += 1 }
+            client.renderUpdate?()
         }, Unmanaged.passUnretained(self).toOpaque())
     }
 
@@ -347,6 +359,9 @@ nonisolated final class MPVClient: @unchecked Sendable {
 
     /// The live playback position in seconds, read synchronously on `queue`. Anchors the backward
     /// keyframe step; 0 when no file is loaded, where the follow-up seek simply clamps at the start.
+    /// Also 0 when the position is *unset* — every track at EOF after a dead forward step leaves
+    /// mpv with no position — which the forward-step end-of-file detection relies on: an unset
+    /// position reads as no progress.
     private func timePosition() -> Double {
         var value: Double = 0
         mpv_get_property(handle, "time-pos", MPV_FORMAT_DOUBLE, &value)
@@ -427,7 +442,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
             // before the backward step's deferred second hop, which moves it again; deferring
             // that hop to here keeps mpv from coalescing it with the anchor seek (see `stepKeyframe`).
             if event.event_id == MPV_EVENT_PLAYBACK_RESTART {
-                continuation.yield(.playbackRestart(timePosition()))
+                continuation.yield(.playbackRestart(timePosition(), frames: videoFrameCount))
                 completeBackStepIfPending()
             }
             if let translated = translate(event) {

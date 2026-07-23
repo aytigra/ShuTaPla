@@ -26,9 +26,11 @@ nonisolated enum MPVEvent: Sendable, Equatable {
     case fileLoaded
 
     /// Playback (re)started after a seek or load settled (`MPV_EVENT_PLAYBACK_RESTART`),
-    /// carrying the settled `time-pos` read at that instant. The engine's forward-step
-    /// end-of-file detection compares it to the position the step was issued from.
-    case playbackRestart(TimeInterval)
+    /// carrying the settled `time-pos` and the render-update count, both read at that instant.
+    /// The engine's forward-step end-of-file detection compares them to the position and count
+    /// the step was issued from: a settled position not ahead, or a count that did not move
+    /// (no new video frame across the step), each mean the file has ended.
+    case playbackRestart(TimeInterval, frames: UInt64)
 
     /// The end of the current file was reached (`MPV_EVENT_END_FILE`).
     /// `reason` distinguishes natural EOF from a stop/error/quit.

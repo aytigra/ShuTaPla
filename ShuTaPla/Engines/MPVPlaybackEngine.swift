@@ -62,11 +62,11 @@ class MPVPlaybackEngine: SourceNavigating {
     /// coordinator when a playlist starts; weak so the coordinator owns the cycle.
     weak var source: PlaybackSource?
 
-    /// The `currentTime` a forward keyframe step was issued from, armed by `seek(by:)` and
-    /// consumed by the step's settled `playbackRestart` to detect the end of the file. `nil`
-    /// when no forward step is awaiting its landing; every other load/seek/stop disarms it so
-    /// an unrelated restart can't masquerade as the step's landing.
-    private var forwardStepOrigin: TimeInterval?
+    /// The `currentTime` and video frame count a forward keyframe step was issued from, armed
+    /// by `seek(by:)` and consumed by the step's settled `playbackRestart` to detect the end of
+    /// the file. `nil` when no forward step is awaiting its landing; every other load/seek/stop
+    /// disarms it so an unrelated restart can't masquerade as the step's landing.
+    private var forwardStep: (origin: TimeInterval, frames: UInt64)?
 
     // MARK: - Underlying client
 
@@ -127,7 +127,7 @@ class MPVPlaybackEngine: SourceNavigating {
     /// the live feed reports its arrival; a `.local` file loads at once.
     func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         currentFile = file
-        forwardStepOrigin = nil        // a fresh load's restart is not a step's landing
+        forwardStep = nil              // a fresh load's restart is not a step's landing
         currentTime = 0                // no stale position while pending; `startFile` sets the real one
         videoSize = .zero              // the new file re-reports its size; don't linger on the old one
         isPlaying = false
@@ -164,13 +164,14 @@ class MPVPlaybackEngine: SourceNavigating {
         isPlaying = false
         currentTime = 0
         currentFile = nil
-        forwardStepOrigin = nil
+        forwardStep = nil
     }
 
     /// Seeks to an absolute position in seconds. The client snaps to the nearest keyframe at or
     /// before it (the scrubber's target lands within a GOP — fast, standard scrubbing).
     func seek(to seconds: TimeInterval) {
-        forwardStepOrigin = nil
+        forwardStep = nil
+        currentTime = seconds          // optimistic; mpv's seek is async and corrects it via `time-pos`
         client.seek(to: seconds)
     }
 
@@ -193,7 +194,7 @@ class MPVPlaybackEngine: SourceNavigating {
             return
         }
         let forward = delta > 0
-        forwardStepOrigin = forward ? currentTime : nil
+        forwardStep = forward ? (origin: currentTime, frames: client.videoFrameCount) : nil
         client.stepKeyframe(forward: forward)
     }
 
@@ -240,14 +241,20 @@ class MPVPlaybackEngine: SourceNavigating {
             // here. `advanceToNext` loads the successor, or holds the last frame when
             // this file is the whole sequence (its successor is itself).
             advanceToNext()
-        case .playbackRestart(let settled):
+        case .playbackRestart(let settled, let frames):
             // The settled landing of an armed forward keyframe step: if it didn't move
-            // ahead, the file has no next keyframe — its end — so advance instead of
-            // sticking there. Files that flip `eof-reached` on the step never get here
-            // with a stale origin (the advance's load disarms it).
-            if let origin = forwardStepOrigin {
-                forwardStepOrigin = nil
-                if Self.advanceAfterForwardStep(from: origin, to: settled) { advanceToNext() }
+            // ahead, or produced no new video frame, the file has no next keyframe — its
+            // end — so advance instead of sticking there. Files that flip `eof-reached`
+            // on the step never get here with a stale origin (the advance's load disarms it).
+            if let step = forwardStep {
+                forwardStep = nil
+                let advance = Self.advanceAfterForwardStep(
+                    from: step.origin, to: settled, framesAtArm: step.frames, framesAtSettle: frames
+                )
+                // With no distinct successor (the preview's nil, a one-file sequence's self)
+                // the advance holds — wrap to the start instead, so a forward press at the
+                // end never leaves playback stuck on the dead last GOP.
+                if advance, !advanceToNext() { seek(to: 0) }
             }
         case .logMessage(let text):
             print("mpv \(text)")
@@ -258,14 +265,21 @@ class MPVPlaybackEngine: SourceNavigating {
 
     // MARK: - Helpers
 
-    /// Whether a settled forward keyframe step means the end of the file. A mid-file forward
-    /// step always lands strictly ahead of its origin (forward keyframe seeks round up to the
-    /// next keyframe), so a settled position that did not move ahead can only mean there was
-    /// no next keyframe to land on — advance instead of sticking on the last one.
+    /// Whether a settled forward keyframe step means the end of the file. Two independent
+    /// signals, each sufficient:
+    /// - **Position** (`settled <= origin`): a mid-file forward step always lands strictly ahead
+    ///   of its origin (forward keyframe seeks round up to the next keyframe), so a settled
+    ///   position that did not move ahead can only mean there was no next keyframe. Also catches
+    ///   the every-track-at-EOF restart, whose unset position reads as 0.
+    /// - **Frames** (`framesAtSettle == framesAtArm`): a healthy step renders its landing frame
+    ///   before the restart completes, so a flat render-update count across the step means the
+    ///   video track hit EOF — the frozen-picture case, where audio keeps seeking and the
+    ///   position alone reads as progress.
     nonisolated static func advanceAfterForwardStep(
-        from origin: TimeInterval, to settled: TimeInterval
+        from origin: TimeInterval, to settled: TimeInterval,
+        framesAtArm: UInt64, framesAtSettle: UInt64
     ) -> Bool {
-        settled <= origin
+        settled <= origin || framesAtSettle == framesAtArm
     }
 
     /// The string mpv's `loadfile` expects: a plain filesystem path for file URLs,
