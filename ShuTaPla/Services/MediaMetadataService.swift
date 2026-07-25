@@ -42,7 +42,7 @@ final class MediaMetadataService {
         file.merge(found)
         // Persist the freshly extracted facts immediately: an autosave-pending merge is discarded if a
         // later `includePendingChanges = false` object fetch refaults the record before it flushes.
-        try? file.modelContext?.save()
+        file.trySave()
         return file.cachedMetadata
     }
 
@@ -101,11 +101,7 @@ final class MediaMetadataService {
     /// colour tags. A moov-atom read: no frame is decoded. `nil` fields when AVFoundation can't read
     /// them (the webm/mkv case, where the caller falls back to libmpv).
     @concurrent private nonisolated static func avMetadata(at url: URL, wantsDimensions: Bool) async -> (duration: TimeInterval?, width: Int?, height: Int?, gamma: String?, primaries: String?) {
-        let asset = AVURLAsset(url: url)
-        let duration = await asset.playableDuration()
-        guard wantsDimensions else { return (duration, nil, nil, nil, nil) }
-        let size = await asset.displayPixelSize()
-        let tags = await asset.hdrColorTags()
-        return (duration, size?.width, size?.height, tags.gamma, tags.primaries)
+        let (duration, size, gamma, primaries) = await AVURLAsset(url: url).videoMetadata(wantsVideo: wantsDimensions)
+        return (duration, size?.width, size?.height, gamma, primaries)
     }
 }

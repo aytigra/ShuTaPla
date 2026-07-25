@@ -57,6 +57,23 @@ import Foundation
         #expect(try #require(metadata.height) > 0)
     }
 
+    // A raw H.264 elementary stream loads (dimensions known) but carries no duration mpv can ever
+    // report. The probe must not spin its full 15 s deadline waiting for one: a settle grace armed
+    // at `FILE_LOADED` bounds the wait, so the duration-less metadata comes back promptly instead
+    // of stalling the single serial lane on every display. Red before the grace (the probe ran to
+    // the deadline), green after.
+    @Test func durationlessFileReturnsBeforeDeadline() async throws {
+        let url = try durationlessFixtureURL()
+        let clock = ContinuousClock()
+        let start = clock.now
+        let metadata = await MPVThumbnailer.metadata(at: url)
+        let elapsed = clock.now - start
+
+        #expect(metadata.width != nil, "the file should load (dimensions known)")
+        #expect(metadata.duration == nil, "the file genuinely reports no duration")
+        #expect(elapsed < .seconds(6), "probe stalled \(elapsed) — expected a prompt settle-grace return")
+    }
+
     // Both extraction paths race mpv's own startup and property updates: an initial idle
     // event can precede the load, and `duration` can lag `FILE_LOADED` by an instant.
     // A single call passes most of the time, so only repetition exposes a bail that

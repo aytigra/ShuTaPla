@@ -59,9 +59,9 @@ struct GalleryCell: View {
                 // Generation runs off-actor and always completes — cancellation can't abort it,
                 // it only flips `Task.isCancelled`. Its result must therefore be handled either
                 // way: the thumbnail is already written to disk keyed by its fingerprint, and this
-                // merge is what records that fingerprint on the model. Skipping it would strand the
+                // records that fingerprint on the model. Skipping it would strand the
                 // just-written thumbnail with no live record, so the orphan sweep deletes it.
-                file.merge(result.metadata)
+                recordMetadata(result.metadata)
                 // The guard protects *only* the on-screen image: on fast scroll/recycle this cell
                 // may already be showing a different file by the time generation lands, so don't
                 // paint this (now stale) thumbnail into it.
@@ -76,6 +76,17 @@ struct GalleryCell: View {
                 _ = await metadataService.metadata(for: file, in: playlist, folderURL: browsingFolderURL)
             }
         }
+    }
+
+    /// Folds the generation's metadata onto the model and persists it. The save matters for an
+    /// image's `isHDR`: the gallery decode is its sole producer (the list read never decodes a
+    /// still) and it doesn't gate completeness, so — unlike the dimensions the list producer
+    /// re-derives and saves — an unsaved merge here would be refaulted away by the next
+    /// `includePendingChanges = false` object fetch (a cloud reconcile, a preview's folder monitor),
+    /// blanking the just-shown HDR badge.
+    func recordMetadata(_ metadata: MediaMetadata) {
+        file.merge(metadata)
+        file.trySave()
     }
 
     /// A uniform 4:3 tile: the rectangle fills the (equal) grid-column width, so

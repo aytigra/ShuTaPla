@@ -49,8 +49,7 @@ final class VideoPlaybackEngine: MPVPlaybackEngine {
     /// headroom, then applies it to both mpv (`target-*`) and the layer. In the render-API path
     /// mpv can't see that our layer is EDR-capable, so without this it tone-maps HDR down to SDR.
     private func applyColorOutput(gamma: String?, primaries: String?) {
-        let screen = renderView.window?.screen ?? NSScreen.main
-        let supportsEDR = (screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1) > 1
+        let supportsEDR = (renderView.window?.screen ?? NSScreen.main)?.supportsEDR ?? false
         let config = HDRVideoConfig.decide(
             gamma: gamma ?? "", primaries: primaries ?? "", displaySupportsEDR: supportsEDR)
         client.setStringProperty("target-prim", config.targetPrimaries)

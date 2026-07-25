@@ -508,6 +508,47 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
     }
 
+    // MARK: - Partial-decode guard (F8)
+
+    /// Writes a valid PNG and returns its bytes truncated to `fraction` of its length — the state
+    /// mpv's `image` VO leaves on disk while it is still writing the frame. ImageIO would decode
+    /// such a file into a part-garbage raster, so `MPVThumbnailer` must reject it before the cache.
+    private func truncatedPNG(fraction: Double, in dir: URL) throws -> URL {
+        let fullURL = dir.appending(path: "full.png")
+        try writeFilledPNG(width: 256, height: 256, opaque: true, to: fullURL)
+        let bytes = try Data(contentsOf: fullURL)
+        let truncatedURL = dir.appending(path: "truncated-\(Int(fraction * 100)).png")
+        try bytes.prefix(Int(Double(bytes.count) * fraction)).write(to: truncatedURL)
+        return truncatedURL
+    }
+
+    /// The completeness gate keys on PNG's `IEND` trailer: a fully written file has it, a file
+    /// truncated at any fraction of its length does not.
+    @Test(arguments: [0.25, 0.5, 0.75, 0.9])
+    func partialPNGIsNotComplete(fraction: Double) throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let complete = dir.appending(path: "complete.png")
+        try writeFilledPNG(width: 256, height: 256, opaque: true, to: complete)
+
+        #expect(MPVThumbnailer.isCompletePNG(at: complete))
+        #expect(!MPVThumbnailer.isCompletePNG(at: try truncatedPNG(fraction: fraction, in: dir)))
+    }
+
+    /// The mpv frame reader decodes a complete PNG but rejects a partially-written one rather than
+    /// caching a corrupt raster — the same nil it returns when no PNG exists on disk yet.
+    @Test func downscaledFrameRejectsPartialPNG() throws {
+        let completeDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: completeDir) }
+        try writeFilledPNG(width: 256, height: 256, opaque: true, to: completeDir.appending(path: "frame.png"))
+        #expect(MPVThumbnailer.downscaledFrame(in: completeDir, maxPixelSize: 64) != nil)
+
+        let partialDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: partialDir) }
+        _ = try truncatedPNG(fraction: 0.5, in: partialDir)
+        #expect(MPVThumbnailer.downscaledFrame(in: partialDir, maxPixelSize: 64) == nil)
+    }
+
     // MARK: - Image HDR settling
 
     /// An image whose thumbnail is already on disk (a pre-`isHDR` row: fingerprint present, HDR-ness

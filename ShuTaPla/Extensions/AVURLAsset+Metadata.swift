@@ -12,36 +12,47 @@ import AVFoundation
 
 extension AVURLAsset {
 
+    /// The asset's duration and — when `wantsVideo` — its video track's display size and
+    /// mpv-style colour tags, read from the moov atom in one concurrent pass: the duration load
+    /// runs alongside a single video-track load whose natural size, preferred transform, and
+    /// format description are then read together. No frame is decoded. Fields are `nil` when
+    /// AVFoundation can't read them — the webm/mkv case, where the caller falls back to libmpv.
+    /// `wantsVideo == false` (audio) reads only the duration, loading no track.
+    nonisolated func videoMetadata(wantsVideo: Bool) async -> (duration: TimeInterval?, size: (width: Int, height: Int)?, gamma: String?, primaries: String?) {
+        async let durationLoad = playableDuration()
+        guard wantsVideo else { return (await durationLoad, nil, nil, nil) }
+
+        async let trackLoad = try? loadTracks(withMediaType: .video).first
+        let duration = await durationLoad
+        guard let track = await trackLoad ?? nil else { return (duration, nil, nil, nil) }
+
+        // Two sequential loads off the single track (`AVAssetTrack` is non-Sendable, so it can't
+        // fan out to concurrent `async let` tasks). Natural size is loaded on its own so the display
+        // dimensions survive even when the transform / format-description load fails — a track that
+        // reports a size shouldn't lose it because a later property couldn't be read.
+        guard let natural = try? await track.load(.naturalSize) else { return (duration, nil, nil, nil) }
+        let extras = try? await track.load(.preferredTransform, .formatDescriptions)
+
+        // Display size: natural size with the preferred transform applied, so a rotated track
+        // reports the shape it presents (matching mpv's `dwidth`/`dheight`). A failed transform
+        // load defaults to `.identity`, leaving the unrotated natural size.
+        let display = natural.applying(extras?.0 ?? .identity)
+        let size = (width: Int(abs(display.width).rounded()), height: Int(abs(display.height).rounded()))
+
+        // Colour tags from the format description; `nil` when the track carries none (SDR files
+        // routinely omit them, so an absent gamma reads as SDR).
+        let format = extras?.1.first
+        let transfer = format.flatMap { CMFormatDescriptionGetExtension($0, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String }
+        let primaries = format.flatMap { CMFormatDescriptionGetExtension($0, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String }
+        return (duration, size, VideoColorTags.mpvGamma(transfer), VideoColorTags.mpvPrimaries(primaries))
+    }
+
     /// The asset's running time in seconds, or `nil` when it has no finite positive
     /// duration (an unbounded stream, or an asset AVFoundation can't read — the webm/mkv
     /// case, where the caller falls back to libmpv).
-    nonisolated func playableDuration() async -> TimeInterval? {
+    private nonisolated func playableDuration() async -> TimeInterval? {
         let seconds = (try? await load(.duration)).map(CMTimeGetSeconds)
         return seconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
-    }
-
-    /// The video track's display size in pixels — natural size with the preferred transform
-    /// applied, so a rotated track reports the shape it presents (matching mpv's `dwidth`/
-    /// `dheight`). `nil` when there is no video track or AVFoundation can't read it.
-    nonisolated func displayPixelSize() async -> (width: Int, height: Int)? {
-        guard let track = try? await loadTracks(withMediaType: .video).first,
-              let size = try? await track.load(.naturalSize) else { return nil }
-        let transform = (try? await track.load(.preferredTransform)) ?? .identity
-        let display = size.applying(transform)
-        return (Int(abs(display.width).rounded()), Int(abs(display.height).rounded()))
-    }
-
-    /// The video track's colour transfer and primaries as mpv-style strings, read from the
-    /// format description (moov atom) — no frame is decoded. `nil` fields when the track
-    /// carries no colour tags (SDR files routinely omit them, so an absent gamma reads as
-    /// SDR) or AVFoundation can't open the container (the webm/mkv case, where the caller
-    /// falls back to libmpv's `video-params`).
-    nonisolated func hdrColorTags() async -> (gamma: String?, primaries: String?) {
-        guard let track = try? await loadTracks(withMediaType: .video).first,
-              let format = (try? await track.load(.formatDescriptions))?.first else { return (nil, nil) }
-        let transfer = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_TransferFunction)
-        let primaries = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries)
-        return (VideoColorTags.mpvGamma(transfer as? String), VideoColorTags.mpvPrimaries(primaries as? String))
     }
 }
 

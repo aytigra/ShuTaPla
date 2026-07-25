@@ -82,12 +82,14 @@ nonisolated enum MPVThumbnailer {
     /// and the demuxer dimensions land first, then `video-params/gamma` a few event-loop
     /// turns later (paused under `vo=null`, no frame decoded). mpv dispatches property-change
     /// *notifications* lazily, so instead of waiting for one the loop synchronously re-reads
-    /// the missing facts on every wakeup — and, so a bitstream-tagged HDR file isn't settled
-    /// SDR by returning before its colour tag arrives, keeps pumping past the duration until
-    /// the gamma lands (or a short settle grace lapses, or the file ends / deadline passes).
-    /// An audio-only file (no video track, so no dimensions) carries no gamma and returns as
-    /// soon as the duration does. `duration` is observed purely so its arrival wakes
-    /// `mpv_wait_event` immediately rather than on the next timeout tick.
+    /// the missing facts on every wakeup and asks `probeSettled` whether it can return — so a
+    /// bitstream-tagged HDR file isn't settled SDR by returning before its colour tag arrives.
+    /// A settle grace armed at `FILE_LOADED` bounds the wait: a file that never publishes a
+    /// duration (a stream still being written) or whose gamma never settles returns at the grace
+    /// instead of stalling to the full deadline. An audio-only file (no video track, so no
+    /// dimensions) carries no gamma and returns as soon as the duration does. `duration` is
+    /// observed purely so its arrival wakes `mpv_wait_event` immediately rather than on the next
+    /// timeout tick.
     private static func probeMetadata(at url: URL, isCancelled: () -> Bool) -> MediaMetadata {
         guard !isCancelled(), let handle = mpv_create() else { return MediaMetadata() }
         defer { mpv_terminate_destroy(handle) }
@@ -108,32 +110,36 @@ nonisolated enum MPVThumbnailer {
 
         var loaded: MediaMetadata?
         let deadline = Date().addingTimeInterval(15)
-        var colorDeadline: Date?
+        var settleDeadline: Date?
         while Date() < deadline {
             if isCancelled() { break }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
                 loaded = loadedMetadata(handle)
+                settleDeadline = Date().addingTimeInterval(2)
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
                 return loaded ?? MediaMetadata()
             default:
                 break
             }
-            if var metadata = loaded {
+            if var metadata = loaded, let settleDeadline {
                 refreshMissingFacts(&metadata, handle)
                 loaded = metadata
-                if metadata.duration != nil {
-                    // Audio (no video track) carries no gamma; a video file returns once its
-                    // colour tag lands, or when the settle grace since the duration lapses.
-                    if metadata.width == nil || metadata.hdrGamma != nil { return metadata }
-                    let settle = colorDeadline ?? Date().addingTimeInterval(2)
-                    colorDeadline = settle
-                    if Date() >= settle { return metadata }
-                }
+                if probeSettled(metadata, graceElapsed: Date() >= settleDeadline) { return metadata }
             }
         }
         return loaded ?? MediaMetadata()
+    }
+
+    /// Whether the metadata probe has gathered all it usefully can and should return now. Settles
+    /// once the duration is known and either the file has no video track (audio — it never gets a
+    /// colour tag) or its colour tag has arrived; and, so a file that never publishes a duration or
+    /// whose gamma never settles doesn't stall to the full deadline, once the settle grace since
+    /// `FILE_LOADED` has elapsed.
+    static func probeSettled(_ metadata: MediaMetadata, graceElapsed: Bool) -> Bool {
+        if metadata.duration != nil, metadata.width == nil || metadata.hdrGamma != nil { return true }
+        return graceElapsed
     }
 
     /// Synchronously re-reads any facts still missing from the live, loaded handle — the
@@ -240,9 +246,10 @@ nonisolated enum MPVThumbnailer {
         mpv_observe_property(handle, 0, "duration", MPV_FORMAT_DOUBLE)
         loadFile(handle, path: url.path)
 
-        // Pump events until the frame is on disk and the duration is read, with a ceiling
-        // so a pathological decode can't block the pool thread indefinitely. The paused
-        // instance keeps the file loaded the whole time, so any fact that lags
+        // Pump events until the frame is on disk and the duration is read — or, for a file
+        // that never reports a duration, until a settle grace armed at `FILE_LOADED` elapses —
+        // with a ceiling so a pathological decode can't block the pool thread indefinitely. The
+        // paused instance keeps the file loaded the whole time, so any fact that lags
         // `FILE_LOADED` — duration, dimensions, and the colour tags that only settle once
         // the frame is decoded — is synchronously re-read on every wakeup until it
         // arrives (mpv dispatches property-change notifications lazily, so waiting for
@@ -253,7 +260,7 @@ nonisolated enum MPVThumbnailer {
         // decode attempt on a PNG the VO is still writing returns `nil` and simply
         // retries on the next wakeup.
         var metadata = MediaMetadata()
-        var isLoaded = false
+        var settleDeadline: Date?
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
             if isCancelled() { return (nil, metadata) }
@@ -261,30 +268,52 @@ nonisolated enum MPVThumbnailer {
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
                 metadata = loadedMetadata(handle)
-                isLoaded = true
+                settleDeadline = Date().addingTimeInterval(2)
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
                 return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
             default:
                 break
             }
-            if isLoaded {
+            if let settleDeadline {
                 refreshMissingFacts(&metadata, handle)
-                if metadata.duration != nil,
-                   let frame = downscaledFrame(in: outDir, maxPixelSize: maxPixelSize) {
+                // Return the frame once it is written — as soon as the duration is known, or once
+                // the settle grace has elapsed so a file that never reports one doesn't stall to
+                // the deadline. No frame yet keeps waiting: the frame is the point of the extract.
+                if let frame = downscaledFrame(in: outDir, maxPixelSize: maxPixelSize),
+                   metadata.duration != nil || Date() >= settleDeadline {
                     return (frame, metadata)
                 }
             }
         }
-        // Deadline without both the frame and a duration: report whatever arrived.
+        // Deadline without a returnable frame: report whatever arrived.
         return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
     }
 
-    /// The PNG mpv wrote, downscaled to `maxPixelSize` through the shared image path.
-    private static func downscaledFrame(in directory: URL, maxPixelSize: Int) -> CGImage? {
+    /// The PNG mpv wrote, downscaled to `maxPixelSize` through the shared image path — but only
+    /// once it is fully written. A URL image source treats whatever bytes are on disk as the whole
+    /// image, so a frame the `image` VO is mid-write decodes into a part-garbage raster that would
+    /// then be cached; gating on the `IEND` trailer decodes only a complete file and returns nil
+    /// otherwise, exactly as when no PNG exists yet — the pump loop retries until mpv finishes.
+    static func downscaledFrame(in directory: URL, maxPixelSize: Int) -> CGImage? {
         guard let png = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?
-            .first(where: { $0.pathExtension.lowercased() == "png" })
+            .first(where: { $0.pathExtension.lowercased() == "png" }),
+            isCompletePNG(at: png)
         else { return nil }
         return ThumbnailService.imageThumbnail(at: png, maxPixelSize: maxPixelSize)
+    }
+
+    /// Whether the file ends with PNG's `IEND` chunk — the fixed 12-byte trailer every complete
+    /// PNG carries and a mid-write file lacks. The image source's own completeness status can't be
+    /// used: a URL source reports `.statusComplete` for a truncated file too, seeing its bytes as
+    /// the entire image.
+    static func isCompletePNG(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size >= 12,
+              (try? handle.seek(toOffset: size - 12)) != nil,
+              let tail = try? handle.readToEnd()
+        else { return false }
+        return tail == Data([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82])
     }
 
     /// Issues `loadfile <path>` against the handle, building the NULL-terminated

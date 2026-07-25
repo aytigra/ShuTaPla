@@ -33,6 +33,15 @@ enum MediaFixture: String, CaseIterable {
 /// Anchors `Bundle(for:)` to the test bundle (an enum can't be a bundle anchor).
 private final class MediaFixtureToken {}
 
+/// A raw H.264 elementary stream (no container) that libmpv loads — reporting dimensions — but can
+/// never assign a duration: the "file loads yet never reports a duration" case. Kept out of
+/// `MediaFixture` so the all-cases duration/HDR guards don't run against a duration-less file.
+func durationlessFixtureURL() throws -> URL {
+    try #require(
+        Bundle(for: MediaFixtureToken.self).url(forResource: "noduration", withExtension: "h264"),
+        "fixture noduration.h264 missing from the test bundle")
+}
+
 extension MPVClient.Configuration {
     /// The audio channel's configuration, muted for the test host: `ao=null` opens no audio
     /// device, so a test run makes no sound (and touches no audio hardware in the sandbox).

@@ -548,9 +548,7 @@ final class ThumbnailService {
         generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
         generator.requestedTimeToleranceBefore = .positiveInfinity
         generator.requestedTimeToleranceAfter = .positiveInfinity
-        let duration = await asset.playableDuration()
-        let size = await asset.displayPixelSize()
-        let tags = await asset.hdrColorTags()
+        let (duration, size, gamma, primaries) = await asset.videoMetadata(wantsVideo: true)
         // Sample ~10% in (past the often-black opening), the same relative position the
         // libmpv fallback uses, so the same content yields a comparable thumbnail across
         // codecs. Fall back to 1s when the duration is unknown.
@@ -558,6 +556,6 @@ final class ThumbnailService {
         let time = CMTime(seconds: position, preferredTimescale: 600)
         let image = try? await generator.image(at: time).image
         return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height,
-                                     hdrGamma: tags.gamma, hdrPrimaries: tags.primaries))
+                                     hdrGamma: gamma, hdrPrimaries: primaries))
     }
 }
