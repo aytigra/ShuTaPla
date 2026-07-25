@@ -34,11 +34,11 @@ nonisolated enum MPVThumbnailer {
     /// A representative frame from the video at `url`, no larger than `maxPixelSize`
     /// on its longest edge (or `nil` when libmpv can't decode it), paired with the
     /// file's metadata — duration and pixel dimensions the same decode already
-    /// determined, so the gallery's badge and cached shape get them for free rather
-    /// than opening the file a second time. Runs the blocking extraction off the
-    /// cooperative thread pool so a slow or stuck decode never ties up a
-    /// concurrency-limited Swift task thread.
-    static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
+    /// determined — and its HDR result, the frame's `video-params` colour tags routed
+    /// to the sink (the libmpv half of the thumbnailer's decode-time HDR detection).
+    /// Runs the blocking extraction off the cooperative thread pool so a slow or stuck
+    /// decode never ties up a concurrency-limited Swift task thread.
+    static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         let cancelled = Mutex(false)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -78,18 +78,15 @@ nonisolated enum MPVThumbnailer {
     /// Two races are handled while pumping events. mpv's core can queue its startup idle
     /// event before the `loadfile` settles, so `MPV_EVENT_IDLE` must not be treated as
     /// terminal — a load that really fails ends with `END_FILE`, and the deadline caps
-    /// everything else. And the facts lag `FILE_LOADED` by an instant, staggered: `duration`
-    /// and the demuxer dimensions land first, then `video-params/gamma` a few event-loop
-    /// turns later (paused under `vo=null`, no frame decoded). mpv dispatches property-change
-    /// *notifications* lazily, so instead of waiting for one the loop synchronously re-reads
-    /// the missing facts on every wakeup and asks `probeSettled` whether it can return — so a
-    /// bitstream-tagged HDR file isn't settled SDR by returning before its colour tag arrives.
-    /// A settle grace armed at `FILE_LOADED` bounds the wait: a file that never publishes a
-    /// duration (a stream still being written) or whose gamma never settles returns at the grace
-    /// instead of stalling to the full deadline. An audio-only file (no video track, so no
-    /// dimensions) carries no gamma and returns as soon as the duration does. `duration` is
-    /// observed purely so its arrival wakes `mpv_wait_event` immediately rather than on the next
-    /// timeout tick.
+    /// everything else. And the facts lag `FILE_LOADED` by an instant: `duration` and the
+    /// demuxer dimensions land a few event-loop turns later (paused under `vo=null`, no frame
+    /// decoded). mpv dispatches property-change *notifications* lazily, so instead of waiting
+    /// for one the loop synchronously re-reads the missing facts on every wakeup and asks
+    /// `probeSettled` whether it can return. A settle grace armed at `FILE_LOADED` bounds the
+    /// wait: a file that never publishes a duration (a stream still being written) returns at
+    /// the grace instead of stalling to the full deadline. `duration` is observed purely so its
+    /// arrival wakes `mpv_wait_event` immediately rather than on the next timeout tick. HDR is
+    /// not read here — the list probe never touches it; the gallery frame path does.
     private static func probeMetadata(at url: URL, isCancelled: () -> Bool) -> MediaMetadata {
         guard !isCancelled(), let handle = mpv_create() else { return MediaMetadata() }
         defer { mpv_terminate_destroy(handle) }
@@ -133,38 +130,29 @@ nonisolated enum MPVThumbnailer {
     }
 
     /// Whether the metadata probe has gathered all it usefully can and should return now. Settles
-    /// once the duration is known and either the file has no video track (audio — it never gets a
-    /// colour tag) or its colour tag has arrived; and, so a file that never publishes a duration or
-    /// whose gamma never settles doesn't stall to the full deadline, once the settle grace since
-    /// `FILE_LOADED` has elapsed.
+    /// once the duration is known (the demuxer dimensions land with or before it), and — so a file
+    /// that never publishes a duration doesn't stall to the full deadline — once the settle grace
+    /// since `FILE_LOADED` has elapsed.
     static func probeSettled(_ metadata: MediaMetadata, graceElapsed: Bool) -> Bool {
-        if metadata.duration != nil, metadata.width == nil || metadata.hdrGamma != nil { return true }
-        return graceElapsed
+        metadata.duration != nil || graceElapsed
     }
 
     /// Synchronously re-reads any facts still missing from the live, loaded handle — the
-    /// recovery for facts that lag `FILE_LOADED` (duration, dimensions) or only settle
-    /// once a frame is decoded (the colour tags, under `vo=image`).
+    /// recovery for facts that lag `FILE_LOADED` (duration, dimensions).
     private static func refreshMissingFacts(_ metadata: inout MediaMetadata, _ handle: OpaquePointer) {
         metadata.duration = metadata.duration ?? knownDuration(handle)
         if metadata.width == nil, let dimensions = knownDimensions(handle) {
             metadata.width = dimensions.width
             metadata.height = dimensions.height
         }
-        metadata.hdrGamma = metadata.hdrGamma ?? colorTag(handle, "video-params/gamma")
-        metadata.hdrPrimaries = metadata.hdrPrimaries ?? colorTag(handle, "video-params/primaries")
     }
 
     /// The loaded file's duration and display dimensions, read at `FILE_LOADED` while the
     /// file is open — reading at `END_FILE` would be too late, as the properties revert as
-    /// mpv unloads the file. File size is the caller's `stat`, so it's left `nil` here. The
-    /// colour tags read here too, best-effort: `video-params` is populated once decode is up,
-    /// which may lag `FILE_LOADED`, so `refreshMissingFacts` re-reads them on later wakeups.
+    /// mpv unloads the file. File size is the caller's `stat`, so it's left `nil` here.
     private static func loadedMetadata(_ handle: OpaquePointer) -> MediaMetadata {
         let dimensions = knownDimensions(handle)
-        return MediaMetadata(duration: knownDuration(handle), width: dimensions?.width, height: dimensions?.height,
-                             hdrGamma: colorTag(handle, "video-params/gamma"),
-                             hdrPrimaries: colorTag(handle, "video-params/primaries"))
+        return MediaMetadata(duration: knownDuration(handle), width: dimensions?.width, height: dimensions?.height)
     }
 
     /// An mpv `video-params/*` colour string, or `nil` when the property is unavailable or empty
@@ -206,10 +194,10 @@ nonisolated enum MPVThumbnailer {
 
     /// Drives a windowless mpv instance, paused on a representative frame that the
     /// `image` VO writes to disk, then downscales it — also reporting the metadata the
-    /// loaded instance knows. Synchronous and blocking — only called from
-    /// `frame(at:maxPixelSize:)`.
-    private static func extract(at url: URL, maxPixelSize: Int, isCancelled: () -> Bool) -> (image: CGImage?, metadata: MediaMetadata) {
-        guard !isCancelled(), let handle = mpv_create() else { return (nil, MediaMetadata()) }
+    /// loaded instance knows and the frame's `video-params` colour tags as an HDR result.
+    /// Synchronous and blocking — only called from `frame(at:maxPixelSize:)`.
+    private static func extract(at url: URL, maxPixelSize: Int, isCancelled: () -> Bool) -> (image: CGImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
+        guard !isCancelled(), let handle = mpv_create() else { return (nil, MediaMetadata(), nil) }
         defer { mpv_terminate_destroy(handle) }
 
         // mpv writes one PNG into a private directory we own and delete afterwards;
@@ -217,7 +205,7 @@ nonisolated enum MPVThumbnailer {
         let outDir = FileManager.default.temporaryDirectory
             .appending(path: "mpv-thumb-\(UUID().uuidString)", directoryHint: .isDirectory)
         guard (try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)) != nil
-        else { return (nil, MediaMetadata()) }
+        else { return (nil, MediaMetadata(), nil) }
         defer { try? FileManager.default.removeItem(at: outDir) }
 
         // Ignore the user's mpv config and scripts; pause on the frame 10% in (past the
@@ -242,7 +230,7 @@ nonisolated enum MPVThumbnailer {
         ]
         for (name, value) in options { mpv_set_option_string(handle, name, value) }
 
-        guard mpv_initialize(handle) >= 0 else { return (nil, MediaMetadata()) }
+        guard mpv_initialize(handle) >= 0 else { return (nil, MediaMetadata(), nil) }
         mpv_observe_property(handle, 0, "duration", MPV_FORMAT_DOUBLE)
         loadFile(handle, path: url.path)
 
@@ -250,8 +238,8 @@ nonisolated enum MPVThumbnailer {
         // that never reports a duration, until a settle grace armed at `FILE_LOADED` elapses —
         // with a ceiling so a pathological decode can't block the pool thread indefinitely. The
         // paused instance keeps the file loaded the whole time, so any fact that lags
-        // `FILE_LOADED` — duration, dimensions, and the colour tags that only settle once
-        // the frame is decoded — is synchronously re-read on every wakeup until it
+        // `FILE_LOADED` — duration, dimensions, and the `video-params` colour tags that only
+        // settle once the frame is decoded — is synchronously re-read on every wakeup until it
         // arrives (mpv dispatches property-change notifications lazily, so waiting for
         // one is a race; the `duration` observation exists purely to wake
         // `mpv_wait_event` promptly). `MPV_EVENT_IDLE` is not terminal: mpv's core can
@@ -260,33 +248,46 @@ nonisolated enum MPVThumbnailer {
         // decode attempt on a PNG the VO is still writing returns `nil` and simply
         // retries on the next wakeup.
         var metadata = MediaMetadata()
+        var gamma: String?
+        var primaries: String?
         var settleDeadline: Date?
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
-            if isCancelled() { return (nil, metadata) }
+            if isCancelled() { return (nil, metadata, videoHDR(metadata, gamma: gamma, primaries: primaries)) }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
             switch raw.pointee.event_id {
             case MPV_EVENT_FILE_LOADED:
                 metadata = loadedMetadata(handle)
                 settleDeadline = Date().addingTimeInterval(2)
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
-                return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
+                return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata,
+                        videoHDR(metadata, gamma: gamma, primaries: primaries))
             default:
                 break
             }
             if let settleDeadline {
                 refreshMissingFacts(&metadata, handle)
+                gamma = gamma ?? colorTag(handle, "video-params/gamma")
+                primaries = primaries ?? colorTag(handle, "video-params/primaries")
                 // Return the frame once it is written — as soon as the duration is known, or once
                 // the settle grace has elapsed so a file that never reports one doesn't stall to
                 // the deadline. No frame yet keeps waiting: the frame is the point of the extract.
                 if let frame = downscaledFrame(in: outDir, maxPixelSize: maxPixelSize),
                    metadata.duration != nil || Date() >= settleDeadline {
-                    return (frame, metadata)
+                    return (frame, metadata, videoHDR(metadata, gamma: gamma, primaries: primaries))
                 }
             }
         }
         // Deadline without a returnable frame: report whatever arrived.
-        return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata)
+        return (downscaledFrame(in: outDir, maxPixelSize: maxPixelSize), metadata,
+                videoHDR(metadata, gamma: gamma, primaries: primaries))
+    }
+
+    /// The frame path's HDR result from the `video-params` colour tags the decode read, carried once
+    /// the file opened as video (dimensions read). `nil` for an audio-only file or one that never
+    /// loaded — the same "no video, no tag" case the metadata bundle marks with a `nil` `width`.
+    private static func videoHDR(_ metadata: MediaMetadata, gamma: String?, primaries: String?) -> ThumbnailHDR? {
+        metadata.width != nil ? .video(gamma: gamma, primaries: primaries) : nil
     }
 
     /// The PNG mpv wrote, downscaled to `maxPixelSize` through the shared image path — but only

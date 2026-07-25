@@ -100,6 +100,13 @@ final class ImagePlaybackEngine: SourceNavigating {
     private var loadTask: Task<Void, Never>?
     private var slideshowTask: Task<Void, Never>?
 
+    /// The sink the engine routes its decode-determined HDR finding through — the image half of the
+    /// universal producer set (the video engine records its live `video-params` the same way). The
+    /// decoded `CGImage`'s HDR range is a decode-time fact, so recording it here makes the persisted
+    /// `isHDR` trustworthy rather than a header guess. Stateless (writes straight to the file), so
+    /// the engine owns its own — no plumbing through construction.
+    private let hdrCache = HDRCache()
+
     init() {}
 
     // MARK: - Loading
@@ -126,6 +133,12 @@ final class ImagePlaybackEngine: SourceNavigating {
             let decoded = await Self.decodeImage(at: url)
             guard !Task.isCancelled, let self else { return }
             self.currentImage = decoded
+            // The cancel guard means this is still the current load, so `currentFile` is the file
+            // just decoded. Record its HDR range from the same decode that drives display — a
+            // decode-time fact, not a header read.
+            if let decoded, let file = self.currentFile {
+                self.hdrCache.record(imageIsHDR: decoded.isHDR, for: file)
+            }
         }
     }
 

@@ -24,6 +24,7 @@ struct GalleryCell: View {
 
     @Environment(ThumbnailService.self) private var thumbnails
     @Environment(MediaMetadataService.self) private var metadataService
+    @Environment(HDRCache.self) private var hdrCache
     @Environment(AppState.self) private var appState
     // The surface's pre-resolved folder URL, when it holds a scoped-access session open. Passed into
     // the services so generation/metadata append the relative path instead of resolving per file.
@@ -62,6 +63,10 @@ struct GalleryCell: View {
                 // records that fingerprint on the model. Skipping it would strand the
                 // just-written thumbnail with no live record, so the orphan sweep deletes it.
                 recordMetadata(result.metadata)
+                // A fresh decode also determined the file's HDR fact (image range or video colour
+                // tags); route it through the sink, the sole writer of the persisted HDR columns. A
+                // cache-served thumbnail carries no finding (`nil`), so a settled value is kept.
+                if let hdr = result.hdr { hdrCache.record(hdr, for: file) }
                 // The guard protects *only* the on-screen image: on fast scroll/recycle this cell
                 // may already be showing a different file by the time generation lands, so don't
                 // paint this (now stale) thumbnail into it.
@@ -78,12 +83,13 @@ struct GalleryCell: View {
         }
     }
 
-    /// Folds the generation's metadata onto the model and persists it. The save matters for an
-    /// image's `isHDR`: the gallery decode is its sole producer (the list read never decodes a
-    /// still) and it doesn't gate completeness, so — unlike the dimensions the list producer
-    /// re-derives and saves — an unsaved merge here would be refaulted away by the next
-    /// `includePendingChanges = false` object fetch (a cloud reconcile, a preview's folder monitor),
-    /// blanking the just-shown HDR badge.
+    /// Folds the generation's metadata onto the model and persists it. The save matters for the
+    /// `fingerprint`: the thumbnail decode is its sole producer (the list read never keys the cache)
+    /// and it doesn't gate completeness, so — unlike the dimensions the list producer re-derives and
+    /// saves — an unsaved merge here would be refaulted away by the next `includePendingChanges = false`
+    /// object fetch (a cloud reconcile, a preview's folder monitor), stranding the just-written
+    /// thumbnail with no live record for the orphan sweep to spare. HDR rides through `HDRCache`, which
+    /// persists on its own.
     func recordMetadata(_ metadata: MediaMetadata) {
         file.merge(metadata)
         file.trySave()

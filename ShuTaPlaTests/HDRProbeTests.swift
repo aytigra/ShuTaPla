@@ -2,17 +2,15 @@
 //  HDRProbeTests.swift
 //  ShuTaPlaTests
 //
-//  The video HDR badge over the libmpv fallback path (webm/mkv, which AVFoundation can't
-//  open). `MediaMetadataService.extract` settles `isHDR` from the colour transfer the probe
-//  reads off `video-params/gamma`: PQ/HLG is HDR, anything else is a determined `false`.
+//  The video HDR fact over the libmpv frame path (webm/mkv, which AVFoundation can't open). The
+//  thumbnailer's `MPVThumbnailer.frame` decodes a representative frame and reads its `video-params`
+//  colour tags as the HDR result the gallery routes to the sink: PQ/HLG is HDR, anything else a
+//  determined SDR. The list-mode metadata extractor reads no HDR at all, so this is the surviving
+//  producer boundary for the libmpv path.
 //
-//  Exercised over the committed `MediaFixture.hdr` — a 1.8 KB 10-bit VP9 tagged BT.2020 PQ —
-//  and the SDR `.vp9`. These guard the end state of the pipeline: a PQ container settles the
-//  badge on, an SDR one settles it off. They do not reproduce the timing race the probe's
-//  gamma-wait exists for: that only surfaces on heavy Dolby-Vision samples whose colour tag
-//  lags the demuxer duration by several event-loop turns; a fixture small enough to commit
-//  publishes gamma together with the duration, so it settles correctly with or without the
-//  wait.
+//  Exercised over the committed `MediaFixture.hdr` — a 1.8 KB 10-bit VP9 tagged BT.2020 PQ — and
+//  the SDR `.vp9`. A fixture small enough to commit publishes its colour tag together with the
+//  decoded frame, so the tag is read reliably here.
 //
 
 import Testing
@@ -21,39 +19,25 @@ import Foundation
 
 @Suite struct HDRProbeTests {
 
-    // A BT.2020 PQ container through the libmpv fallback: the whole extract chain reports an
-    // HDR gamma (PQ/HLG) and settles `isHDR == true`.
-    @Test func extractSettlesHDRForContainerTagged() async throws {
-        let url = try MediaFixture.hdr.url
-        let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
-
-        let metadata = await MediaMetadataService.extract(
-            bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: false
-        )
-
-        #expect(VideoColorTags.isHDR(gamma: metadata.hdrGamma), "gamma \(String(describing: metadata.hdrGamma))")
-        #expect(metadata.isHDR == true)
+    // A BT.2020 PQ container through the libmpv frame path: the frame decode's colour tags come
+    // back as an HDR gamma (PQ/HLG).
+    @Test func frameReadsHDRForContainerTagged() async throws {
+        let result = await MPVThumbnailer.frame(at: try MediaFixture.hdr.url, maxPixelSize: 64)
+        guard case .video(let gamma, _) = result.hdr else {
+            Issue.record("expected a video HDR result, got \(String(describing: result.hdr))")
+            return
+        }
+        #expect(VideoColorTags.isHDR(gamma: gamma), "gamma \(String(describing: gamma))")
     }
 
-    // The raw probe boundary directly over the sample: `metadata(at:)` reads the colour tag,
-    // so `hdrGamma` comes back as the file's PQ transfer rather than `nil`.
-    @Test func probeReadsHDRGamma() async throws {
-        let url = try MediaFixture.hdr.url
-        let metadata = await MPVThumbnailer.metadata(at: url)
-        #expect(VideoColorTags.isHDR(gamma: metadata.hdrGamma), "gamma \(String(describing: metadata.hdrGamma))")
-    }
-
-    // An SDR libmpv-only container settles the flag the other way — a non-PQ/HLG gamma is a
-    // determined `false`, never a spurious `true`. Guards the wait-for-gamma change against
-    // over-tagging SDR content.
-    @Test func extractSettlesSDRFalseForWebm() async throws {
-        let url = try MediaFixture.vp9.url
-        let bookmark = try BookmarkService.makeBookmark(for: url.deletingLastPathComponent())
-
-        let metadata = await MediaMetadataService.extract(
-            bookmark: bookmark, relativePath: url.lastPathComponent, mediaType: .video, isSkipped: false
-        )
-
-        #expect(metadata.isHDR == false)
+    // An SDR libmpv-only container reads the other way — a non-PQ/HLG gamma is a determined SDR,
+    // never a spurious `true`.
+    @Test func frameReadsSDRForWebm() async throws {
+        let result = await MPVThumbnailer.frame(at: try MediaFixture.vp9.url, maxPixelSize: 64)
+        guard case .video(let gamma, _) = result.hdr else {
+            Issue.record("expected a video HDR result, got \(String(describing: result.hdr))")
+            return
+        }
+        #expect(!VideoColorTags.isHDR(gamma: gamma), "gamma \(String(describing: gamma))")
     }
 }

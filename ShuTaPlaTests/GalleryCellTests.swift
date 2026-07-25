@@ -46,25 +46,26 @@ struct GalleryCellTests {
         #expect(cell.thumbnailKey != keyed)      // → the key changes, so the cell's .task re-fires
     }
 
-    // The gallery decode is the sole producer of an image's `isHDR` (the list read never decodes a
-    // still), and it never gates completeness — so it isn't re-derived by the list producer's saved
-    // path. `recordMetadata` must therefore persist it: an unsaved merge is a dirty registered edit
-    // that the next `includePendingChanges = false` object fetch (a cloud reconcile, a preview's
-    // folder monitor) refaults away, blanking the just-shown HDR badge.
+    // The thumbnail decode is the sole producer of a file's `fingerprint` (the list read never keys
+    // the cache), and it never gates completeness — so it isn't re-derived by the list producer's
+    // saved path. `recordMetadata` must therefore persist it: an unsaved merge is a dirty registered
+    // edit that the next `includePendingChanges = false` object fetch (a cloud reconcile, a preview's
+    // folder monitor) refaults away, stranding the just-written thumbnail with no live record. (HDR
+    // rides through `HDRCache`, which persists on its own.)
     @Test func recordMetadataPersistsSoObjectFetchKeepsIt() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "I", folderBookmark: Data(), folderPath: "/i", mediaType: .image)
         context.insert(playlist)
         let file = insertFile("a.heic", order: 0, to: playlist, in: context)
-        try context.save()                       // the file is now a stored, non-dirty row (isHDR nil)
+        try context.save()                       // the file is now a stored, non-dirty row (fingerprint nil)
 
-        makeCell(file, playlist).recordMetadata(MediaMetadata(isHDR: true))
-        #expect(file.isHDR == true)              // the badge fact is on the in-memory model
+        makeCell(file, playlist).recordMetadata(MediaMetadata(fingerprint: "fp-1"))
+        #expect(file.fingerprint == "fp-1")      // the fingerprint is on the in-memory model
 
         // A store-only object fetch refaults any dirty registered object back to its saved values;
-        // only a persisted `isHDR` survives it.
+        // only a persisted fingerprint survives it.
         _ = context.files(in: playlist, atRelativePaths: [file.relativePath])
-        #expect(file.isHDR == true)              // survived → the merge was saved
+        #expect(file.fingerprint == "fp-1")      // survived → the merge was saved
     }
 }

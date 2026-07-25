@@ -18,6 +18,7 @@ struct ManagerView: View {
     @Environment(PlaybackCoordinator.self) private var coordinator
     @Environment(ThumbnailService.self) private var thumbnailService
     @Environment(MediaMetadataService.self) private var metadataService
+    @Environment(HDRCache.self) private var hdrCache
     @Environment(\.modelContext) private var modelContext
 
     @State private var chrome = ManagerChrome()
@@ -29,6 +30,7 @@ struct ManagerView: View {
                 coordinator: coordinator,
                 thumbnailService: thumbnailService,
                 metadataService: metadataService,
+                hdrCache: hdrCache,
                 chrome: chrome,
                 modelContainer: modelContext.container
             )

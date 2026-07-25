@@ -83,22 +83,24 @@ final class ThumbnailService {
     /// placeholder); the metadata is empty for a thumbnail served from cache (no file open —
     /// the caller falls back to the values persisted on the model). `maxPixelSize` is the
     /// longest edge in pixels.
-    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int, folderURL: URL? = nil) async -> (image: NSImage?, metadata: MediaMetadata) {
+    func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int, folderURL: URL? = nil) async -> (image: NSImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         // A skipped file is wrong-type for its playlist: the decoder can't read it, so there is no
         // thumbnail to render. Keep the placeholder icon without resolving the bookmark or opening
         // the file — its size comes from the metadata service, which reads that alone.
-        guard !file.isSkipped else { return (nil, MediaMetadata()) }
+        guard !file.isSkipped else { return (nil, MediaMetadata(), nil) }
         let bookmark = playlist.folderBookmark
         let relativePath = file.relativePath
         let isVideo = playlist.mediaType == .video
         let fingerprint = file.fingerprint
         let recordFileSize = file.fileSizeBytes
         let recordLastModified = file.lastModified
-        let recordIsHDR = file.isHDR
+        // A `nil` `isHDR` on a decodable type means the HDR fact was never settled, so a cached
+        // thumbnail is incomplete and the produce path re-decodes to settle it.
+        let hdrComplete = file.isHDR != nil
         let isLocal = file.cloudStatus == .local
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
-        if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata()) }
+        if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata(), nil) }
 
         // Generation *and* decode happen off the main actor, so the cell receives a
         // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
@@ -111,14 +113,14 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
-            recordIsHDR: recordIsHDR,
+            hdrComplete: hdrComplete,
             isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )
-        guard let boxed = produced.image else { return (nil, produced.metadata) }
+        guard let boxed = produced.image else { return (nil, produced.metadata, produced.hdr) }
 
         memory.setObject(boxed.image, forKey: memKey, cost: Self.byteCost(of: boxed.image))
-        return (boxed.image, produced.metadata)
+        return (boxed.image, produced.metadata, produced.hdr)
     }
 
     /// Decoded byte size of an image, used as its cache cost: pixel area × 4 (RGBA).
@@ -160,7 +162,6 @@ final class ThumbnailService {
             fingerprint: nil,
             recordFileSize: nil,
             recordLastModified: nil,
-            recordIsHDR: nil,
             cacheDirectory: cacheDirectory
         ).data
     }
@@ -299,17 +300,17 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
-        recordIsHDR: Bool?,
+        hdrComplete: Bool = true,
         isLocal: Bool = true,
         cacheDirectory: URL
-    ) async -> (data: Data?, metadata: MediaMetadata) {
+    ) async -> (data: Data?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         // One scoped-access session for the whole produce: form the cache name (which may compute
         // the fingerprint), check the disk cache, and render on a miss — rather than resolving once
         // to name and again to render. When the surface supplies its already-resolved `folderURL`,
         // the per-file resolve is skipped entirely.
         let produced = try? await BookmarkService.withResolvedFile(
             folder: folderURL, bookmark: bookmark, relativePath: relativePath
-        ) { fileURL -> (data: Data?, metadata: MediaMetadata) in
+        ) { fileURL -> (data: Data?, metadata: MediaMetadata, hdr: ThumbnailHDR?) in
             let fileSizeBytes = fileURL.fileSizeBytes
             let lastModified = fileURL.contentModificationDate
             // Staleness gate: a supplied fingerprint whose on-disk size *or* mtime no longer matches
@@ -325,10 +326,10 @@ final class ThumbnailService {
                 && ((recordFileSize != nil && fileSizeBytes != recordFileSize)
                     || (recordLastModified != nil && lastModified != recordLastModified))
             guard isLocal || fingerprint != nil else {
-                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified))
+                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified), nil)
             }
             guard let named = cacheFilename(fileURL: fileURL, fingerprint: gateFired ? nil : fingerprint) else {
-                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified))
+                return (nil, MediaMetadata(fileSizeBytes: fileSizeBytes, lastModified: lastModified), nil)
             }
             // The gate fired but the recomputed fingerprint still matches the supplied one → the
             // content is the same (a benign touch: copy, re-download of identical bytes). Only a
@@ -339,17 +340,15 @@ final class ThumbnailService {
             // always reported, refreshing a stale/absent staleness value so the gate stops re-firing.
             let hitMetadata = MediaMetadata(
                 fileSizeBytes: fileSizeBytes, fingerprint: named.computed, lastModified: lastModified)
+            // Serve the disk hit only when the file's HDR fact is already settled (`hdrComplete`) — or
+            // it's evicted, so it can't be re-decoded regardless. A local file whose `isHDR` is still
+            // `nil` is treated as an incomplete thumbnail: it falls through to the decode below so the
+            // decode settles the HDR fact, exactly as a missing `fingerprint` drives regeneration. The
+            // header-level reads never decode a still, so the gallery decode is where HDR is settled.
             let diskURL = cacheDirectory.appending(path: named.name)
-            if !contentChanged, let data = try? Data(contentsOf: diskURL) {
+            if !contentChanged, hdrComplete || !isLocal, let data = try? Data(contentsOf: diskURL) {
                 if isDecodableImage(data) {
-                    // The header-only reads never decode a still, so an image's HDR-ness is settled by
-                    // the gallery decode alone — which a disk-cache hit skips. Probe it once here (only
-                    // while local and only until the record carries the flag) so an image whose thumbnail
-                    // predates the `isHDR` column still gains the badge (F6). A video settles `isHDR` from
-                    // its colour tags on the list path, so this is images-only.
-                    var served = hitMetadata
-                    if !isVideo, isLocal, recordIsHDR == nil { served.isHDR = imageIsHDR(at: fileURL) }
-                    return (data, served)
+                    return (data, hitMetadata, nil)
                 }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
@@ -358,7 +357,7 @@ final class ThumbnailService {
             }
             // Past here lies the source read/decode. An evicted file's disk hit (above) is served, but
             // a miss stays on the placeholder rather than fetching the bytes from the cloud to render.
-            guard isLocal else { return (nil, hitMetadata) }
+            guard isLocal else { return (nil, hitMetadata, nil) }
 
             var rendered = await renderThumbnail(at: fileURL, isVideo: isVideo, maxPixelSize: maxPixelSize)
             rendered.metadata.fileSizeBytes = fileSizeBytes
@@ -366,13 +365,13 @@ final class ThumbnailService {
             // A file that opens (so a fingerprint could be computed) but fails to render persists no
             // fingerprint: set it only past this guard, so a corrupt / 0-byte file never keys the
             // cache or collapses into a bogus duplicate group.
-            guard let data = rendered.data else { return (nil, rendered.metadata) }
+            guard let data = rendered.data else { return (nil, rendered.metadata, rendered.hdr) }
             rendered.metadata.fingerprint = named.computed
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             try? data.write(to: diskURL)
-            return (data, rendered.metadata)
+            return (data, rendered.metadata, rendered.hdr)
         }
-        return produced ?? (nil, MediaMetadata())
+        return produced ?? (nil, MediaMetadata(), nil)
     }
 
     /// Like `produceData`, but additionally decodes the encoded bytes into a fully
@@ -389,10 +388,10 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
-        recordIsHDR: Bool?,
+        hdrComplete: Bool,
         isLocal: Bool = true,
         cacheDirectory: URL
-    ) async -> (image: SendableImage?, metadata: MediaMetadata) {
+    ) async -> (image: SendableImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         let produced = await produceData(
             folderURL: folderURL,
             bookmark: bookmark,
@@ -402,16 +401,16 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
-            recordIsHDR: recordIsHDR,
+            hdrComplete: hdrComplete,
             isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )
-        guard let data = produced.data else { return (nil, produced.metadata) }
+        guard let data = produced.data else { return (nil, produced.metadata, produced.hdr) }
 
         // `cgImage` forces the decode here, off-main; `NSImage(cgImage:)` then wraps
         // an already-decoded bitmap so no lazy decode happens when the cell draws.
-        guard let rep = NSBitmapImageRep(data: data), let cg = rep.cgImage else { return (nil, produced.metadata) }
-        return (SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))), produced.metadata)
+        guard let rep = NSBitmapImageRep(data: data), let cg = rep.cgImage else { return (nil, produced.metadata, produced.hdr) }
+        return (SendableImage(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))), produced.metadata, produced.hdr)
     }
 
     // MARK: - Generation
@@ -424,20 +423,17 @@ final class ThumbnailService {
     /// the main actor even for a caller already on it, rather than relying on the one entry
     /// point that happens to hop.
     @concurrent
-    nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, metadata: MediaMetadata) {
+    nonisolated static func renderThumbnail(at fileURL: URL, isVideo: Bool, maxPixelSize: Int) async -> (data: Data?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         if isVideo {
             let frame = await videoFrame(at: fileURL, maxPixelSize: maxPixelSize)
-            var metadata = frame.metadata
-            // Settle the badge fact once the file opened as video (dimensions read), from whichever
-            // backend produced the colour tags — the single derivation point for both, matching the
-            // list-mode extractor.
-            if metadata.width != nil { metadata.isHDR = VideoColorTags.isHDR(gamma: metadata.hdrGamma) }
-            guard let cgImage = frame.image else { return (nil, metadata) }
-            return (encodeHEIC(cgImage), metadata)
+            // The frame producer carries the colour tags as an HDR result (`frame.hdr`) routed to
+            // the sink, kept out of the returned `MediaMetadata`.
+            guard let cgImage = frame.image else { return (nil, frame.metadata, frame.hdr) }
+            return (encodeHEIC(cgImage), frame.metadata, frame.hdr)
         }
-        guard let cgImage = imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize) else { return (nil, MediaMetadata()) }
+        guard let cgImage = imageThumbnail(at: fileURL, maxPixelSize: maxPixelSize) else { return (nil, MediaMetadata(), nil) }
         let size = fileURL.imagePixelSize
-        return (encodeHEIC(cgImage), MediaMetadata(width: size?.width, height: size?.height, isHDR: imageIsHDR(at: fileURL)))
+        return (encodeHEIC(cgImage), MediaMetadata(width: size?.width, height: size?.height), .image(imageIsHDR(at: fileURL)))
     }
 
     /// Whether the still at `url` carries HDR range, from a small HDR-aware decode kept separate
@@ -528,7 +524,7 @@ final class ThumbnailService {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    private nonisolated static func videoFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
+    private nonisolated static func videoFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         let frame = await avAssetFrame(at: url, maxPixelSize: maxPixelSize)
         if frame.image != nil { return frame }
         // AVFoundation can't open every container the player handles (notably webm
@@ -536,26 +532,30 @@ final class ThumbnailService {
         return await MPVThumbnailer.frame(at: url, maxPixelSize: maxPixelSize)
     }
 
-    /// A representative frame and the asset's metadata — duration and display dimensions —
-    /// in one open. The metadata is a moov-atom read independent of the frame, so it is
-    /// loaded even when frame generation fails (an audio-only asset), and its fields are
-    /// `nil` when AVFoundation can't read them — the webm/mkv case, where `videoFrame`
-    /// falls back to libmpv.
-    private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata) {
+    /// A representative frame, the asset's metadata — duration and display dimensions — and its
+    /// HDR result, in one open. The metadata and colour tags are moov-atom reads independent of the
+    /// frame, so they load even when frame generation fails (an audio-only asset). Metadata fields
+    /// and the HDR result are `nil` when AVFoundation can't read them — the webm/mkv case, where
+    /// `videoFrame` falls back to libmpv.
+    private nonisolated static func avAssetFrame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
         generator.requestedTimeToleranceBefore = .positiveInfinity
         generator.requestedTimeToleranceAfter = .positiveInfinity
-        let (duration, size, gamma, primaries) = await asset.videoMetadata(wantsVideo: true)
+        async let colorLoad = asset.videoColorTags()
+        let (duration, size) = await asset.videoMetadata(wantsVideo: true)
         // Sample ~10% in (past the often-black opening), the same relative position the
         // libmpv fallback uses, so the same content yields a comparable thumbnail across
         // codecs. Fall back to 1s when the duration is unknown.
         let position = duration.map { $0 * 0.1 } ?? 1
         let time = CMTime(seconds: position, preferredTimescale: 600)
         let image = try? await generator.image(at: time).image
-        return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height,
-                                     hdrGamma: gamma, hdrPrimaries: primaries))
+        let tags = await colorLoad
+        // The colour tags are an HDR fact routed to the sink, present once the file opened as video
+        // (dimensions read) — carried even when the frame decode itself failed.
+        let hdr: ThumbnailHDR? = size != nil ? .video(gamma: tags.gamma, primaries: tags.primaries) : nil
+        return (image, MediaMetadata(duration: duration, width: size?.width, height: size?.height), hdr)
     }
 }

@@ -53,6 +53,7 @@ struct ManagerEnv {
     let coordinator: PlaybackCoordinator
     let thumbnailService: ThumbnailService
     let metadataService: MediaMetadataService
+    let hdrCache: HDRCache
     let chrome: ManagerChrome
     let modelContainer: ModelContainer
 
@@ -64,6 +65,7 @@ struct ManagerEnv {
             .environment(coordinator)
             .environment(thumbnailService)
             .environment(metadataService)
+            .environment(hdrCache)
             .environment(chrome)
             .modelContainer(modelContainer)
     }

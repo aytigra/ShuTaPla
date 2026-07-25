@@ -57,7 +57,8 @@ Playlist                     — name, folderBookmark (security-scoped), folderP
  └── files: [PlaylistFile]
       └── relativePath, fileName, tags: [Tag] (many-to-many), taggingStatusCode (scalar),
           isSkipped, lastPosition?, cached media facts (duration?/width?/height?/fileSizeBytes?),
-          fingerprint? (content hash) + lastModified? (on-disk staleness baseline, with fileSizeBytes), sortOrder (shuffled order)
+          fingerprint? (content hash) + lastModified? (on-disk staleness baseline, with fileSizeBytes),
+          isHDR?/hdrGamma?/hdrPrimaries? (decode-time HDR cache, §8), sortOrder (shuffled order)
 
 Tag                          — normalizedName (lowercased, @Attribute(.unique)),
                                name (first-seen casing), files: [PlaylistFile] (inverse)
@@ -130,6 +131,8 @@ Services hold UI-independent logic, are injected into state objects (not views),
 - **MPVThumbnailer** — stateless libmpv fallback. Each call spins a short-lived windowless mpv instance (`vo=image`), seeks 10% in, writes one PNG, and tears down — owning a fresh handle, never touching the playback engines' `MPVClient`. Calls are serialized on one background-QoS queue with a per-call deadline. Also exposes `duration(at:)` (loads just far enough to read the demuxer's duration, decoding nothing).
 
 - **DurationService** (`@MainActor @Observable`) — the standalone running-time path for surfaces with no thumbnail (file-list rows, cache-hit gallery cells). Media-type-agnostic. Returns `PlaylistFile.duration` when known, otherwise an off-main worker reads it (`AVURLAsset.load(.duration)`, or `MPVThumbnailer.duration` for webm/mkv) and writes it back, so the value is instant on later displays and across launches.
+
+- **HDRCache** (`@MainActor @Observable`) — the one sink for a file's HDR fact (§8), which is *decode-time*: only decoding the media for display reads it reliably, so the header-level `MediaMetadataService` never touches it. Each decode surface routes its finding here — `record(imageIsHDR:for:)` for a still's `CGImage.isHDR`, `record(gamma:primaries:for:)` for a video's mpv-style colour tags (deriving `isHDR` from the gamma) — which writes the persisted `isHDR`/`hdrGamma`/`hdrPrimaries` columns and `trySave()`s immediately (a later `includePendingChanges = false` fetch would otherwise refault the write away). It's only ever wired to decode surfaces, so a cached value is a genuine reading, never a guess — the badge and the pre-configured PQ layer read the columns without re-opening the file. `VideoColorTags` (the pure CoreMedia/mpv → mpv-string map) shares its file.
 
 - **AudioStripper** — backs the **Remove Audio** action by remuxing with libavformat: copies the video stream's `AVCodecParameters` into a new output context and forwards only video packets (no decode/re-encode — fast, lossless, works for every container the player opens, including webm/mkv). Orchestrated by `AppState.stripAudio(from:)` mirroring the delete flow: under one scoped session it remuxes to a hidden sibling, trashes the original as a recoverable backup, and swaps the result in (reloading a video currently on screen at its position). A per-row spinner runs while it works.
 
@@ -204,7 +207,14 @@ For an `.invalid`-tagging file, `TagEditorView` disables the chip editor and sho
 - **Image** — `ImagePlaybackEngine` loads via `CGImageSource`, holds fit mode and a pan/zoom transform (reset on file change), and drives a slideshow `Timer`. Pan/zoom uses SwiftUI `MagnifyGesture`/`DragGesture` plus a scroll-wheel bridge.
 - **Audio** — `AudioPlaybackEngine` owns a second independent `MPVClient` configured `--vo=null`. Its `volume` is independent of system and video volume; CoreAudio mixes the two instances.
 
-HDR video passes through to EDR displays via the `MPVOpenGLLayer` (float backbuffer, `wantsExtendedDynamicRangeContent`, extended-sRGB colorspace) paired with mpv's `--target-colorspace-hint=yes`. HDR image output is a planned extension (Task 19).
+### HDR
+
+A file's HDR range is determined only by **decoding it for display** — one mechanism for images and video — and cached on the `PlaylistFile` through the `HDRCache` sink (§5). The header-level metadata read never sees it (a paused demuxer probe reports the colour tags unreliably, so it would cache guesses), so the producers are exactly the decode surfaces: the gallery thumbnailer (a still's `CGImage.isHDR`; a frame's colour tags, read from the AVFoundation format description or libmpv `video-params`), the image engine (its decoded `CGImage`), and the video engine's live `video-params` pass. Completeness is asymmetric from the other metadata: a missing `isHDR` marks the **thumbnail** stale, not the metadata bundle, so the next gallery decode fills it — the same staleness/re-derive treatment as `fingerprint`, which keeps `hasCompleteMetadata` free of HDR. A written value is trusted until `invalidateMetadata` clears it alongside the other facts.
+
+Output takes two paths, each gating on the hosting display's EDR headroom (`NSScreen.supportsEDR`):
+
+- **Video** passes through to EDR displays via the `MPVOpenGLLayer` (float backbuffer, `wantsExtendedDynamicRangeContent`, extended-sRGB colorspace) paired with mpv's `--target-colorspace-hint=yes`. At load the engine pre-configures the layer from the cached `hdrGamma`/`hdrPrimaries` (`HDRVideoConfig.decide`), so a file decoded before opens HDR without the SDR→HDR flash; the live pass re-applies once the decode confirms the tags.
+- **Image** hosts the decoded `CGImage` (which carries its own HDR colour space) in a raw `CALayer` (`EDRImageLayer`, `HDRImageConfig.decide`) that opts into extended dynamic range when the image is HDR, letting the OS tone-mapper present it. A raw layer rather than `NSImageView` because only `contentsGravity` can express aspect-fill.
 
 ---
 
@@ -276,10 +286,10 @@ Models/      Playlist, PlaylistFile, Tag, AppStateModel, GlobalSettings (@Model)
 State/       AppState, PlaybackCoordinator, OverlayManager, HotkeyRouter
 Services/    FileSystemService (actor), PlaylistScanActor (@ModelActor), TagParser,
              BookmarkService, ThumbnailService, MPVThumbnailer, AudioStripper, DurationService,
-             CloudFileService
-MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, Cmpv/ (Clang module)
+             CloudFileService, HDRDetection (HDRCache sink + VideoColorTags map)
+MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, HDRVideoConfig, Cmpv/ (Clang module)
 FFmpeg/      Cffmpeg/ (Clang module)
-Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine, CloudLoadGate
+Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine, HDRImageConfig, CloudLoadGate
 Views/
   Welcome/         WelcomeView
   Manager/         ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,
@@ -287,12 +297,13 @@ Views/
   FileCollection/  FileCollectionView, PagedList + GalleryPagedList (windowed containers),
                    FileListSurface, FileListRow, GalleryCell, FileGalleryCell, GalleryGrid,
                    FileSelection, FileContextMenu, FileRowView
-  Player/          PlayerView, VideoPlayerView, ImagePlayerView, PauseOverlay, PlaybackControlsBar
+  Player/          PlayerView, VideoPlayerView, ImagePlayerView, EDRImageLayer, PauseOverlay, PlaybackControlsBar
   Audio/           AudioInlet, AudioOverlay
   Shared/          TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
                    HoverZone, ControlButtonStyle, RenameFileField
   Settings/        SettingsView
-Extensions/  URL+MediaType, URL+Fingerprint, Array+Move, NSWindow+Fullscreen
+Extensions/  URL+MediaType, URL+Fingerprint, Array+Move, NSWindow+Fullscreen,
+             AVURLAsset+Metadata, NSScreen+EDR
 Resources/   Assets.xcassets
 ```
 

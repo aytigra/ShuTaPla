@@ -14,24 +14,19 @@ import Foundation
 @Suite struct MPVThumbnailerTests {
 
     // `probeSettled` decides when the metadata probe can stop pumping: once the duration is known
-    // and the colour tag is resolved (or the file has no video track, so it never gets one), and
+    // (the demuxer dimensions land with or before it, and the list probe reads no HDR), and
     // otherwise only once the settle grace since `FILE_LOADED` has elapsed — so a file that never
-    // reports a duration, or whose gamma never settles, returns at the grace instead of stalling
-    // to the full deadline.
+    // reports a duration returns at the grace instead of stalling to the full deadline.
     @Test(arguments: [
-        // duration + no video track (audio) → settled immediately, grace irrelevant.
-        (TimeInterval?.some(1), Int?.none, String?.none, false, true),
-        // duration + colour tag resolved → settled immediately.
-        (1, 1920, "pq", false, true),
-        // duration but gamma not yet: hold before the grace, return after.
-        (1, 1920, nil, false, false),
-        (1, 1920, nil, true, true),
-        // no duration ever: hold before the grace, return after — not a 15 s stall.
-        (nil, 1920, "bt.1886", false, false),
-        (nil, 1920, "bt.1886", true, true),
-    ] as [(TimeInterval?, Int?, String?, Bool, Bool)])
-    func probeSettles(duration: TimeInterval?, width: Int?, gamma: String?, graceElapsed: Bool, expected: Bool) {
-        let metadata = MediaMetadata(duration: duration, width: width, hdrGamma: gamma)
+        // duration known → settled immediately, grace irrelevant, for audio (no track) and video.
+        (TimeInterval?.some(1), Int?.none, false, true),
+        (1, 1920, false, true),
+        // no duration yet: hold before the grace, return after — not a 15 s stall.
+        (nil, 1920, false, false),
+        (nil, 1920, true, true),
+    ] as [(TimeInterval?, Int?, Bool, Bool)])
+    func probeSettles(duration: TimeInterval?, width: Int?, graceElapsed: Bool, expected: Bool) {
+        let metadata = MediaMetadata(duration: duration, width: width)
         #expect(MPVThumbnailer.probeSettled(metadata, graceElapsed: graceElapsed) == expected)
     }
 }

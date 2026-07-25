@@ -74,34 +74,24 @@ final class MediaMetadataService {
                 metadata.duration = av.duration
                 metadata.width = av.width
                 metadata.height = av.height
-                metadata.hdrGamma = av.gamma
-                metadata.hdrPrimaries = av.primaries
-                // libmpv reads what AVFoundation couldn't open (webm, mkv), filling any gap —
-                // including the colour tags, which come from its `video-params` when present.
+                // libmpv reads what AVFoundation couldn't open (webm, mkv), filling any gap. HDR is
+                // never read here — it's a decode-time fact the gallery/engine producers settle.
                 if metadata.duration == nil || (mediaType == .video && (metadata.width == nil || metadata.height == nil)) {
                     let mpv = await MPVThumbnailer.metadata(at: fileURL)
                     metadata.duration = metadata.duration ?? mpv.duration
                     metadata.width = metadata.width ?? mpv.width
                     metadata.height = metadata.height ?? mpv.height
-                    metadata.hdrGamma = metadata.hdrGamma ?? mpv.hdrGamma
-                    metadata.hdrPrimaries = metadata.hdrPrimaries ?? mpv.hdrPrimaries
-                }
-                // Settle the badge fact once the file opened as video (dimensions read): a positive
-                // PQ/HLG gamma is HDR, an absent or SDR gamma is a determined `false` (not `nil`), so
-                // completeness stops re-examining it. A file that wouldn't open leaves it `nil`.
-                if mediaType == .video, metadata.width != nil {
-                    metadata.isHDR = VideoColorTags.isHDR(gamma: metadata.hdrGamma)
                 }
             }
             return metadata
         }) ?? MediaMetadata()
     }
 
-    /// The asset's duration, and — when `wantsDimensions` (video) — its display size and mpv-style
-    /// colour tags. A moov-atom read: no frame is decoded. `nil` fields when AVFoundation can't read
-    /// them (the webm/mkv case, where the caller falls back to libmpv).
-    @concurrent private nonisolated static func avMetadata(at url: URL, wantsDimensions: Bool) async -> (duration: TimeInterval?, width: Int?, height: Int?, gamma: String?, primaries: String?) {
-        let (duration, size, gamma, primaries) = await AVURLAsset(url: url).videoMetadata(wantsVideo: wantsDimensions)
-        return (duration, size?.width, size?.height, gamma, primaries)
+    /// The asset's duration, and — when `wantsDimensions` (video) — its display size. A moov-atom
+    /// read: no frame is decoded. `nil` fields when AVFoundation can't read them (the webm/mkv case,
+    /// where the caller falls back to libmpv).
+    @concurrent private nonisolated static func avMetadata(at url: URL, wantsDimensions: Bool) async -> (duration: TimeInterval?, width: Int?, height: Int?) {
+        let (duration, size) = await AVURLAsset(url: url).videoMetadata(wantsVideo: wantsDimensions)
+        return (duration, size?.width, size?.height)
     }
 }

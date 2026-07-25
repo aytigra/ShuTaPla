@@ -18,6 +18,7 @@ struct ShuTaPlaApp: App {
     @State private var appState: AppState?
     @State private var thumbnailService = ThumbnailService()
     @State private var metadataService = MediaMetadataService()
+    @State private var hdrCache = HDRCache()
 
     /// True when this process is the unit-test host. Xcode runs the app-hosted test target by
     /// launching the real app, so the store and window state below must be skipped: opening the
@@ -61,6 +62,7 @@ struct ShuTaPlaApp: App {
                     .environment(appState.coordinator)
                     .environment(thumbnailService)
                     .environment(metadataService)
+                    .environment(hdrCache)
                     .frame(minWidth: 800, minHeight: 600)
                     .modelContainer(modelContainer)
                     .onAppear {

@@ -11,9 +11,24 @@ import Testing
 import Foundation
 import AppKit
 import ImageIO
+import UniformTypeIdentifiers
 @testable import ShuTaPla
 
 // MARK: - Helpers
+
+/// Writes a tiny 16-bit PQ HEIC whose transfer function survives the round-trip, so the
+/// thumbnailer's HDR-aware decode (`imageIsHDR`) reads it back as HDR.
+private func writeHDRHEIC(to url: URL) throws {
+    guard let space = CGColorSpace(name: CGColorSpace.itur_2100_PQ),
+          let ctx = CGContext(
+              data: nil, width: 8, height: 8, bitsPerComponent: 16, bytesPerRow: 0, space: space,
+              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue),
+          let image = ctx.makeImage(),
+          let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.heic.identifier as CFString, 1, nil)
+    else { throw CocoaError(.fileWriteUnknown) }
+    CGImageDestinationAddImage(dest, image, nil)
+    guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown) }
+}
 
 private func makeTempDir() throws -> URL {
     let url = FileManager.default.temporaryDirectory
@@ -297,6 +312,7 @@ struct ThumbnailServiceTests {
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
         let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
         file.fingerprint = fp
+        file.isHDR = false                           // HDR settled, so the serve isn't gated into a re-decode
         let result = await service.thumbnail(for: file, in: playlist, maxPixelSize: 64)
         #expect(result.image != nil)                 // disk hit via the supplied fingerprint
         #expect(result.metadata.fingerprint == nil)  // supplied → nothing re-reported to persist
@@ -414,6 +430,7 @@ struct ThumbnailServiceTests {
         file.fingerprint = fp0
         file.fileSizeBytes = size
         file.lastModified = originalMtime
+        file.isHDR = false          // HDR settled, so a benign touch serves the cache rather than re-decoding
         file.width = 80
         file.height = 80
         let service2 = ThumbnailService(cacheDirectory: cacheDir)
@@ -551,11 +568,13 @@ struct ThumbnailServiceTests {
 
     // MARK: - Image HDR settling
 
-    /// An image whose thumbnail is already on disk (a pre-`isHDR` row: fingerprint present, HDR-ness
-    /// never settled) still gets its HDR-ness resolved on display — the disk-cache hit probes it once
-    /// so the badge can appear, rather than leaving `isHDR` `nil` until the file's bytes change (F6).
+    /// A local image whose thumbnail is already on disk but whose `isHDR` was never settled (a
+    /// pre-`isHDR` row) is treated as an *incomplete* thumbnail: rather than serving the cached
+    /// `.heic`, the produce path re-decodes the source — the same staleness a missing `fingerprint`
+    /// drives — so the decode can settle the HDR fact. A fresh decode is proven by the reported
+    /// pixel dimensions (a plain cache serve reports none).
     @MainActor @Test
-    func diskCacheHitSettlesImageIsHDR() async throws {
+    func missingImageHDRRestagesThumbnail() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let cacheDir = try makeTempDir()
@@ -564,28 +583,29 @@ struct ThumbnailServiceTests {
         try writePNG(width: 80, height: 80, to: fileURL)
         let bookmark = try BookmarkService.makeBookmark(for: dir)
 
-        // Seed the disk cache (as an earlier session would have).
+        // Seed the disk cache (as an earlier, pre-`isHDR` session would have).
         let seeding = ThumbnailService(cacheDirectory: cacheDir)
         #expect(await seeding.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
         let fp = try #require(fileURL.contentFingerprint())
 
-        // A record that carries the fingerprint (so the produce path serves the disk hit) but no isHDR.
+        // A record carrying the fingerprint (so the entry point can address the disk `.heic`) but no isHDR.
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
         let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
         file.fingerprint = fp
         #expect(file.isHDR == nil)
 
-        let fresh = ThumbnailService(cacheDirectory: cacheDir)  // empty memory → forces the disk path
+        let fresh = ThumbnailService(cacheDirectory: cacheDir)  // empty memory → the produce path runs
         let result = await fresh.thumbnail(for: file, in: playlist, maxPixelSize: 64)
-        #expect(result.image != nil)                // served from disk
-        #expect(result.metadata.isHDR == false)     // an SDR still → settled false, no longer left nil
+        #expect(result.image != nil)
+        #expect(result.metadata.width == 80)      // a fresh decode ran — the cached `.heic` was not served
+        #expect(result.hdr == .image(false))      // and the decode's HDR fact is reported for the sink
     }
 
-    /// Once an image's HDR-ness is settled on the record, a later disk-cache hit doesn't re-run the
-    /// slow HDR decode: it reports no `isHDR`, so the probe fires at most once per image (F6) — the
-    /// reason the list path never probes it at all.
+    /// Once an image's HDR fact is settled on the record, a later display serves the cached `.heic`
+    /// without re-decoding: the thumbnail is complete, so no fresh decode runs (no dimensions
+    /// reported) and no HDR finding is carried back (`hdr == nil`) — nothing to re-record.
     @MainActor @Test
-    func diskCacheHitSkipsIsHDRProbeWhenAlreadySettled() async throws {
+    func settledImageHDRServesCacheWithoutRedecode() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let cacheDir = try makeTempDir()
@@ -605,8 +625,41 @@ struct ThumbnailServiceTests {
 
         let fresh = ThumbnailService(cacheDirectory: cacheDir)
         let result = await fresh.thumbnail(for: file, in: playlist, maxPixelSize: 64)
-        #expect(result.image != nil)
-        #expect(result.metadata.isHDR == nil)       // not re-reported → the probe was skipped
+        #expect(result.image != nil)               // served from disk
+        #expect(result.metadata.width == nil)      // no fresh decode ran
+        #expect(result.hdr == nil)                 // nothing to re-record
+    }
+
+    // MARK: - HDR result (gallery producer → sink)
+
+    /// A fresh image render reports the still's decoded HDR range as the thumbnailer's HDR result —
+    /// the gallery producer's finding that `GalleryCell` routes to the sink. A PQ HEIC reads HDR; an
+    /// SDR PNG reads not.
+    @Test func renderReportsImageHDR() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let hdrURL = dir.appending(path: "hdr.heic")
+        try writeHDRHEIC(to: hdrURL)
+        #expect(await ThumbnailService.renderThumbnail(at: hdrURL, isVideo: false, maxPixelSize: 64).hdr == .image(true))
+
+        let sdrURL = dir.appending(path: "sdr.png")
+        try writePNG(width: 32, height: 32, to: sdrURL)
+        #expect(await ThumbnailService.renderThumbnail(at: sdrURL, isVideo: false, maxPixelSize: 64).hdr == .image(false))
+    }
+
+    /// A fresh video render (a BT.2020 PQ webm through the libmpv frame path AVFoundation can't open)
+    /// reports the frame decode's colour tags as the HDR result — an HDR gamma routed to the sink,
+    /// not merged onto the metadata bundle. The frame also decodes to a thumbnail.
+    @Test func renderReportsVideoColorTags() async throws {
+        let url = try MediaFixture.hdr.url
+        let result = await ThumbnailService.renderThumbnail(at: url, isVideo: true, maxPixelSize: 64)
+        guard case .video(let gamma, _) = result.hdr else {
+            Issue.record("expected a video HDR result, got \(String(describing: result.hdr))")
+            return
+        }
+        #expect(VideoColorTags.isHDR(gamma: gamma), "gamma \(String(describing: gamma))")
+        #expect(result.data != nil)                    // the frame also rendered a thumbnail
     }
 
     // MARK: - Skipped files

@@ -537,6 +537,35 @@ import AppKit
         #expect(source.advancedTo.isEmpty)
     }
 
+    // MARK: - HDR recording from the live decode
+
+    @Test func videoDecodeRecordsHDRTagsToCache() async throws {
+        // A vo=null engine still decodes video and exposes live `video-params`, so the base engine's
+        // decoded-params handler records the file's HDR tags to its `HDRCache`. A real BT.2020-PQ
+        // fixture must settle `isHDR == true` with its gamma cached — the decode-time fact the badge
+        // and the pre-configured PQ layer read, produced only by an actual decode.
+        let file = makeFile("hdr")
+        let engine = try makeEngine()
+        defer { engine.shutdown() }
+        engine.load(file, at: try MediaFixture.hdr.url)
+
+        #expect(await poll(timeout: .seconds(15)) { file.isHDR != nil })
+        #expect(file.isHDR == true)
+        #expect(file.hdrGamma == "pq")
+    }
+
+    @Test func videoDecodeRecordsSDRAsDeterminedFalse() async throws {
+        // A decoded SDR video (no PQ/HLG transfer) settles a *determined* `false`, not a left-`nil`,
+        // so the gallery won't treat the file as HDR-incomplete and re-decode it forever.
+        let file = makeFile("sdr")
+        let engine = try makeEngine()
+        defer { engine.shutdown() }
+        engine.load(file, at: try MediaFixture.h264.url)
+
+        #expect(await poll(timeout: .seconds(15)) { file.isHDR != nil })
+        #expect(file.isHDR == false)
+    }
+
     @Test func volumeForwardsToClient() async throws {
         let engine = try makeEngine()
         defer { engine.shutdown() }

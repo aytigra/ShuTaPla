@@ -81,6 +81,12 @@ class MPVPlaybackEngine: SourceNavigating {
     /// tests; all routine control goes through the engine's own methods.
     let client: MPVClient
 
+    /// The sink the engine routes its decode-determined HDR finding through. The live
+    /// `video-params` pass (see `handle`) records the decoded file's colour tags here, making the
+    /// persisted columns a decode-time fact rather than a header guess. Stateless (writes straight
+    /// to the file), so the engine owns its own — no plumbing through the construction closures.
+    private let hdrCache = HDRCache()
+
     /// Holds an evicted file pending until its bytes arrive, then runs the real load.
     /// Player views read `cloudLoad.pendingFile` to show the downloading placeholder.
     let cloudLoad = CloudLoadGate()
@@ -239,6 +245,12 @@ class MPVPlaybackEngine: SourceNavigating {
             duration = value ?? 0
         case .videoWidth(let value):
             videoSize.width = CGFloat(value ?? 0)
+            // `dwidth` turning positive means decode is up, so `video-params/*` are valid — the same
+            // signal the video engine steers output on. Capture the decoded file's HDR tags here,
+            // beside the size from the same decode. A file with no video track never reaches this
+            // (its width stays 0); a `vo=null` decode still reads valid params, so recording is a
+            // property of decoding video, not of the output surface.
+            if let value, value > 0 { recordColorTags() }
         case .videoHeight(let value):
             videoSize.height = CGFloat(value ?? 0)
         case .pausedChanged(let paused):
@@ -285,6 +297,17 @@ class MPVPlaybackEngine: SourceNavigating {
     }
 
     // MARK: - Helpers
+
+    /// Records the decoded video's HDR colour tags to the cache for the current file, from the live
+    /// `video-params` the decode exposes. Called from the `.videoWidth` handler once decode is up.
+    /// A `nil` gamma here is a genuine SDR reading (the file carries no PQ/HLG transfer), settling a
+    /// determined `false` — never a guess, since this only runs off a real decode.
+    private func recordColorTags() {
+        guard let file = currentFile else { return }
+        hdrCache.record(gamma: client.stringProperty("video-params/gamma"),
+                        primaries: client.stringProperty("video-params/primaries"),
+                        for: file)
+    }
 
     /// Whether a settled forward keyframe step means the end of the file. Two independent
     /// signals, each sufficient:
