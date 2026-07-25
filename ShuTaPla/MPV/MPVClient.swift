@@ -101,6 +101,26 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// can be issued distinctly (see ``stepKeyframe(forward:)``). Touched only on `queue`.
     private nonisolated(unsafe) var pendingBackStep = false
 
+    /// Set while a forward keyframe step waits for an in-flight seek (a scrub) to settle before
+    /// its own seek can be issued — issued at once it would coalesce into that seek and land at
+    /// the scrub's floor instead of the next keyframe (see ``stepKeyframe(forward:)``). Touched
+    /// only on `queue`.
+    private nonisolated(unsafe) var pendingForwardStep = false
+
+    /// Set from when the forward step's seek is issued until its `PLAYBACK_RESTART` arrives —
+    /// the step goes out only from a quiescent state (see ``tryReleaseForwardStep()``), so the
+    /// next restart is its own landing, yielded as `.forwardStepSettled`. Touched only on `queue`.
+    private nonisolated(unsafe) var forwardStepInFlight = false
+
+    /// Set by every seek-issuing command (scrub, relative seek, keyframe hops, a positioned
+    /// load), cleared when a `PLAYBACK_RESTART` drains. While set, some seek of ours has not yet
+    /// shown its restart — the forward step must hold, or mpv would coalesce the step into that
+    /// seek (and its restart would masquerade as the step's landing). Unlike mpv's `seeking`
+    /// property — which stays false for the lag between a seek command and the playloop picking
+    /// it up — this is set synchronously at issuance, so the gate has no lag window. Touched
+    /// only on `queue`.
+    private nonisolated(unsafe) var seekSinceRestart = false
+
     /// The single event stream for this instance. Consume it once from the owning engine.
     let events: AsyncStream<MPVEvent>
 
@@ -282,6 +302,14 @@ nonisolated final class MPVClient: @unchecked Sendable {
     func loadFile(_ path: String, startingAt position: TimeInterval? = nil) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            // A step still deferred or in flight belongs to the outgoing file; left standing it
+            // would fire on — or claim — the new file's first restart as its landing. The load
+            // itself restarts playback, so it counts as an outstanding seek: a step pressed
+            // mid-load holds until the load's restart drains.
+            self.pendingForwardStep = false
+            self.forwardStepInFlight = false
+            self.pendingBackStep = false
+            self.seekSinceRestart = true
             if let position {
                 command(self.handle, "loadfile", path, "replace", "0", "start=\(position)")
             } else {
@@ -297,17 +325,29 @@ nonisolated final class MPVClient: @unchecked Sendable {
     func stop() {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            // As on `loadFile`: a stale deferred/in-flight step must not survive into whatever
+            // plays next. No restart will come while stopped, so the seek gate resets here.
+            self.pendingForwardStep = false
+            self.forwardStepInFlight = false
+            self.pendingBackStep = false
+            self.seekSinceRestart = false
             command(self.handle, "stop")
         }
     }
 
-    /// Seeks to an absolute position in seconds, snapping to the keyframe at or before it
-    /// (`keyframes`, not `exact`). The scrubber rides this — fast (a keyframe lands with no decode)
-    /// and within a GOP of the target, which is standard scrubbing.
+    /// Seeks to an absolute position in seconds, precisely (`exact`, mpv's hr-seek: decode from
+    /// the previous keyframe to the target). The scrubber and the resume restore ride this —
+    /// the playhead lands where the user pointed, not on a keyframe up to a GOP short of it.
+    /// mpv coalesces the drag's seek stream, so at most one decode is ever in flight.
     func seek(to seconds: TimeInterval) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
-            command(self.handle, "seek", String(seconds), "absolute+keyframes")
+            // A new user seek supersedes a back step's deferred second hop; the backward step has
+            // no `seekSinceRestart` gate (unlike the forward step), so left armed it would fire on
+            // this seek's restart and floor the scrub one keyframe short of its target.
+            self.pendingBackStep = false
+            self.seekSinceRestart = true
+            command(self.handle, "seek", String(seconds), "absolute+exact")
         }
     }
 
@@ -317,6 +357,8 @@ nonisolated final class MPVClient: @unchecked Sendable {
     func seek(by delta: TimeInterval) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
+            self.pendingBackStep = false   // a new user seek supersedes a deferred back-step hop (see seek(to:))
+            self.seekSinceRestart = true
             command(self.handle, "seek", String(delta), "relative")
         }
     }
@@ -324,25 +366,77 @@ nonisolated final class MPVClient: @unchecked Sendable {
     /// Steps to the adjacent keyframe in the given direction — the skip-forward / skip-back hotkey.
     ///
     /// Forward is one tiny `relative+keyframes` seek: mpv rounds a relative keyframe seek to the
-    /// keyframe *after* the target, so `+ε` lands on the next keyframe with no decode.
+    /// keyframe *after* the target, so `+ε` lands on the next keyframe with no decode. It is only
+    /// issued once no other seek is in flight — mpv coalesces back-to-back seeks (see backward,
+    /// below), so a step issued while a scrub is still seeking would merge into it and land at
+    /// the scrub's target instead of the next keyframe. While a seek is in flight the step is
+    /// parked (`pendingForwardStep`) and released only from a quiescent state — see
+    /// ``tryReleaseForwardStep()`` — where the next keyframe is guaranteed ahead of the scrub's
+    /// settled position.
     ///
-    /// Backward can't mirror that. A relative keyframe seek rounds *down* to the keyframe at or
-    /// before the target, so `−ε` floors back onto the keyframe already playing (the current GOP's
-    /// start), never the previous one. Reaching the previous keyframe takes two hops: anchor on the
-    /// current GOP's keyframe (`absolute+keyframes` at the live position), then seek just before it
-    /// (in ``completeBackStepIfPending()``). The second hop is deferred until the anchor settles —
-    /// signalled by `PLAYBACK_RESTART` — because mpv coalesces back-to-back seeks: a seek queued
-    /// behind a pending one merges into it, collapsing both onto the same keyframe.
+    /// The step's landing is its own `PLAYBACK_RESTART`, yielded as `.forwardStepSettled` — the
+    /// engine's end-of-file signal. That restart is identified by issuing the step's seek only
+    /// when every earlier seek of ours has shown its restart (`seekSinceRestart` false) and the
+    /// event queue is drained: any restart already generated has been consumed, so the next one
+    /// to arrive can only be the step's. The settled position and render-update count must be
+    /// sampled at that restart, not earlier: mpv settles the position before it displays the
+    /// landing frame, and only signals the restart after the display — sampling earlier reads a
+    /// healthy step's frame count as flat, i.e. as a dead video track.
+    ///
+    /// Backward can't mirror the single seek. A relative keyframe seek rounds *down* to the
+    /// keyframe at or before the target, so `−ε` floors back onto the keyframe already playing
+    /// (the current GOP's start), never the previous one. Reaching the previous keyframe takes two
+    /// hops: anchor on the current GOP's keyframe (`absolute+keyframes` at the live position),
+    /// then seek just before it (in ``completeBackStepIfPending()``). The second hop is deferred
+    /// until the anchor settles — signalled by `PLAYBACK_RESTART` — because of the same seek
+    /// coalescing: a seek queued behind a pending one merges into it, collapsing both onto the
+    /// same keyframe.
     func stepKeyframe(forward: Bool) {
         queue.async {
             guard !self.isTerminated else { return }   // handle already destroyed by shutdown
             if forward {
-                command(self.handle, "seek", String(Self.keyframeStepEpsilon), "relative+keyframes")
+                // Park the step, consume anything already queued (a settled scrub's restart may
+                // sit undrained here), then release only if quiescent — see the doc comment above.
+                self.pendingForwardStep = true
+                self.drainEvents()   // its tail runs tryReleaseForwardStep()
             } else {
                 self.pendingBackStep = true
+                self.seekSinceRestart = true
                 command(self.handle, "seek", String(self.timePosition()), "absolute+keyframes")
             }
         }
+    }
+
+    /// Issues the forward step's seek and marks it in flight, so the next `PLAYBACK_RESTART` —
+    /// guaranteed to be this seek's own — is yielded as the step's landing. Runs on `queue`,
+    /// only at points where the event queue is drained and nothing is seeking: directly from
+    /// ``stepKeyframe(forward:)`` after its inline drain, or from the drain's tail.
+    private func issueForwardStep() {
+        forwardStepInFlight = true
+        seekSinceRestart = true
+        command(handle, "seek", String(Self.keyframeStepEpsilon), "relative+keyframes")
+    }
+
+    /// Releases a parked forward step once the client is quiescent: the event queue is drained
+    /// (callers run this at a drain's tail), no seek of ours is still awaiting its restart, and
+    /// mpv reports nothing seeking. `seekSinceRestart` is the load-bearing gate: mpv's `seeking`
+    /// property lags a just-issued seek command, but the flag is set at issuance, so a step
+    /// pressed back-to-back with a scrub holds until the scrub's restart has drained. (A seek
+    /// issued in the sliver between a restart's generation and its drain can still slip past
+    /// both gates and coalesce with the released step — reachable only within one drain-hop,
+    /// and the cost is a missed end-detection or a spurious advance on that single press.)
+    private func tryReleaseForwardStep() {
+        guard pendingForwardStep, !seekSinceRestart, !isSeeking() else { return }
+        pendingForwardStep = false
+        issueForwardStep()
+    }
+
+    /// Whether mpv is currently executing a seek (or otherwise restarting playback), read
+    /// synchronously on `queue`. Gates the forward step's deferral; false when no file is loaded.
+    private func isSeeking() -> Bool {
+        var value: Int32 = 0
+        mpv_get_property(handle, "seeking", MPV_FORMAT_FLAG, &value)
+        return value != 0
     }
 
     /// Issues the second hop of a backward keyframe step once its anchor seek has settled. The
@@ -352,6 +446,7 @@ nonisolated final class MPVClient: @unchecked Sendable {
     private func completeBackStepIfPending() {
         guard pendingBackStep else { return }
         pendingBackStep = false
+        seekSinceRestart = true
         // Clamp at the start: a negative absolute target is undefined in mpv (it wraps to the end).
         let target = max(0, timePosition() - Self.keyframeStepEpsilon)
         command(handle, "seek", String(target), "absolute+keyframes")
@@ -438,11 +533,16 @@ nonisolated final class MPVClient: @unchecked Sendable {
             guard let raw = mpv_wait_event(handle, 0) else { break }
             let event = raw.pointee
             if event.event_id == MPV_EVENT_NONE { break }
-            // A settled seek fires PLAYBACK_RESTART. The settled position is read (and yielded)
-            // before the backward step's deferred second hop, which moves it again; deferring
-            // that hop to here keeps mpv from coalescing it with the anchor seek (see `stepKeyframe`).
+            // A settled seek fires PLAYBACK_RESTART, reopening the forward-step gate. With a
+            // step in flight this restart is its own landing — position and frame count are
+            // sampled here, after mpv displayed the landing frame (see `stepKeyframe`), and
+            // before the backward step's deferred second hop below, which moves them again.
             if event.event_id == MPV_EVENT_PLAYBACK_RESTART {
-                continuation.yield(.playbackRestart(timePosition(), frames: videoFrameCount))
+                seekSinceRestart = false
+                if forwardStepInFlight {
+                    forwardStepInFlight = false
+                    continuation.yield(.forwardStepSettled(timePosition(), frames: videoFrameCount))
+                }
                 completeBackStepIfPending()
             }
             if let translated = translate(event) {
@@ -450,9 +550,11 @@ nonisolated final class MPVClient: @unchecked Sendable {
             }
             if event.event_id == MPV_EVENT_SHUTDOWN {
                 continuation.finish()
-                break
+                return
             }
         }
+        // Queue drained: a parked forward step may now be releasable.
+        tryReleaseForwardStep()
     }
 
     private func translate(_ event: mpv_event) -> MPVEvent? {

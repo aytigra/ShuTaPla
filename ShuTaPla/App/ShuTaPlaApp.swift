@@ -14,12 +14,29 @@ import AppKit
 @main
 struct ShuTaPlaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    let modelContainer: ModelContainer
-    @State private var appState: AppState
+    private let modelContainer: ModelContainer?
+    @State private var appState: AppState?
     @State private var thumbnailService = ThumbnailService()
     @State private var metadataService = MediaMetadataService()
 
+    /// True when this process is the unit-test host. Xcode runs the app-hosted test target by
+    /// launching the real app, so the store and window state below must be skipped: opening the
+    /// on-disk store and resuming the window's player state would relaunch into fullscreen
+    /// mid-run — creating a Space and shuffling the user's desktops — and freeze the shared main
+    /// thread against the `@MainActor` suites. Each suite builds its own in-memory container, so
+    /// nothing the tests exercise depends on this setup.
+    nonisolated static let isTestHost = isRunningAsTestHost(ProcessInfo.processInfo.environment)
+
+    nonisolated static func isRunningAsTestHost(_ environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+    }
+
     init() {
+        guard !Self.isTestHost else {
+            self.modelContainer = nil
+            self._appState = State(initialValue: nil)
+            return
+        }
         let schema = Schema(versionedSchema: SchemaV9.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer
@@ -38,26 +55,33 @@ struct ShuTaPlaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(appState)
-                .environment(appState.coordinator)
-                .environment(thumbnailService)
-                .environment(metadataService)
-                .frame(minWidth: 800, minHeight: 600)
-                .onAppear {
-                    appDelegate.appState = appState
-                    appState.refreshCachePressureOnWindowOpen()
-                }
+            if let appState, let modelContainer {
+                RootView()
+                    .environment(appState)
+                    .environment(appState.coordinator)
+                    .environment(thumbnailService)
+                    .environment(metadataService)
+                    .frame(minWidth: 800, minHeight: 600)
+                    .modelContainer(modelContainer)
+                    .onAppear {
+                        appDelegate.appState = appState
+                        appState.refreshCachePressureOnWindowOpen()
+                    }
+            } else {
+                // Test host: no real store, no AppState, no window resume — just a bare window.
+                Color.clear
+            }
         }
-        .modelContainer(modelContainer)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
 
         Settings {
-            SettingsView()
-                .environment(appState)
-                .environment(thumbnailService)
+            if let appState {
+                SettingsView()
+                    .environment(appState)
+                    .environment(thumbnailService)
+            }
         }
     }
 }

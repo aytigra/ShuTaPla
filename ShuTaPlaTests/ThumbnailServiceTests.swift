@@ -508,6 +508,66 @@ struct ThumbnailServiceTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
     }
 
+    // MARK: - Image HDR settling
+
+    /// An image whose thumbnail is already on disk (a pre-`isHDR` row: fingerprint present, HDR-ness
+    /// never settled) still gets its HDR-ness resolved on display — the disk-cache hit probes it once
+    /// so the badge can appear, rather than leaving `isHDR` `nil` until the file's bytes change (F6).
+    @MainActor @Test
+    func diskCacheHitSettlesImageIsHDR() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        // Seed the disk cache (as an earlier session would have).
+        let seeding = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await seeding.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+        let fp = try #require(fileURL.contentFingerprint())
+
+        // A record that carries the fingerprint (so the produce path serves the disk hit) but no isHDR.
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp
+        #expect(file.isHDR == nil)
+
+        let fresh = ThumbnailService(cacheDirectory: cacheDir)  // empty memory → forces the disk path
+        let result = await fresh.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image != nil)                // served from disk
+        #expect(result.metadata.isHDR == false)     // an SDR still → settled false, no longer left nil
+    }
+
+    /// Once an image's HDR-ness is settled on the record, a later disk-cache hit doesn't re-run the
+    /// slow HDR decode: it reports no `isHDR`, so the probe fires at most once per image (F6) — the
+    /// reason the list path never probes it at all.
+    @MainActor @Test
+    func diskCacheHitSkipsIsHDRProbeWhenAlreadySettled() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cacheDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let fileURL = dir.appending(path: "img.png")
+        try writePNG(width: 80, height: 80, to: fileURL)
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+
+        let seeding = ThumbnailService(cacheDirectory: cacheDir)
+        #expect(await seeding.thumbnailData(bookmark: bookmark, relativePath: "img.png", isVideo: false, maxPixelSize: 64) != nil)
+        let fp = try #require(fileURL.contentFingerprint())
+
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        let file = PlaylistFile(relativePath: "img.png", fileName: "img.png")
+        file.fingerprint = fp
+        file.isHDR = false                          // already settled by an earlier display
+
+        let fresh = ThumbnailService(cacheDirectory: cacheDir)
+        let result = await fresh.thumbnail(for: file, in: playlist, maxPixelSize: 64)
+        #expect(result.image != nil)
+        #expect(result.metadata.isHDR == nil)       // not re-reported → the probe was skipped
+    }
+
     // MARK: - Skipped files
 
     /// A skipped file is wrong-type for its playlist, so its content can't be decoded into a

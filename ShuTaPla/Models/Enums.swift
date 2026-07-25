@@ -48,6 +48,18 @@ nonisolated enum ImageFitMode: String, Codable, Sendable, CaseIterable {
         case .original: return .fit
         }
     }
+
+    /// The frame the player gives the image layer before pan/zoom is applied. `.fit`/`.cover`
+    /// frame the surface and let the layer's gravity do the scaling; `.original` frames the
+    /// picture pixel-perfectly — pixels over the display scale, one image pixel per device
+    /// pixel, exactly the size `.center` gravity renders — so the frame hugs the picture and
+    /// pan/zoom can roam a picture larger than the surface without empty margins.
+    func baseSize(imagePixelSize: CGSize, surface: CGSize, displayScale: CGFloat) -> CGSize {
+        self == .original
+            ? CGSize(width: imagePixelSize.width / displayScale,
+                     height: imagePixelSize.height / displayScale)
+            : surface
+    }
 }
 
 /// File-list presentation in Manager mode.

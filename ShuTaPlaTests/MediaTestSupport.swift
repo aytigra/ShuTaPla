@@ -6,12 +6,14 @@ import Testing
 /// bundle as resources. Each is tiny — 64×64, ~1s, a few KB — with a silent audio track, so a
 /// decode never strains a timeout and the audio-stripping tests have a track to remove.
 /// h264/h265/mpeg are AVFoundation-decodable; vp8/vp9 (webm) exercise the libmpv-only path.
+/// `hdr` is a 10-bit VP9 tagged BT.2020 PQ (`video-params/gamma == "pq"`) — the libmpv HDR path.
 enum MediaFixture: String, CaseIterable {
     case h264 = "h264.mp4"
     case h265 = "h265.mp4"
     case mpeg = "mpeg.mpeg"
     case vp8 = "vp8.webm"
     case vp9 = "vp9.webm"
+    case hdr = "hdr.webm"
 
     /// The fixture's URL inside the test bundle.
     var url: URL {

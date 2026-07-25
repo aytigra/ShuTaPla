@@ -25,6 +25,23 @@ import QuartzCore
         #expect(HDRImageConfig.decide(fitMode: fitMode, imageIsHDR: true, displaySupportsEDR: true).contentsGravity == expected)
     }
 
+    /// The player's base frame per fit mode: `.fit`/`.cover` frame the surface (gravity does the
+    /// scaling), `.original` frames the picture pixel-perfectly — pixels over the display scale,
+    /// matching the 1:1 render of `.center` gravity with `contentsScale = displayScale` — so the
+    /// frame hugs the picture and pan/zoom can't roam empty margins.
+    @Test(arguments: [
+        (ImageFitMode.original, 2.0, CGSize(width: 1000, height: 500)),
+        (.original, 1.0, CGSize(width: 2000, height: 1000)),
+        (.fit, 2.0, CGSize(width: 800, height: 600)),
+        (.cover, 2.0, CGSize(width: 800, height: 600)),
+    ] as [(ImageFitMode, CGFloat, CGSize)])
+    func baseSizeFramesRenderedPicture(fitMode: ImageFitMode, displayScale: CGFloat, expected: CGSize) {
+        let size = fitMode.baseSize(imagePixelSize: CGSize(width: 2000, height: 1000),
+                                    surface: CGSize(width: 800, height: 600),
+                                    displayScale: displayScale)
+        #expect(size == expected)
+    }
+
     /// EDR opts in (`.high`) only when the image is HDR and the display supports it; every other
     /// combination stays `.standard`. The gravity is unaffected by the EDR gate.
     @Test(arguments: [

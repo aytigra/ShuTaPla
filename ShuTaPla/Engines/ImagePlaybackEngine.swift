@@ -21,6 +21,39 @@ nonisolated struct ImageTransform: Equatable, Sendable {
 
     static let identity = ImageTransform()
     var isIdentity: Bool { self == .identity }
+
+    /// Zoom by `magnification` about `pinchCenter` (screen coords, origin at the viewport
+    /// centre), keeping the picture point under the pinch fixed. `newScale / scale` is the
+    /// effective factor so the `minScale` floor stays consistent when it clamps. Used for both
+    /// the live preview (with a `.center` anchor) and the commit, so the two never disagree.
+    func zoomed(by magnification: CGFloat, about pinchCenter: CGSize, minScale: CGFloat) -> ImageTransform {
+        let newScale = max(minScale, scale * magnification)
+        let m = newScale / scale
+        return ImageTransform(
+            offset: CGSize(width: m * offset.width + (1 - m) * pinchCenter.width,
+                           height: m * offset.height + (1 - m) * pinchCenter.height),
+            scale: newScale)
+    }
+
+    /// Translate the offset by a screen-space drag.
+    func panned(by translation: CGSize) -> ImageTransform {
+        ImageTransform(
+            offset: CGSize(width: offset.width + translation.width,
+                           height: offset.height + translation.height),
+            scale: scale)
+    }
+
+    /// Bound the offset so the scaled picture (`scale · frame`) never pulls an empty margin into
+    /// the `viewport`: pan reaches the edge when larger, recenters when smaller than the viewport.
+    func clamped(frame: CGSize, viewport: CGSize) -> ImageTransform {
+        func limit(_ displayed: CGFloat, _ view: CGFloat) -> CGFloat { max(0, (displayed - view) / 2) }
+        let lx = limit(scale * frame.width, viewport.width)
+        let ly = limit(scale * frame.height, viewport.height)
+        return ImageTransform(
+            offset: CGSize(width: min(max(offset.width, -lx), lx),
+                           height: min(max(offset.height, -ly), ly)),
+            scale: scale)
+    }
 }
 
 @MainActor

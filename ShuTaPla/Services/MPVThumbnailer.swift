@@ -78,12 +78,16 @@ nonisolated enum MPVThumbnailer {
     /// Two races are handled while pumping events. mpv's core can queue its startup idle
     /// event before the `loadfile` settles, so `MPV_EVENT_IDLE` must not be treated as
     /// terminal — a load that really fails ends with `END_FILE`, and the deadline caps
-    /// everything else. And `duration` (occasionally the dimensions too) can lag
-    /// `FILE_LOADED` by an instant — and mpv dispatches property-change *notifications*
-    /// lazily, so instead of waiting for one the loop synchronously re-reads the missing
-    /// facts on every wakeup until the duration arrives (or the file ends / the deadline
-    /// passes, which return whatever was captured). `duration` is observed purely so its
-    /// arrival wakes `mpv_wait_event` immediately rather than on the next timeout tick.
+    /// everything else. And the facts lag `FILE_LOADED` by an instant, staggered: `duration`
+    /// and the demuxer dimensions land first, then `video-params/gamma` a few event-loop
+    /// turns later (paused under `vo=null`, no frame decoded). mpv dispatches property-change
+    /// *notifications* lazily, so instead of waiting for one the loop synchronously re-reads
+    /// the missing facts on every wakeup — and, so a bitstream-tagged HDR file isn't settled
+    /// SDR by returning before its colour tag arrives, keeps pumping past the duration until
+    /// the gamma lands (or a short settle grace lapses, or the file ends / deadline passes).
+    /// An audio-only file (no video track, so no dimensions) carries no gamma and returns as
+    /// soon as the duration does. `duration` is observed purely so its arrival wakes
+    /// `mpv_wait_event` immediately rather than on the next timeout tick.
     private static func probeMetadata(at url: URL, isCancelled: () -> Bool) -> MediaMetadata {
         guard !isCancelled(), let handle = mpv_create() else { return MediaMetadata() }
         defer { mpv_terminate_destroy(handle) }
@@ -104,6 +108,7 @@ nonisolated enum MPVThumbnailer {
 
         var loaded: MediaMetadata?
         let deadline = Date().addingTimeInterval(15)
+        var colorDeadline: Date?
         while Date() < deadline {
             if isCancelled() { break }
             guard let raw = mpv_wait_event(handle, 0.1) else { continue }
@@ -118,7 +123,14 @@ nonisolated enum MPVThumbnailer {
             if var metadata = loaded {
                 refreshMissingFacts(&metadata, handle)
                 loaded = metadata
-                if metadata.duration != nil { return metadata }
+                if metadata.duration != nil {
+                    // Audio (no video track) carries no gamma; a video file returns once its
+                    // colour tag lands, or when the settle grace since the duration lapses.
+                    if metadata.width == nil || metadata.hdrGamma != nil { return metadata }
+                    let settle = colorDeadline ?? Date().addingTimeInterval(2)
+                    colorDeadline = settle
+                    if Date() >= settle { return metadata }
+                }
             }
         }
         return loaded ?? MediaMetadata()

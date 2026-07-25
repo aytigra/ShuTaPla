@@ -94,6 +94,7 @@ final class ThumbnailService {
         let fingerprint = file.fingerprint
         let recordFileSize = file.fileSizeBytes
         let recordLastModified = file.lastModified
+        let recordIsHDR = file.isHDR
         let isLocal = file.cloudStatus == .local
         let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
 
@@ -110,6 +111,7 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
+            recordIsHDR: recordIsHDR,
             isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )
@@ -158,6 +160,7 @@ final class ThumbnailService {
             fingerprint: nil,
             recordFileSize: nil,
             recordLastModified: nil,
+            recordIsHDR: nil,
             cacheDirectory: cacheDirectory
         ).data
     }
@@ -296,6 +299,7 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
+        recordIsHDR: Bool?,
         isLocal: Bool = true,
         cacheDirectory: URL
     ) async -> (data: Data?, metadata: MediaMetadata) {
@@ -337,7 +341,16 @@ final class ThumbnailService {
                 fileSizeBytes: fileSizeBytes, fingerprint: named.computed, lastModified: lastModified)
             let diskURL = cacheDirectory.appending(path: named.name)
             if !contentChanged, let data = try? Data(contentsOf: diskURL) {
-                if isDecodableImage(data) { return (data, hitMetadata) }
+                if isDecodableImage(data) {
+                    // The header-only reads never decode a still, so an image's HDR-ness is settled by
+                    // the gallery decode alone — which a disk-cache hit skips. Probe it once here (only
+                    // while local and only until the record carries the flag) so an image whose thumbnail
+                    // predates the `isHDR` column still gains the badge (F6). A video settles `isHDR` from
+                    // its colour tags on the list path, so this is images-only.
+                    var served = hitMetadata
+                    if !isVideo, isLocal, recordIsHDR == nil { served.isHDR = imageIsHDR(at: fileURL) }
+                    return (data, served)
+                }
                 // A 0-byte or truncated cache file (an interrupted prior write) reads fine
                 // but can't be decoded into a thumbnail — without this it would "hit"
                 // forever and leave the cell stuck on a placeholder. Drop it and regenerate.
@@ -376,6 +389,7 @@ final class ThumbnailService {
         fingerprint: String?,
         recordFileSize: Int?,
         recordLastModified: Date?,
+        recordIsHDR: Bool?,
         isLocal: Bool = true,
         cacheDirectory: URL
     ) async -> (image: SendableImage?, metadata: MediaMetadata) {
@@ -388,6 +402,7 @@ final class ThumbnailService {
             fingerprint: fingerprint,
             recordFileSize: recordFileSize,
             recordLastModified: recordLastModified,
+            recordIsHDR: recordIsHDR,
             isLocal: isLocal,
             cacheDirectory: cacheDirectory
         )

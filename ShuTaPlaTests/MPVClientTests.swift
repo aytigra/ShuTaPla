@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import ShuTaPla
 
 /// Exercises `MPVClient` against a real libmpv instance.
@@ -114,7 +115,45 @@ import Foundation
         #expect(seeked == true)
     }
 
-    @Test func settledSeekEmitsPlaybackRestartAtItsPosition() async throws {
+    @Test func absoluteSeekLandsAtExactTarget() async throws {
+        // The scrubber must land where the user pointed (mpv exact/hr-seek), not on a keyframe
+        // near it. Audio can't discriminate the seek flag (PCM has no keyframes — any flag lands
+        // at packet granularity), so this uses the h264 fixture: 1 s, 10 fps, a single keyframe
+        // at 0.0. A keyframe-flagged seek to 0.55 floors all the way back to 0.0; an exact seek
+        // decodes forward to it. Pausing at fileLoaded freezes playback, so once the seek
+        // settles nothing fires anymore — the last observed `time-pos` is the landing itself.
+        let client = try MPVClient(configuration: .silentAudio)
+        defer { client.shutdown() }
+
+        client.loadFile(try MediaFixture.h264.url.path(percentEncoded: false))
+        client.play()
+
+        let landed = Mutex<TimeInterval?>(nil)
+        _ = await withEventTimeout(.seconds(3)) { () -> Bool? in
+            var didSeek = false
+            for await event in client.events {
+                if case .fileLoaded = event, !didSeek {
+                    client.pause()
+                    client.seek(to: 0.55)
+                    didSeek = true
+                }
+                if didSeek, case .timePosition(let value?) = event {
+                    landed.withLock { $0 = value }
+                }
+            }
+            return nil
+        }
+
+        let position = try #require(landed.withLock { $0 }, "no position observed after the seek")
+        #expect(position > 0.4 && position < 0.7, "landed at \(position)")
+    }
+
+    @Test func scrubberSeekEmitsNoForwardStepSettled() async throws {
+        // `.forwardStepSettled` carries only a forward keyframe step's own landing. A plain
+        // scrub's restart must not surface on it — the engine reads the event as an armed step's
+        // landing, and a scrub's position masquerading as one falsely reads as end-of-file.
+        // Playing ~0.5s past the scrub target leaves the scrub's restart plenty of time to have
+        // drained before the check concludes.
         let url = try writeTempWAV(seconds: 30)
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -124,23 +163,92 @@ import Foundation
         client.loadFile(url.path(percentEncoded: false))
         client.play()
 
-        // The initial load also fires a restart (at ~0); the position filter selects the
-        // seek's own settle, proving the event carries the settled `time-pos`.
-        let settled = await withEventTimeout(.seconds(8)) { () -> TimeInterval? in
+        let clean = await withEventTimeout(.seconds(8)) { () -> Bool? in
             var didSeek = false
             for await event in client.events {
                 if case .fileLoaded = event, !didSeek {
                     client.seek(to: 10)
                     didSeek = true
                 }
-                if didSeek, case .playbackRestart(let position, _) = event, position >= 9 {
+                if case .forwardStepSettled = event { return false }
+                if didSeek, case .timePosition(let value?) = event, value >= 10.5 {
+                    return true
+                }
+            }
+            return nil
+        }
+
+        #expect(clean == true)
+    }
+
+    @Test func forwardStepDuringScrubSettlesAtItsOwnLanding() async throws {
+        // Real-mpv proof of the step-landing channel: a forward step pressed while the scrub is
+        // still settling emits exactly one `.forwardStepSettled`, at the step's own landing —
+        // strictly past the scrub target, since the step adds its epsilon and the WAV's seek
+        // granularity (~50 ms chunks) is finer than the epsilon. A scrub's exact seek lands at
+        // its target, never past it, so a settled position above it proves the event was not
+        // the scrub's restart misattributed to the step.
+        let url = try writeTempWAV(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let client = try MPVClient(configuration: .silentAudio)
+        defer { client.shutdown() }
+
+        client.loadFile(url.path(percentEncoded: false))
+        client.play()
+
+        let settled = await withEventTimeout(.seconds(8)) { () -> TimeInterval? in
+            var didSeek = false
+            for await event in client.events {
+                if case .fileLoaded = event, !didSeek {
+                    client.seek(to: 10)
+                    client.stepKeyframe(forward: true)   // pressed while the scrub is in flight
+                    didSeek = true
+                }
+                if case .forwardStepSettled(let position, _) = event {
                     return position
                 }
             }
             return nil
         }
 
-        #expect(settled != nil)
+        let position = try #require(settled)
+        #expect(position > 10.0 && position < 11, "settled at \(position)")
+    }
+
+    @Test func armedBackStepDoesNotYankTheNextLoadedFile() async throws {
+        // F3: a backward keyframe step whose anchor seek produces no restart (pressed with no
+        // file loaded) leaves `pendingBackStep` armed. The next file's load fires
+        // PLAYBACK_RESTART, which must NOT complete that stale step — otherwise the fresh file is
+        // yanked back to its previous keyframe. The h264 fixture has a single keyframe at 0.0, so
+        // a stray keyframe hop floors a 0.55 s start all the way to 0.0; an untouched load, paused
+        // at fileLoaded so nothing drifts, stays at ~0.55.
+        let client = try MPVClient(configuration: .silentAudio)
+        defer { client.shutdown() }
+
+        // Arm the back step first: FIFO on the serial queue runs this before the load below, and
+        // with nothing loaded the anchor seek errors — no restart, so the flag stays set.
+        client.stepKeyframe(forward: false)
+        client.loadFile(try MediaFixture.h264.url.path(percentEncoded: false), startingAt: 0.55)
+        client.play()
+
+        let landed = Mutex<TimeInterval?>(nil)
+        _ = await withEventTimeout(.seconds(3)) { () -> Bool? in
+            var didPause = false
+            for await event in client.events {
+                if case .fileLoaded = event, !didPause {
+                    client.pause()
+                    didPause = true
+                }
+                if case .timePosition(let value?) = event {
+                    landed.withLock { $0 = value }
+                }
+            }
+            return nil
+        }
+
+        let position = try #require(landed.withLock { $0 }, "no position observed after the load")
+        #expect(position > 0.4, "the armed back step yanked the fresh load to \(position)")
     }
 
     @Test func volumeRoundTrips() throws {
