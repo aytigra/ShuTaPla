@@ -264,8 +264,17 @@ final class AppState {
     /// Resolves one identifier from a file sequence to its model, or nil if it no longer exists.
     /// A view realizing a row resolves only that row through here, so a large sequence is never
     /// materialized at once; one-shot action paths resolve just the rows they act on.
+    ///
+    /// Resolved by a `persistentModelID` fetch, not `model(for:)`: a `model(for:)` hands back a
+    /// **non-nil invalidated instance** for a deleted-and-saved row (its context, `isDeleted`,
+    /// and registration all still read as live), and the first persisted-property read on it
+    /// traps. A fetch drops the deleted row and returns nil. The default `includePendingChanges`
+    /// keeps this equivalent to `model(for:)` for live rows — a pending insert still resolves and
+    /// a dirty row is returned unchanged (no refault).
     func file(for id: PersistentIdentifier) -> PlaylistFile? {
-        modelContext.model(for: id) as? PlaylistFile
+        var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.persistentModelID == id })
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
     }
 
     /// The row identity (`PersistentIdentifier`) of the file with app id `fileID`, or nil if none —

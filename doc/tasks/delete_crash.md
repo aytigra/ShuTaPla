@@ -1,4 +1,4 @@
-# Task 22 — Crash deleting a file from a playlist
+# Crash deleting a file from a playlist
 
 ## Report
 
@@ -110,23 +110,56 @@ Probe (read-only, safe — it never reads a persisted property, so it cannot tra
 insert a `PlaylistFile` → `save` → `delete` → `save` → inspect `model(for: id)` and its
 `.modelContext`.
 
-Expected/needed outcome for the proposed fix:
-- `model(for: id)` returns **non-`nil`** (confirms P1 is a real trap), and
-- the returned instance's `.modelContext == nil` (confirms `isValid` is the correct seam).
+### Experiment result (run 2026-07-26, `DeletedModelResolutionTests`) — P1 confirmed, seam refuted
 
-If instead `model(for:)` returns `nil` for a deleted id, P1 is already safe and the crash lies
-elsewhere — re-open the sweep.
+For a deleted-and-saved id:
+- `model(for: id)` returns a **non-`nil`** invalidated instance → **P1 is a real trap.** ✓
+- But **every instance-metadata seam still reports the object as live**, so `.modelContext != nil`
+  is the wrong seam:
+  - `.modelContext` — stays **non-`nil`** (refutes the proposed `isValid`).
+  - `.isDeleted` — stays **`false`**.
+  - `registeredModel(for:)` — still **returns the instance**.
+- The **only** thing that reflects the deletion is a **fetch keyed on `persistentModelID`**
+  (returns empty). `persistentModelID` itself stays a safe (non-trapping) read on the
+  invalidated instance, so a `fetchCount` keyed on it is a valid, non-trapping validity check.
 
-## Proposed fix (pending the experiment)
+**Pending-record safety of the P1 fetch-resolver** (the constraint: it must not break the
+call sites that rely on `model(for:)` resolving not-yet-saved records). Verified in the same
+tests — an object-returning fetch keyed on `persistentModelID` with the **default
+`includePendingChanges = true`** matches `model(for:)` on every state that matters:
 
-A single validity seam, applied at the three access sites:
+| State | fetch-by-`persistentModelID` |
+|-------|------------------------------|
+| Saved, live | resolves (same instance) |
+| **Unsaved insert** (temporary id) | **resolves** — temporary id matches under `includePendingChanges = true` |
+| **Dirty saved** (modified, unsaved — e.g. mid-metadata-merge) | **resolves, same `===` instance, unsaved edit intact — no refault** |
+| Deleted + saved | returns `nil` |
+
+The refault trap (CLAUDE.md) bites only at `includePendingChanges = false`; the default is
+`true`, so the resolver never refaults a dirty row.
+
+## Proposed fix (corrected after the experiment)
+
+The seam is **fetch-based**, not `modelContext != nil`. Two shapes, one idea (the row still
+exists in the store):
 
 ```swift
 extension PlaylistFile {
-    /// A deleted-and-saved instance drops its context; reading persisted properties on it traps.
-    var isValid: Bool { modelContext != nil }
+    /// A deleted-and-saved instance keeps a live-looking context/registration but its row is gone;
+    /// reading a persisted property on it traps. Only a store fetch reflects the deletion.
+    var isValid: Bool {
+        guard let context = modelContext else { return false }
+        let id = persistentModelID
+        var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.persistentModelID == id })
+        descriptor.fetchLimit = 1
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
 }
 ```
+
+- **P1 (central):** resolve `file(for:)` by a **fetch** keyed on `persistentModelID` instead of
+  `model(for:)` — a deleted row simply fetches empty and the resolver returns `nil`, with no seam
+  needed at the call site. Protects every row/cell/`ManagerSelectionPreview` render in one place.
 
 - **P1 (central):** guard the resolver so an invalidated instance reads as absent —
   `file(for:)` returns `nil` unless `isValid`. Protects every row/cell/`ManagerSelectionPreview`
@@ -158,11 +191,14 @@ coordinator path for any P3 behaviour test (trap class 3).
 
 Status legend: `[ ]` open · `[C]` confirmed (experiment/red done) · `[R]` refuted · `[F]` fixed · `[S]` skipped.
 
-- `[ ]` **Decisive experiment** — `model(for:)` / `.modelContext` behaviour on a deleted-saved id.
-- `[ ]` **P1** — `file(for:)` invalidated-instance guard (primary; fits the report).
+- `[C]` **Decisive experiment** — done (`DeletedModelResolutionTests`, 2 tests green). P1 trap
+  confirmed; the `modelContext != nil` seam refuted; corrected seam is a `persistentModelID` fetch.
+- `[F]` **P1** — `file(for:)` resolved by a `persistentModelID` fetch (`AppState.swift`). Regression
+  `DeletedModelResolutionTests.appStateResolverDropsDeletedRow` (deleted-saved id → nil); pending-record
+  parity covered by the other 4 tests. Build clean, no new navigator warnings.
 - `[ ]` **P2** — post-`await` `isValid` guards in `GalleryCell` (`file.merge` + `hdrCache.record`) / `MediaMetadataService`.
 - `[ ]` **P3** — `isValid` in `persistTimelinePosition`.
 - `[ ]` **P4** — post-`await` `isValid` guard in `ImagePlaybackEngine.decode` before `hdrCache.record`.
 
-Nothing implemented yet — awaiting the experiment result and user confirmation on scope/order.
-To be run on its own branch.
+Experiment done and doc updated with the corrected fetch-based seam — awaiting user confirmation
+on scope/order before implementing P1. On its own branch (`delete-crash-fix`).
