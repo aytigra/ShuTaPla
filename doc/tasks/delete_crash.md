@@ -98,7 +98,7 @@ at the invalidated row when the decode resumes and writes `file.isHDR` → trap.
 
 P3's "image deletes are safe" is specifically about the coordinator's
 `persistTimelinePosition` no-op; it does not cover this in-engine write. Same defect family,
-guarded the same way (`guard file.isValid` after the `await`, before the `isHDR` write).
+guarded the same way (`guard file.existsInStore` after the `await`, before the `isHDR` write).
 
 ## Decisive experiment (run before writing any fix)
 
@@ -147,7 +147,7 @@ exists in the store):
 extension PlaylistFile {
     /// A deleted-and-saved instance keeps a live-looking context/registration but its row is gone;
     /// reading a persisted property on it traps. Only a store fetch reflects the deletion.
-    var isValid: Bool {
+    var existsInStore: Bool {
         guard let context = modelContext else { return false }
         let id = persistentModelID
         var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.persistentModelID == id })
@@ -160,17 +160,13 @@ extension PlaylistFile {
 - **P1 (central):** resolve `file(for:)` by a **fetch** keyed on `persistentModelID` instead of
   `model(for:)` — a deleted row simply fetches empty and the resolver returns `nil`, with no seam
   needed at the call site. Protects every row/cell/`ManagerSelectionPreview` render in one place.
-
-- **P1 (central):** guard the resolver so an invalidated instance reads as absent —
-  `file(for:)` returns `nil` unless `isValid`. Protects every row/cell/`ManagerSelectionPreview`
-  render in one place.
-- **P2:** after each `await`, `guard file.isValid` before `file.merge` /
+- **P2:** after each `await`, `guard file.existsInStore` before `file.merge` /
   `hdrCache.record(hdr, for: file)` / `file.cachedMetadata` (skipping the writes on a deleted
   file is correct — no record to hold the fingerprint/`isHDR`, so the orphan sweep reclaims the
   thumbnail).
-- **P3:** fold `file.isValid` into `persistTimelinePosition`'s existing guard (also hardens the
+- **P3:** fold `file.existsInStore` into `persistTimelinePosition`'s existing guard (also hardens the
   periodic `persistLivePositions` loop against a raced deletion).
-- **P4:** after the decode `await` in `ImagePlaybackEngine.decode`, `guard file.isValid` before
+- **P4:** after the decode `await` in `ImagePlaybackEngine.decode`, `guard file.existsInStore` before
   `hdrCache.record(imageIsHDR:for:)` writes `file.isHDR`.
 
 ## Testing notes
@@ -196,9 +192,33 @@ Status legend: `[ ]` open · `[C]` confirmed (experiment/red done) · `[R]` refu
 - `[F]` **P1** — `file(for:)` resolved by a `persistentModelID` fetch (`AppState.swift`). Regression
   `DeletedModelResolutionTests.appStateResolverDropsDeletedRow` (deleted-saved id → nil); pending-record
   parity covered by the other 4 tests. Build clean, no new navigator warnings.
-- `[ ]` **P2** — post-`await` `isValid` guards in `GalleryCell` (`file.merge` + `hdrCache.record`) / `MediaMetadataService`.
-- `[ ]` **P3** — `isValid` in `persistTimelinePosition`.
-- `[ ]` **P4** — post-`await` `isValid` guard in `ImagePlaybackEngine.decode` before `hdrCache.record`.
+- `[F]` **P2** — `PlaylistFile.existsInStore` seam added (`PersistentModel+Save.swift`, a
+  `persistentModelID` `fetchCount`). `GalleryCell` guards `file.existsInStore` after the thumbnail
+  `await`, before `recordMetadata` + `hdrCache.record` (row existence, not `Task.isCancelled`, so a
+  cancelled-but-live cell still records its fingerprint). `MediaMetadataService.metadata` guards after
+  `extract`, returning an empty `MediaMetadata()` instead of merging/reading `cachedMetadata` on a gone
+  row. Regressions `DeletedModelResolutionTests.existsInStoreReflectsDeletion` /
+  `existsInStoreKeepsUnsavedInsert`. Build clean, no new navigator warnings.
+- `[F]` **P3** — `file.existsInStore` folded into `persistTimelinePosition`'s guard
+  (`PlaybackCoordinator+Persistence.swift`), before the `file.lastPosition` read/write — so a persist
+  landing after the playing file is trashed-and-saved (and `reconcile` jumps away) skips the write
+  instead of trapping. Hardens the periodic `persistLivePositions` loop too (it calls through here).
+  The deleted-file "red" is trap-class (asserting the no-op means reading `lastPosition` on the gone
+  row, which itself traps), so its runnable proof stays the seam test `existsInStoreReflectsDeletion`
+  (`false` for a deleted-saved row); the live-file happy path is held by the existing coordinator
+  persistence tests (`resumedPositionSurvivesPersistBeforeEngineReports`,
+  `writesPositionBeforeJumpingAwayWhenEnabled`, `pendingLoadDoesNotClobberSavedPosition`,
+  `writesPositionEvenWhenPersistenceOff` — all green after the change, so the guard doesn't drop a
+  live file's write). Build clean, no new navigator warnings.
+- `[F]` **P4** — `file.existsInStore` folded into the decode task's `if let` in
+  `ImagePlaybackEngine.decode` (`ImagePlaybackEngine.swift`), before `hdrCache.record(imageIsHDR:for:)`
+  writes `file.isHDR` — so a decode landing after the displayed image is trashed-and-saved (which the
+  image channel's `nil`-`timelineEngine` reconcile does **not** cancel) skips the record instead of
+  trapping. Deleted-file "red" is trap-class (the `isHDR` write on the gone row traps), so its runnable
+  proof stays `existsInStoreReflectsDeletion`; the live happy path is `ImagePlaybackEngineTests`
+  (`decodingHDRImageRecordsTrue` / `decodingSDRImageRecordsFalse`), reworked to insert their file into a
+  held in-memory container so the tested shape is a real in-store file (`existsInStore == true`) rather
+  than a context-less stand-in — both green after the guard, so it doesn't drop a live file's record.
+  Build clean, no new navigator warnings.
 
-Experiment done and doc updated with the corrected fetch-based seam — awaiting user confirmation
-on scope/order before implementing P1. On its own branch (`delete-crash-fix`).
+All four reach paths fixed. On its own branch (`delete-crash-fix`).

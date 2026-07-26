@@ -135,8 +135,10 @@ final class ImagePlaybackEngine: SourceNavigating {
             self.currentImage = decoded
             // The cancel guard means this is still the current load, so `currentFile` is the file
             // just decoded. Record its HDR range from the same decode that drives display — a
-            // decode-time fact, not a header read.
-            if let decoded, let file = self.currentFile {
+            // decode-time fact, not a header read. `existsInStore` covers the deleted-the-displayed-
+            // image race: the image channel's reconcile has no timeline engine, so trashing the shown
+            // file doesn't cancel this decode; a gone-and-saved row would trap on the `isHDR` write.
+            if let decoded, let file = self.currentFile, file.existsInStore {
                 self.hdrCache.record(imageIsHDR: decoded.isHDR, for: file)
             }
         }

@@ -36,7 +36,11 @@ extension PlaybackCoordinator {
     /// 0 that would destroy the file's saved resume point. Callers pass the channel's engine via
     /// `timelineEngine(of:)`, `visualVideoEngine`, or `audioEngine`.
     func persistTimelinePosition(from engine: MPVPlaybackEngine?) {
-        guard let engine, engine.cloudLoad.pendingFile == nil, let file = engine.currentFile else { return }
+        // `existsInStore` guards the deleted-the-playing-file race: `reconcile` jumps away from a
+        // trashed-and-saved `currentFile`, and a persist landing before the new file loads would read
+        // `lastPosition` on the invalidated row and trap. A gone row skips the write (nothing to resume).
+        guard let engine, engine.cloudLoad.pendingFile == nil, let file = engine.currentFile,
+              file.existsInStore else { return }
         // Skip an unchanged write: a channel paused behind the overlay holds a frozen `currentTime`,
         // and SwiftData dirties the row on a same-value set, so writing it every tick would re-fire
         // every `Playlist` query and observer and churn the file list while nothing actually moved.

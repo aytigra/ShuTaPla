@@ -14,15 +14,24 @@ import Testing
 import Foundation
 import CoreGraphics
 import ImageIO
+import SwiftData
 import UniformTypeIdentifiers
 @testable import ShuTaPla
 
 @Suite @MainActor struct ImagePlaybackEngineTests {
 
-    /// A `PlaylistFile` standing in as an identity token (not inserted in a context), so the sink's
-    /// `trySave()` no-ops and the recorded fact is asserted directly on the in-memory model.
-    private func makeFile(_ name: String) -> PlaylistFile {
-        PlaylistFile(relativePath: name, fileName: name)
+    /// A saved `PlaylistFile` in a held in-memory container — the production shape, where the engine's
+    /// `currentFile` always comes from the store, so `existsInStore` reads `true` and the sink's
+    /// `trySave()` persists. The container is returned for the caller to hold for the whole body
+    /// (trap class 1); the recorded HDR fact is asserted on the same live instance.
+    private func makeFile(_ name: String) throws -> (ModelContainer, PlaylistFile) {
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let container = try ModelContainer(
+            for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
+        let file = PlaylistFile(relativePath: name, fileName: name)
+        container.mainContext.insert(file)
+        try container.mainContext.save()
+        return (container, file)
     }
 
     /// Polls `condition` on the main actor until it holds or `timeout` elapses, yielding between
@@ -70,7 +79,8 @@ import UniformTypeIdentifiers
     @Test func decodingHDRImageRecordsTrue() async throws {
         let url = try writeHDRImage()
         defer { try? FileManager.default.removeItem(at: url) }
-        let file = makeFile("hdr.heic")
+        let (container, file) = try makeFile("hdr.heic")
+        _ = container
         let engine = ImagePlaybackEngine()
         defer { engine.stop() }
 
@@ -84,7 +94,8 @@ import UniformTypeIdentifiers
     @Test func decodingSDRImageRecordsFalse() async throws {
         let url = try writeSDRImage()
         defer { try? FileManager.default.removeItem(at: url) }
-        let file = makeFile("sdr.png")
+        let (container, file) = try makeFile("sdr.png")
+        _ = container
         let engine = ImagePlaybackEngine()
         defer { engine.stop() }
 

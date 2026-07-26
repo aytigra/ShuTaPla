@@ -57,11 +57,15 @@ struct GalleryCell: View {
                 image = cached
             } else {
                 let result = await thumbnails.thumbnail(for: file, in: playlist, maxPixelSize: maxPixelSize, folderURL: browsingFolderURL)
-                // Generation runs off-actor and always completes — cancellation can't abort it,
-                // it only flips `Task.isCancelled`. Its result must therefore be handled either
-                // way: the thumbnail is already written to disk keyed by its fingerprint, and this
-                // records that fingerprint on the model. Skipping it would strand the
-                // just-written thumbnail with no live record, so the orphan sweep deletes it.
+                // Generation runs off-actor and always completes — cancellation can't abort it, it
+                // only flips `Task.isCancelled` — so its result is normally recorded either way: the
+                // thumbnail is already on disk keyed by its fingerprint, and this records that
+                // fingerprint on the model. The exception is a file trashed-and-saved while the decode
+                // ran: its row is gone, so any persisted write below would trap. Skip the record on an
+                // deleted file — guarding on the row's existence, not cancellation, so a merely
+                // cancelled-but-live file still records — and let the orphan sweep reclaim the
+                // now-recordless thumbnail.
+                guard file.existsInStore else { return }
                 recordMetadata(result.metadata)
                 // A fresh decode also determined the file's HDR fact (image range or video colour
                 // tags); route it through the sink, the sole writer of the persisted HDR columns. A

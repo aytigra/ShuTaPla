@@ -160,6 +160,33 @@ struct DeletedModelResolutionTests {
         #expect(resolved.duration == 42, "the unsaved dirty edit survives the fetch (no refault)")
     }
 
+    /// The P2/P3/P4 regression, at the real API: `PlaylistFile.existsInStore` (the shared post-`await`
+    /// guard the decode producers use) is `true` for a live file, `false` for a deleted-and-saved
+    /// one, and reading it on the invalidated instance is itself non-trapping.
+    @Test func existsInStoreReflectsDeletion() throws {
+        let (container, context, file) = try insertedFile()
+        _ = container
+
+        #expect(file.existsInStore == true, "a live saved file's row exists")
+
+        context.delete(file)
+        try context.save()
+
+        #expect(file.existsInStore == false, "a deleted-saved file's row is gone, read without trapping")
+    }
+
+    /// `existsInStore` must not drop an unsaved insert: a pending-insert file (temporary id, never
+    /// saved) is a live object, so the guard keeps its mid-decode metadata merge.
+    @Test func existsInStoreKeepsUnsavedInsert() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let file = PlaylistFile(relativePath: "fresh.mp4", fileName: "fresh.mp4", taggingStatus: .valid, sortOrder: 0)
+        context.insert(file)   // no save — temporary persistentModelID
+
+        #expect(file.existsInStore == true, "an unsaved insert reads as present")
+    }
+
     /// The P1 regression, at the real API: `AppState.file(for:)` resolves a live id and returns
     /// **nil** for a deleted-and-saved id — the outgoing-row render then finds no file and skips
     /// the persisted-property reads that trapped. Pre-fix (`model(for:)`) this returned a non-nil

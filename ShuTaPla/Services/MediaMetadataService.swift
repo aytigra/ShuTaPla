@@ -39,6 +39,10 @@ final class MediaMetadataService {
             mediaType: playlist.mediaType,
             isSkipped: file.isSkipped
         )
+        // The file may have been trashed-and-saved during the off-actor extract; its row is then gone,
+        // and merging or reading a persisted field below would trap. Return an empty bundle — the caller
+        // only paints badges on a cell that's already leaving the screen.
+        guard file.existsInStore else { return MediaMetadata() }
         file.merge(found)
         // Persist the freshly extracted facts immediately: an autosave-pending merge is discarded if a
         // later `includePendingChanges = false` object fetch refaults the record before it flushes.
