@@ -17,8 +17,11 @@ extension AppState {
 
     // MARK: - Requests
 
-    /// Requests confirmation to trash the current file-list selection (Manager
-    /// `[delete]`). Returns whether there was anything selected to delete.
+    /// Requests confirmation to trash the current file-list selection (Manager `[delete]`).
+    /// Resolves the *visible* selection (`visibleSelectedManagerFiles`), not the whole editor
+    /// selection: a file edited out of the effective filter stays in the tag editor but must not be
+    /// trashable by a bare `[delete]` it can no longer see — so an all-filtered-out selection makes
+    /// `[delete]` a safe no-op. Returns whether there was anything visible to delete.
     @discardableResult
     func requestDeleteSelectedFiles() -> Bool {
         let files = visibleSelectedManagerFiles()

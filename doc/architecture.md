@@ -213,7 +213,7 @@ A file's HDR range is determined only by **decoding it for display** — one mec
 
 Output takes two paths, each gating on the hosting display's EDR headroom (`NSScreen.supportsEDR`):
 
-- **Video** passes through to EDR displays via the `MPVOpenGLLayer` (float backbuffer, `wantsExtendedDynamicRangeContent`, extended-sRGB colorspace) paired with mpv's `--target-colorspace-hint=yes`. At load the engine pre-configures the layer from the cached `hdrGamma`/`hdrPrimaries` (`HDRVideoConfig.decide`), so a file decoded before opens HDR without the SDR→HDR flash; the live pass re-applies once the decode confirms the tags.
+- **Video** is driven per file by `HDRVideoConfig.decide(gamma:primaries:displaySupportsEDR:)`. HDR engages only when the content is PQ/HLG in a wide gamut (Display P3 or Rec.2020) and the display has EDR headroom: mpv is told (`target-prim`/`target-trc`/`target-peak`) to emit that gamut in PQ into the `MPVOpenGLLayer`'s float backbuffer rather than tone-mapping to SDR, and the layer is tagged `wantsExtendedDynamicRangeContent` with the matching PQ colorspace (`displayP3_PQ`/`itur_2100_PQ`) that the OS tone-mapper needs; everything else applies the SDR config (sRGB, no EDR). At load the engine pre-configures from the cached `hdrGamma`/`hdrPrimaries`, so a file decoded before opens HDR without the SDR→HDR flash; a live pass on `video-params` re-applies authoritatively once the decode confirms the tags.
 - **Image** hosts the decoded `CGImage` (which carries its own HDR colour space) in a raw `CALayer` (`EDRImageLayer`, `HDRImageConfig.decide`) that opts into extended dynamic range when the image is HDR, letting the OS tone-mapper present it. A raw layer rather than `NSImageView` because only `contentsGravity` can express aspect-fill.
 
 ---
@@ -280,34 +280,32 @@ Repo-root Xcode file-system-synchronized groups: `ShuTaPla/` (app source), `ShuT
 Within `ShuTaPla/`:
 
 ```
-App/         ShuTaPlaApp (@main, scene, container), AppConstants (extension maps, thresholds)
-Models/      Playlist, PlaylistFile, Tag, AppStateModel, GlobalSettings (@Model);
-             PlaylistPreferences, FilterState, SavedSearch (Codable); Enums
-State/       AppState, PlaybackCoordinator, OverlayManager, HotkeyRouter
-Services/    FileSystemService (actor), PlaylistScanActor (@ModelActor), TagParser,
-             BookmarkService, ThumbnailService, MPVThumbnailer, AudioStripper, DurationService,
-             CloudFileService, HDRDetection (HDRCache sink + VideoColorTags map)
-MPV/         MPVClient, MPVVideoView (NSView + CAOpenGLLayer), MPVEvent, HDRVideoConfig, Cmpv/ (Clang module)
-FFmpeg/      Cffmpeg/ (Clang module)
-Engines/     VideoPlaybackEngine, AudioPlaybackEngine, ImagePlaybackEngine, HDRImageConfig, CloudLoadGate
-Views/
-  Welcome/         WelcomeView
-  Manager/         ManagerView, ManagerSplitScene, PlaylistSidebar, PlaylistCenterView,
-                   FilterBar, PlaylistTagsView, TagSidebar
-  FileCollection/  FileCollectionView, PagedList + GalleryPagedList (windowed containers),
-                   FileListSurface, FileListRow, GalleryCell, FileGalleryCell, GalleryGrid,
-                   FileSelection, FileContextMenu, FileRowView
-  Player/          PlayerView, VideoPlayerView, ImagePlayerView, EDRImageLayer, PauseOverlay, PlaybackControlsBar
-  Audio/           AudioInlet, AudioOverlay
-  Shared/          TagEditorView, TagTokenField, FlowLayout, VisualOverlay, LibrarySurface,
-                   HoverZone, ControlButtonStyle, RenameFileField
-  Settings/        SettingsView
-Extensions/  URL+MediaType, URL+Fingerprint, Array+Move, NSWindow+Fullscreen,
-             AVURLAsset+Metadata, NSScreen+EDR
-Resources/   Assets.xcassets
+App/          @main entry point — app scene and ModelContainer wiring — plus AppConstants
+              (extension→media-type maps, thresholds).
+Models/       SwiftData @Model entities and their embedded Codable value types (preferences,
+              filters, saved searches); Migrations/ (versioned schemas + plan) and queries/
+              (scoped ModelContext accessors for the hot paths).
+State/        @MainActor @Observable AppState and its AppState/ partials, playback-sequence
+              bookkeeping, and the scoped-folder-access session manager.
+Coordinators/ The cross-cutting runtime @Observable orchestrators — PlaybackCoordinator (routes
+              across engines), HotkeyRouter (routes input), OverlayManager (overlay/key context).
+Services/     Off-main and stateless workers — FileSystemService, PlaylistScanActor, tag
+              parsing, bookmarks, thumbnail/metadata/duration extraction, cloud-file and HDR
+              detection, audio stripping.
+MPV/          The libmpv bridge — client wrapper, OpenGL render view/layer, event stream,
+              HDR-video config — and the Cmpv Clang module.
+FFmpeg/       The Cffmpeg Clang module (duration probing).
+Engines/      The video/audio/image playback engines that each wrap one medium, plus their
+              direct support (playback source/navigation, cloud load gate, HDR image config).
+Views/        The SwiftUI tree — welcome, manager, player, audio, and settings surfaces — with
+              FileCollection/ (windowed list + gallery) and Shared/ (reusable controls, window
+              bridges) subfolders.
+Extensions/   Small extensions on standard and framework types (URL, Array, NSScreen, CGImage,
+              PersistentModel, …).
+Assets.xcassets, AppIcon.icon — the colour asset catalog and the app icon.
 ```
 
-Tests (`ShuTaPlaTests/`, Swift Testing) cover `TagParser`, `FileSystemService`, `PlaybackCoordinator`, `OverlayManager`, and `HotkeyRouter`.
+`ShuTaPlaTests/`: Swift Testing, unit tests.
 
 
 ---

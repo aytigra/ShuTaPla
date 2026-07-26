@@ -74,6 +74,26 @@ import Foundation
         #expect(elapsed < .seconds(6), "probe stalled \(elapsed) — expected a prompt settle-grace return")
     }
 
+    // A loadable-but-frameless file reaches the libmpv frame path when AVFoundation yields no
+    // frame. The `image` VO never writes a PNG, so `extract` returns no frame — but it must return
+    // promptly, not spin its 15 s deadline and block the single serial lane behind it. A frameless
+    // file has no video content to sustain a loaded-and-paused state, so mpv ends it with
+    // `END_FILE`, which is the loop's terminal case: an audio-only container (no enabled video
+    // track under `audio=no`) and a truncated container (video track detected, frame undecodable)
+    // alike come back in well under a second.
+    @Test(arguments: [FramelessFixture.audioOnly, .truncatedVideo])
+    func framelessFileReturnsBeforeDeadline(_ fixture: FramelessFixture) async throws {
+        let url = try fixture.makeURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let clock = ContinuousClock()
+        let start = clock.now
+        let frame = await MPVThumbnailer.frame(at: url, maxPixelSize: 200)
+        let elapsed = clock.now - start
+
+        #expect(frame.image == nil, "\(fixture): a frameless file has no frame to extract")
+        #expect(elapsed < .seconds(6), "\(fixture): extract stalled \(elapsed) — expected a prompt terminal return")
+    }
+
     // Both extraction paths race mpv's own startup and property updates: an initial idle
     // event can precede the load, and `duration` can lag `FILE_LOADED` by an instant.
     // A single call passes most of the time, so only repetition exposes a bail that
@@ -88,6 +108,31 @@ import Foundation
             let frame = await MPVThumbnailer.frame(at: url, maxPixelSize: 200)
             #expect(frame.metadata.duration != nil, "frame attempt \(attempt): no duration")
             #expect(frame.metadata.width != nil, "frame attempt \(attempt): no width")
+        }
+    }
+}
+
+/// The two ways a file reaches the libmpv frame path yet yields no frame — both terminating via
+/// `END_FILE` rather than stalling the extract loop.
+enum FramelessFixture: CustomStringConvertible {
+    /// An audio-only container: a silent WAV. Under `extract`'s `audio=no` it has no enabled track.
+    case audioOnly
+    /// A container whose video track the demuxer detects (dimensions and duration read at
+    /// `FILE_LOADED`) but whose frame data is truncated away, so no frame ever decodes.
+    case truncatedVideo
+
+    var description: String { self == .audioOnly ? "audio-only" : "truncated-video" }
+
+    /// A fresh temp file the caller removes when done.
+    func makeURL() throws -> URL {
+        switch self {
+        case .audioOnly:
+            return try writeTempWAV(seconds: 1)
+        case .truncatedVideo:
+            let head = try Data(contentsOf: MediaFixture.vp9.url).prefix(2048)
+            let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).webm")
+            try head.write(to: url)
+            return url
         }
     }
 }

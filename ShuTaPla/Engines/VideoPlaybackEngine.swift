@@ -28,27 +28,19 @@ final class VideoPlaybackEngine: MPVPlaybackEngine {
     /// so an HDR file opens straight to its PQ layer instead of flashing SDR for the first frames
     /// (and a following SDR file resets to SDR at once, not on its first params). Cached tags are
     /// best-effort — `nil` for a never-displayed file, or a determined SDR — and the authoritative
-    /// pass on live `video-params` (see `handle`) corrects the decision either way.
+    /// pass on live `video-params` (the base engine's `.videoWidth` decode signal) corrects the
+    /// decision either way.
     override func load(_ file: PlaylistFile?, resource: String, startingAt position: TimeInterval? = nil) {
         super.load(file, resource: resource, startingAt: position)
         applyColorOutput(gamma: file?.hdrGamma, primaries: file?.hdrPrimaries)
     }
 
-    /// Re-applies colour output authoritatively when a file's decoded video params first arrive.
-    /// `dwidth` (`.videoWidth`) turning positive is that signal — decode is up, so `video-params/*`
-    /// are valid — and it is stable per file, so this runs once per file.
-    override func handle(_ event: MPVEvent) {
-        super.handle(event)
-        if case .videoWidth(let width?) = event, width > 0 {
-            applyColorOutput(gamma: client.stringProperty("video-params/gamma"),
-                             primaries: client.stringProperty("video-params/primaries"))
-        }
-    }
-
     /// Decides the output config from the given transfer/primaries and the hosting screen's EDR
     /// headroom, then applies it to both mpv (`target-*`) and the layer. In the render-API path
     /// mpv can't see that our layer is EDR-capable, so without this it tone-maps HDR down to SDR.
-    private func applyColorOutput(gamma: String?, primaries: String?) {
+    /// The base engine reads a file's decoded `video-params` once when decode comes up and drives
+    /// this override authoritatively; `load` pre-applies it from the file's cached tags.
+    override func applyColorOutput(gamma: String?, primaries: String?) {
         let supportsEDR = (renderView.window?.screen ?? NSScreen.main)?.supportsEDR ?? false
         let config = HDRVideoConfig.decide(
             gamma: gamma ?? "", primaries: primaries ?? "", displaySupportsEDR: supportsEDR)

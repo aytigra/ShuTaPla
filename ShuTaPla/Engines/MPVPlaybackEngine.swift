@@ -245,12 +245,18 @@ class MPVPlaybackEngine: SourceNavigating {
             duration = value ?? 0
         case .videoWidth(let value):
             videoSize.width = CGFloat(value ?? 0)
-            // `dwidth` turning positive means decode is up, so `video-params/*` are valid — the same
-            // signal the video engine steers output on. Capture the decoded file's HDR tags here,
-            // beside the size from the same decode. A file with no video track never reaches this
-            // (its width stays 0); a `vo=null` decode still reads valid params, so recording is a
-            // property of decoding video, not of the output surface.
-            if let value, value > 0 { recordColorTags() }
+            // `dwidth` turning positive means decode is up, so `video-params/*` are valid. Read the
+            // decoded file's colour tags once here and feed both consumers: the HDR cache (the
+            // decode-time fact, recorded beside the size from the same decode) and the output surface
+            // (`VideoPlaybackEngine` steers its EDR layer from them; the base engine has none). A file
+            // with no video track never reaches this (its width stays 0); a `vo=null` decode still
+            // reads valid params, so both are a property of decoding video, not of the output surface.
+            if let value, value > 0 {
+                let gamma = client.stringProperty("video-params/gamma")
+                let primaries = client.stringProperty("video-params/primaries")
+                recordColorTags(gamma: gamma, primaries: primaries)
+                applyColorOutput(gamma: gamma, primaries: primaries)
+            }
         case .videoHeight(let value):
             videoSize.height = CGFloat(value ?? 0)
         case .pausedChanged(let paused):
@@ -299,15 +305,19 @@ class MPVPlaybackEngine: SourceNavigating {
     // MARK: - Helpers
 
     /// Records the decoded video's HDR colour tags to the cache for the current file, from the live
-    /// `video-params` the decode exposes. Called from the `.videoWidth` handler once decode is up.
-    /// A `nil` gamma here is a genuine SDR reading (the file carries no PQ/HLG transfer), settling a
-    /// determined `false` — never a guess, since this only runs off a real decode.
-    private func recordColorTags() {
+    /// `video-params` the `.videoWidth` handler reads once decode is up. A `nil` gamma here is a
+    /// genuine SDR reading (the file carries no PQ/HLG transfer), settling a determined `false` —
+    /// never a guess, since this only runs off a real decode.
+    private func recordColorTags(gamma: String?, primaries: String?) {
         guard let file = currentFile else { return }
-        hdrCache.record(gamma: client.stringProperty("video-params/gamma"),
-                        primaries: client.stringProperty("video-params/primaries"),
-                        for: file)
+        hdrCache.record(gamma: gamma, primaries: primaries, for: file)
     }
+
+    /// Applies output colour from a file's colour tags. The base engine (audio, `vo=null`) has no
+    /// render surface and does nothing; `VideoPlaybackEngine` overrides this to steer its EDR layer
+    /// and mpv's `target-*` props. Called with the file's tags cached before decode (`load`) and with
+    /// the live `video-params` once decode comes up (`.videoWidth`).
+    func applyColorOutput(gamma: String?, primaries: String?) {}
 
     /// Whether a settled forward keyframe step means the end of the file. Two independent
     /// signals, each sufficient:
@@ -322,6 +332,15 @@ class MPVPlaybackEngine: SourceNavigating {
     ///   rendering (frozen at EOF) from one that never produced a frame — an audio-only file in a
     ///   video playlist, or a render context not yet created — whose count is pinned at 0 and
     ///   would otherwise read as flat and skip the file on every forward press.
+    ///
+    /// The frames term rests on an ordering: the render-update count (bumped on mpv's render
+    /// thread, `MPVClient.renderUpdateCount`) must already reflect the landing frame by the time
+    /// `PLAYBACK_RESTART` samples it into `.forwardStepSettled` (`MPVClient.drainEvents`). If a
+    /// healthy step's restart were sampled before its frame's callback landed, the count would read
+    /// flat and the step would be skipped as if frozen. This is accepted: the term is load-bearing
+    /// for the genuine frozen-EOF case (position alone would strand a forward press on the dead last
+    /// frame), the inversion is not observed in practice, and it self-corrects — a forward press
+    /// from the file it advanced to behaves normally.
     nonisolated static func advanceAfterForwardStep(
         from origin: TimeInterval, to settled: TimeInterval,
         framesAtArm: UInt64, framesAtSettle: UInt64

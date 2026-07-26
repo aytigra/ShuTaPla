@@ -33,8 +33,9 @@ field traps.
 | # | Path | How the deleted file is reached | Site | Fits *this* report? |
 |---|------|---------------------------------|------|---------------------|
 | P1 | **Row / gallery re-render** | re-resolved via `model(for:)`, which returns a **non-`nil` invalidated instance** for a deleted id | `AppState.file(for:)` (`State/AppState.swift:268`) → `FileListRow`/`GalleryCell` body | **Yes** — no engine, no in-flight work, cached data |
-| P2 | **In-flight decode** | strongly captured in a cancelled `.task` that still completes off-actor, then writes the model | `GalleryCell.swift:64` (`file.merge`), `MediaMetadataService.swift:42/46` | No (cached ⇒ nothing in flight) — still latent |
+| P2 | **In-flight decode** | strongly captured in a cancelled `.task` that still completes off-actor, then writes the model | `GalleryCell.swift:64` (`file.merge`) + `:69` (`hdrCache.record`), `MediaMetadataService.swift:42/46` | No (cached ⇒ nothing in flight) — still latent |
 | P3 | **Deleting the playing file** | strongly held in `engine.currentFile` | `PlaybackCoordinator+Persistence.swift:43` (`file.lastPosition`) | No (not playing) — still latent |
+| P4 | **Image-engine decode** | strongly held in `engine.currentFile`, written after `await` by the image decode task, which a delete does **not** cancel (image channel's `timelineEngine` is `nil`) | `ImagePlaybackEngine.swift:140` (`hdrCache.record(imageIsHDR:for:)` → `file.isHDR`) | No (from Manager, not the player) — still latent |
 
 ### P1 — the row re-render (primary suspect for the observed crash)
 
@@ -68,7 +69,9 @@ Both Manager cells run a `.task` capturing the `PlaylistFile` strongly, `await` 
 decode, then write the model:
 - `GalleryCell.swift:64` runs `file.merge(result.metadata)` **before** its `guard
   !Task.isCancelled` (`:68`) — deliberately, so a cancelled task still records the fingerprint —
-  so a delete during generation resumes and merges into the invalidated model.
+  so a delete during generation resumes and merges into the invalidated model. The same task
+  has a second pre-guard write, `hdrCache.record(hdr, for: file)` (`:69`), which sets
+  `file.isHDR` — same trap, same fix.
 - `MediaMetadataService.metadata` (`:42` `file.merge(found)`, `:46` `return file.cachedMetadata`)
   is called from both `GalleryCell.swift:76` and `FileRowView.swift:69`; the pre-`await`
   reads (`hasCompleteMetadata`, `cloudStatus`) are safe, the post-`await` writes/reads are not.
@@ -81,8 +84,21 @@ Delete the playing file on a **video/audio** channel → `reconcile` sees `curre
 sequence → `jump(playlist, to: first)` → `persistTimelinePosition(from:)`
 (`PlaybackCoordinator+Persistence.swift:39`) reads `file.lastPosition` on the just-deleted
 `engine.currentFile` before the new file loads → trap. The **image** channel's
-`timelineEngine(of:)` is `nil`, so it no-ops — image deletes are safe. Not the reported crash
-(file wasn't playing) but a real latent crash on the same pattern.
+`timelineEngine(of:)` is `nil`, so *this coordinator persistence path* no-ops. Not the reported
+crash (file wasn't playing) but a real latent crash on the same pattern.
+
+### P4 — image-engine decode writes the model post-`await` (latent)
+
+The one path where "image deletes are safe" does not hold. `ImagePlaybackEngine.decode()`
+calls `hdrCache.record(imageIsHDR: for: self.currentFile)` (`ImagePlaybackEngine.swift:140`),
+which sets `file.isHDR` (a persisted property) and `trySave()`s, **after** an `await` and with
+no validity guard. The image channel's reconcile has a `nil` `timelineEngine`, so a delete of
+the displayed image does **not** cancel the in-flight decode — `self.currentFile` still points
+at the invalidated row when the decode resumes and writes `file.isHDR` → trap.
+
+P3's "image deletes are safe" is specifically about the coordinator's
+`persistTimelinePosition` no-op; it does not cover this in-engine write. Same defect family,
+guarded the same way (`guard file.isValid` after the `await`, before the `isHDR` write).
 
 ## Decisive experiment (run before writing any fix)
 
@@ -116,10 +132,13 @@ extension PlaylistFile {
   `file(for:)` returns `nil` unless `isValid`. Protects every row/cell/`ManagerSelectionPreview`
   render in one place.
 - **P2:** after each `await`, `guard file.isValid` before `file.merge` /
-  `file.cachedMetadata` (skipping the merge on a deleted file is correct — no record to hold the
-  fingerprint, so the orphan sweep reclaims the thumbnail).
+  `hdrCache.record(hdr, for: file)` / `file.cachedMetadata` (skipping the writes on a deleted
+  file is correct — no record to hold the fingerprint/`isHDR`, so the orphan sweep reclaims the
+  thumbnail).
 - **P3:** fold `file.isValid` into `persistTimelinePosition`'s existing guard (also hardens the
   periodic `persistLivePositions` loop against a raced deletion).
+- **P4:** after the decode `await` in `ImagePlaybackEngine.decode`, `guard file.isValid` before
+  `hdrCache.record(imageIsHDR:for:)` writes `file.isHDR`.
 
 ## Testing notes
 
@@ -141,7 +160,9 @@ Status legend: `[ ]` open · `[C]` confirmed (experiment/red done) · `[R]` refu
 
 - `[ ]` **Decisive experiment** — `model(for:)` / `.modelContext` behaviour on a deleted-saved id.
 - `[ ]` **P1** — `file(for:)` invalidated-instance guard (primary; fits the report).
-- `[ ]` **P2** — post-`await` `isValid` guards in `GalleryCell` / `MediaMetadataService`.
+- `[ ]` **P2** — post-`await` `isValid` guards in `GalleryCell` (`file.merge` + `hdrCache.record`) / `MediaMetadataService`.
 - `[ ]` **P3** — `isValid` in `persistTimelinePosition`.
+- `[ ]` **P4** — post-`await` `isValid` guard in `ImagePlaybackEngine.decode` before `hdrCache.record`.
 
 Nothing implemented yet — awaiting the experiment result and user confirmation on scope/order.
+To be run on its own branch.
