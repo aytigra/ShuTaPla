@@ -214,4 +214,30 @@ struct DeletedModelResolutionTests {
 
         #expect(app.file(for: id) == nil, "returns nil for a deleted-saved id — no invalidated instance escapes")
     }
+
+    /// The `$0.persistentModelID == id` predicate is novel here — every other query filters on
+    /// `$0.playlist?.persistentModelID`, never the entity's own id — so this proves it actually
+    /// *discriminates* the requested row rather than translating to match-all / match-none (which a
+    /// single-row test could not distinguish). Two saved files: each id resolves to its own instance
+    /// and never the other. Covers the shared `ModelContext.file(for:)` seam both resolvers route
+    /// through. No delete, single-context — no trap-class concern.
+    @Test func resolverDiscriminatesAmongRows() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let file1 = PlaylistFile(relativePath: "a.mp4", fileName: "a.mp4", taggingStatus: .valid, sortOrder: 0)
+        let file2 = PlaylistFile(relativePath: "b.mp4", fileName: "b.mp4", taggingStatus: .valid, sortOrder: 1)
+        context.insert(file1)
+        context.insert(file2)
+        try context.save()
+        let id1 = file1.persistentModelID
+        let id2 = file2.persistentModelID
+
+        let app = AppState(modelContext: context, makeVideoEngine: { try AudioPlaybackEngine() })
+
+        #expect(app.file(for: id1) === file1, "id1 resolves to file1")
+        #expect(app.file(for: id1) !== file2, "id1 never resolves to file2")
+        #expect(app.file(for: id2) === file2, "id2 resolves to file2")
+        #expect(app.file(for: id2) !== file1, "id2 never resolves to file1")
+    }
 }

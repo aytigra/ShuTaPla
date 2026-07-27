@@ -1289,4 +1289,62 @@ import SwiftData
         coordinator.play(audio)
         #expect(coordinator.isPositionPersistLoopRunning)
     }
+
+    // MARK: - Deleted-row resolution (P6)
+
+    /// The coordinator's id→model resolver `resolveFile(in:)` must honor `availableFile`'s contract —
+    /// "an identifier `resolve` can't realize (a row gone since the fetch) is skipped": it resolves a
+    /// live id to its instance and returns **nil** for a deleted-and-saved id. A `model(for:)` resolver
+    /// hands back a non-nil invalidated instance for a gone row, which the walk's `isAvailable` would
+    /// then read `cloudStatus` on and trap; this asserts the fetch resolver drops it. Only nil-ness /
+    /// identity is read here — never a persisted property on the resolved instance — so the deleted-row
+    /// case cannot trap the host.
+    @Test func resolveFileDropsDeletedRow() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["clip.mp4"])
+        let playlist = makePlaylist(.video, folder: folder, files: [], in: context)
+        let file = insertFile("clip.mp4", order: 0, to: playlist, in: context)
+        try context.save()
+        let id = file.persistentModelID
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        #expect(coordinator.resolveFile(in: playlist)(id) === file, "resolves a live id to its instance")
+
+        context.delete(file)
+        try context.save()
+
+        #expect(coordinator.resolveFile(in: playlist)(id) == nil, "returns nil for a deleted-saved id — no invalidated instance escapes")
+    }
+
+    /// The payoff: `availableFile` walking a sequence that still lists a deleted-and-saved id (a
+    /// stale memo the deletion hasn't bumped) skips that id and lands on the next live file, without
+    /// trapping. With the fetch resolver a gone id resolves to nil and the walk `continue`s past it;
+    /// a `model(for:)` resolver would instead hand back an invalidated instance and `isAvailable`
+    /// would read `cloudStatus` on it and trap the host — so this can only be asserted green (never
+    /// run red against the old resolver).
+    @Test func availableFileSkipsDeletedRowInSequence() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["a.mp4", "b.mp4"])
+        let playlist = makePlaylist(.video, folder: folder, files: [], in: context)
+        let a = insertFile("a.mp4", order: 0, to: playlist, in: context)
+        let b = insertFile("b.mp4", order: 1, to: playlist, in: context)
+        try context.save()
+        let staleSequence = [a.persistentModelID, b.persistentModelID]   // the memo still lists both
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        context.delete(a)
+        try context.save()
+
+        let landed = PlaybackCoordinator.availableFile(
+            in: staleSequence, from: staleSequence[0], forward: true, includeStart: true,
+            resolve: coordinator.resolveFile(in: playlist), isAvailable: coordinator.isAvailable
+        )
+        #expect(landed === b, "the walk skips the deleted id and lands on the next live file")
+    }
 }

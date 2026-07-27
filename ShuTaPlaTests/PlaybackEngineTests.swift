@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import AppKit
+import SwiftData
 @testable import ShuTaPla
 
 /// Exercises the playback engines.
@@ -66,6 +67,20 @@ import AppKit
     /// A `PlaylistFile` standing in as an identity token (not inserted in a context).
     private func makeFile(_ name: String) -> PlaylistFile {
         PlaylistFile(relativePath: name, fileName: name)
+    }
+
+    /// A saved `PlaylistFile` in a held in-memory container — the production shape, where a live
+    /// decode's `currentFile` comes from the store, so `existsInStore` reads `true` and the HDR
+    /// record persists. The container is returned for the caller to hold for the whole body (trap
+    /// class 1); the recorded fact is asserted on the same live instance.
+    private func makeStoredFile(_ name: String) throws -> (ModelContainer, PlaylistFile) {
+        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let container = try ModelContainer(
+            for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
+        let file = PlaylistFile(relativePath: name, fileName: name)
+        container.mainContext.insert(file)
+        try container.mainContext.save()
+        return (container, file)
     }
 
     // MARK: - mpv engine (via AudioPlaybackEngine)
@@ -544,7 +559,8 @@ import AppKit
         // decoded-params handler records the file's HDR tags to its `HDRCache`. A real BT.2020-PQ
         // fixture must settle `isHDR == true` with its gamma cached — the decode-time fact the badge
         // and the pre-configured PQ layer read, produced only by an actual decode.
-        let file = makeFile("hdr")
+        let (container, file) = try makeStoredFile("hdr")
+        _ = container
         let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.load(file, at: try MediaFixture.hdr.url)
@@ -557,13 +573,30 @@ import AppKit
     @Test func videoDecodeRecordsSDRAsDeterminedFalse() async throws {
         // A decoded SDR video (no PQ/HLG transfer) settles a *determined* `false`, not a left-`nil`,
         // so the gallery won't treat the file as HDR-incomplete and re-decode it forever.
-        let file = makeFile("sdr")
+        let (container, file) = try makeStoredFile("sdr")
+        _ = container
         let engine = try makeEngine()
         defer { engine.shutdown() }
         engine.load(file, at: try MediaFixture.h264.url)
 
         #expect(await poll(timeout: .seconds(15)) { file.isHDR != nil })
         #expect(file.isHDR == false)
+    }
+
+    @Test func videoDecodeSkipsRecordForFileNotInStore() async throws {
+        // The deleted-the-playing-file race (P5): `currentFile` still points at a row whose deletion
+        // was saved, and the live-decode handler would write `isHDR`/gamma onto that gone row and trap.
+        // `recordColorTags` guards on `existsInStore`, so the tags are dropped instead. A context-less
+        // `PlaylistFile` is the safe, non-trapping stand-in — like a deleted-saved row it has no live
+        // store row, so the guard must skip it. The record runs in the same handler that sets
+        // `videoSize`, so once the decode has reported a width the record decision has been made.
+        let file = makeFile("gone")
+        let engine = try makeEngine()
+        defer { engine.shutdown() }
+        engine.load(file, at: try MediaFixture.hdr.url)
+
+        #expect(await poll(timeout: .seconds(15)) { engine.videoSize.width > 0 })
+        #expect(file.isHDR == nil)
     }
 
     @Test func volumeForwardsToClient() async throws {

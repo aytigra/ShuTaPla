@@ -110,9 +110,12 @@ extension PlaybackCoordinator {
 
     /// Resolves one sequence identifier to its live model through the playlist's context — the
     /// lazy seam the pure selectors call, so they realize only the rows they actually test rather
-    /// than the whole `[PersistentIdentifier]` sequence.
+    /// than the whole `[PersistentIdentifier]` sequence. A `ModelContext.file(for:)` fetch, so an id
+    /// whose row is gone (a delete the memoized sequence hasn't dropped yet) resolves to nil and the
+    /// walk skips it — honoring `availableFile`'s "a gone row is skipped" contract, where a
+    /// `model(for:)` resolve would instead hand back an invalidated instance that `isAvailable` traps on.
     func resolveFile(in playlist: Playlist) -> (PersistentIdentifier) -> PlaylistFile? {
-        { playlist.modelContext?.model(for: $0) as? PlaylistFile }
+        { playlist.modelContext?.file(for: $0) }
     }
 
     /// Whether `file` is a valid load target. An evicted file is (the engine placeholders it until

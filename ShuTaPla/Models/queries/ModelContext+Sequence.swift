@@ -130,6 +130,24 @@ extension ModelContext {
         return (untagged, invalidTagging, skipped)
     }
 
+    /// The file with row identity `id` if its row still exists, else nil — a bounded one-row fetch on
+    /// the entity's own identity, the seam both the Manager row render (`AppState.file(for:)`) and the
+    /// coordinator's sequence walk (`resolveFile`) resolve one id at a time through, never the whole
+    /// sequence. Not `model(for:)`: that hands back a **non-nil invalidated instance** for a
+    /// deleted-and-saved row — its context, `isDeleted`, and registration all still read as live — whose
+    /// first persisted-property read traps; a fetch drops the deleted row and returns nil. The default
+    /// `includePendingChanges` keeps it equivalent to `model(for:)` for live rows: a pending insert
+    /// still resolves (its temporary id matches) and a dirty registered row is returned unchanged
+    /// (no refault). The `persistentModelID` comparison resolves on the entity's primary-key index,
+    /// so the per-call cost is constant in the row count — measured flat (0.86x) across a 10x growth
+    /// in `FileResolutionScalingTests` — which keeps a full Manager render O(visible rows), not O(N²),
+    /// even though this runs once per visible row per `body`.
+    func file(for id: PersistentIdentifier) -> PlaylistFile? {
+        var descriptor = FetchDescriptor<PlaylistFile>(predicate: #Predicate { $0.persistentModelID == id })
+        descriptor.fetchLimit = 1
+        return try? fetch(descriptor).first
+    }
+
     /// The persistent identifier of the file with app id `fileID`, or nil if none exists — a
     /// one-row fetch used to resolve a single file (and back the `PlaybackSequences.member`
     /// membership test) without resolving the whole set.

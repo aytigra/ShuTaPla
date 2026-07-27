@@ -309,7 +309,11 @@ class MPVPlaybackEngine: SourceNavigating {
     /// genuine SDR reading (the file carries no PQ/HLG transfer), settling a determined `false` —
     /// never a guess, since this only runs off a real decode.
     private func recordColorTags(gamma: String?, primaries: String?) {
-        guard let file = currentFile else { return }
+        // `existsInStore` guards the deleted-the-playing-file race: `reconcile` jumps away from a
+        // trashed-and-saved `currentFile`, and a decode signal landing before the new file loads would
+        // write `isHDR`/gamma on the invalidated row and trap. A gone row drops the tags (nothing to
+        // record) — the same guard the image engine's decode record uses.
+        guard let file = currentFile, file.existsInStore else { return }
         hdrCache.record(gamma: gamma, primaries: primaries, for: file)
     }
 
