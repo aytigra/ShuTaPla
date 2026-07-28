@@ -20,7 +20,7 @@ Captures anything you drive by hand — selection, switching, scrolling, edits.
    ```bash
    APP=~/Library/Developer/Xcode/DerivedData/ShuTaPla-*/Build/Products/Debug/Shutapla.app
    open -n $APP
-   pgrep -f "Build/Products/Debug/Shutapla.app/Contents/MacOS/ShuTaPla"   # → one pid
+   pgrep -f "Build/Products/Debug/Shutapla.app/Contents/MacOS/Shutapla"   # → one pid
    ```
 2. Attach the recorder (background it with a stop-file so you can end it cleanly):
    ```bash
