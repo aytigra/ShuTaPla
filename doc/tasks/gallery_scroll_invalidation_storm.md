@@ -1,5 +1,10 @@
 # Task — Gallery scroll invalidation storm
 
+**Status: complete.** All ten steps done and verified in the app; the gallery scroll is smooth and
+`GalleryCell` evaluates once per cell appearance. The instrumentation that drove the investigation
+has been removed. Steps are numbered in the order they were planned, not the order they were
+finished — step 7 was the last to close, so steps 8–10 refer back to it as open.
+
 ## Symptom
 
 Gallery scroll is jerky, with a hard CPU spike during scroll and a slowdown that grows the more the gallery
@@ -144,13 +149,19 @@ reader that registers the gate where the count is shown (step 10).
      context. The chrome stayed silent for the whole scroll (no `RootView` / `ManagerView` /
      `FileCollectionView` / `FilterBar` line after startup), so step 3 holds under load too.
 
-7. **Open — the remaining cost is per-cell, not invalidation.** Scroll is still not smooth with the
-   storm gone. Per second of scroll the same run reads `FileGalleryCell 57–168` (≈ one body per cell
-   appearance, correct), `cell.task 71–155` (≈ one task per appearance, so the `.task` id is stable
-   and not re-firing), and `GalleryCell 158–322` — **~2–2.4 bodies per appearance**. One extra is the
-   `image` `@State` write landing; the rest is unattributed. `cell.memoryHit` is near zero even
-   scrolling back (13/90 in one sample, 21/99 in another), so nearly every appearance goes to the
-   disk cache and decodes.
+7. **Done — the extra bodies were an alignment guide descending into the tile; `GalleryCell` is now
+   at 1.01 bodies per appearance and the scroll is smooth.**
+
+   Where the step started: with the storm gone the scroll was still jerky, and per second of scroll
+   the same run read `FileGalleryCell 57–168` (≈ one body per cell appearance, correct),
+   `cell.task 71–155` (≈ one task per appearance, so the `.task` id is stable and not re-firing), and
+   `GalleryCell 158–322` — **~2–2.4 bodies per appearance**. One extra was the `image` `@State` write
+   landing, which step 8 moved to a leaf; the rest was unattributed. `cell.memoryHit` was near zero
+   even scrolling back (13/90 in one sample, 21/99 in another), so nearly every appearance went to the
+   disk cache and decoded — which step 9 then measured exactly.
+
+   The sections below are the search in the order it ran: what `_printChanges` could and could not
+   see, the two instrumented stages, the named cause, and the fix.
 
    `_printChanges` on `GalleryCell`, with the file name printed alongside so evaluations can be
    paired by cell, resolves the shape but not the cause. Per 7 newly appearing cells (one grid row):
@@ -166,8 +177,9 @@ reader that registers the gate where the count is shown (step 10).
    sample, only the last in another) and reports no environment change — consistent with SwiftUI
    re-evaluating during row layout, which `_printChanges` cannot attribute further.
 
-   Two per cell is the floor (placeholder, then image); the third is the waste — ~30% of gallery body
-   evaluations on forward scroll.
+   Two per cell was the floor for the tile as it then stood — placeholder, then image — so the third
+   was waste, ~30% of gallery body evaluations on forward scroll. Step 8 moved `image` down to a leaf,
+   which drops the tile's own floor to one.
 
    **Refuted: the extra evaluation is the in-memory cache hit landing synchronously in `.task`.**
    Logging the file name on each `cachedThumbnail` hit put every hit in the *back-scroll* section,
@@ -180,10 +192,245 @@ reader that registers the gate where the count is shown (step 10).
 
    Counters and `_printChanges` are exhausted: they say how many bodies run, not whether that is
    where the wall-clock goes. The other per-cell cost is unmeasured and may well dominate — step 9
-   settles that every appearance is a disk read plus a decode, 1880 out of 1880. Sizing it needs a
-   fresh Instruments trace per `doc/profiling.md` (host Mac, attach to the Debug build's pid), read
-   for its Hangs lane and time profiler; the original trace predates steps 1–6 and no longer
-   describes this code.
+   settles that every appearance is a disk read plus a decode, 1880 out of 1880. Sizing *that* would
+   need a fresh Instruments trace per `doc/profiling.md` (host Mac, attach to the Debug build's pid),
+   read for its Hangs lane and time profiler, since the original trace predates steps 1–6 and no
+   longer describes this code. No such trace was recorded: the two stages below named the residual
+   without one, and removing it made the scroll smooth, so the per-appearance disk read never had to
+   be sized. It remains unmeasured.
+
+   ### Catching the residual — plan
+
+   **`_printChanges` naming no input is not the same as there being no cause.** It names *inputs*:
+   `@self`, `@identity`, and property wrappers (`_draftName`, `_appState`). `GalleryCell.body` reaches
+   six `PlaylistFile` fields through a plain `let file: PlaylistFile` — `pixelSize` (i.e. `width` +
+   `height`), `isHDR`, `cloudStatus`, `fileSizeBytes`, `duration`, `fileName`. An invalidation arriving
+   through the Observation registrar on one of those is not an input that differs, so `_printChanges`
+   has nothing to name. The residual's signature is exactly what that blind spot produces.
+
+   That has to be squared with step 8, which found the store silent (`merge changed` 0, no `save`
+   lines). The two coexist only if something fires Observation without our code writing a new value —
+   a refault does that, and so does an equal write — or if the residual is genuinely SwiftUI-internal.
+   So the first move is not to guess between them but to **split the residual in two**.
+
+   **Stage 1 — an Observation probe mirroring the body's read set.** Arm `withObservationTracking`
+   over the same six accessors the body reads and count what fires. `withObservationTracking` records
+   reads transitively, so `_ = file.pixelSize` picks up `width`/`height` on its own: the probe's
+   tracked set is identical to the body's *by construction*, not by a list kept in sync by hand. It is
+   one-shot, so it re-arms after each fire, and it snapshots the six values at arm time — the diff on
+   re-arm names the field that moved, or reports that **none did**, which is the refault/equal-write
+   signature and is invisible to every other tool here.
+
+   The decision rule, against the restored `GalleryCell` / `FileGalleryCell` body counters (same
+   harness as steps 8–9, so the ratios compare directly with 1.22× / 2.32×):
+
+   - probe fires ≈ the residual → it *is* the model. The label names the keypath, and the writer is
+     then a symbolic breakpoint on that setter.
+   - probe fires with no field moved → a refault or an equal write. Step 8's three refuted candidates
+     were all about *changed* values, so this reopens them on different terms.
+   - probe silent while the extra bodies happen → not the model at all, and the refault theory dies
+     with it. Only then is stage 2 worth anything.
+
+   **Stage 2, only if the probe stays silent — capture the stack, don't count.**
+   `Thread.callStackSymbols` inside the body, sampled into a set of distinct stacks and dumped on
+   demand. The frames above `GalleryCell.body` separate the two survivors: a layout-driven evaluation
+   arrives under `sizeThatFits`/`LayoutComputer`, a graph update under `ViewRendererHost.render` →
+   `AG::Graph::UpdateStack::update`. That is the discriminator for the `aspectRatio(4.0/3.0, .fit)`
+   hypothesis, and a handful of distinct stacks carries more than any count could.
+
+   Ablation (swap the aspect box for a fixed height, re-count) is the *confirmation* once there is a
+   suspect, not the search — it can only test one guess per run.
+
+   The prize is unchanged and small: ≈ 0.22 extra evaluations of a body with no decode in it, against
+   983 disk reads in the same run.
+
+   ### Stage 1 — measured
+
+   Nine windows of a scroll: **`GalleryCell` 71, `FileGalleryCell` 61** — the residual is intact and
+   the ratio (1.16×) sits with the 1.22× of steps 8–9. **No `probe.*` line appeared at all.**
+
+   Two windows are the shape of the thing: `4.8s GalleryCell 1` and `12.6s GalleryCell 1` — a tile
+   body with no parent body anywhere in the window. The child re-evaluates on its own.
+
+   That is the third branch, so the model is out and the refault theory with it. One caveat is being
+   closed before the null is spent: a probe that never fires and a probe that never armed look
+   identical in the log, so `watchTile` now counts `probe.armed`. A run with `probe.armed` present
+   and no `probe.<field>` is a real null; a run with neither means the instrument never ran and says
+   nothing about the model.
+
+   Stage 2 is therefore live, with a sharper discriminator than the layout/graph one. A `GalleryCell`
+   body driven by its parent carries `FileGalleryCell` in its call stack; a residual one does not.
+   `BodyStackProbe` splits every body evaluation on that (`GalleryCell.fromParent` vs
+   `GalleryCell.standalone.<layout|graph|other>`) and prints each distinct standalone stack once in
+   full. The standalone count is a prediction: it should land on the gap, ≈ 10 in the run above. If it
+   does, the residual is defined by a stack rather than inferred from a subtraction, and the frames
+   above the body name the driver.
+
+   ### Stage 2 — measured: the residual is layout-driven
+
+   The prediction was wrong in a way that settled the question anyway. **`fromParent` never appears —
+   every tile body is `standalone`**, and `standalone.graph + standalone.layout` equals `GalleryCell`
+   exactly (6+4=10, 9+6=15, 3+2=5). A child body is not evaluated inside its parent's body call: the
+   parent body only builds the view value, and the graph evaluates the child later from its own root,
+   so `FileGalleryCell` can never be in that stack. **The `GalleryCell` / `FileGalleryCell`
+   subtraction used through steps 8–9 was a proxy, not a partition.** `FileGalleryCell` remains a
+   sound denominator — one body per cell appearance — so the ratio still measures how many tile
+   bodies an appearance costs; what the subtraction cannot do is say which bodies the excess consists
+   of. Only the stacks can.
+
+   The secondary classification carried the run. Six consecutive steady windows:
+
+   ```
+   GalleryCell 10  =  standalone.graph 6  +  standalone.layout 4
+   FileGalleryCell 6      probe.armed 6
+   ```
+
+   `graph` == `FileGalleryCell` == `probe.armed` throughout. Six tiles come on screen, each takes one
+   graph-driven body — the legitimate one — and **four further bodies arrive under
+   `sizeThatFits`/`LayoutComputer`**. That is the residual, and it is layout, not Observation:
+   `probe.armed` is present in every window and no `probe.<field>` ever fired, so the model null is a
+   real null rather than an unarmed instrument.
+
+   What this narrows to: a measurement pass does not re-run a body on its own — layout queries an
+   already-built tree. A body re-running under `LayoutComputer` means the tile's content depends on a
+   layout-provided value. `aspectRatio(4.0/3.0, .fit)` is one candidate; `GeometryReader`,
+   `ViewThatFits`, and `containerRelativeFrame` are the constructs that actually force it. The
+   distinct `standalone.layout` stacks name which, and ablation then confirms.
+
+   ### The stack: a scroll-geometry preference pulls the tile bodies
+
+   A captured `standalone.graph` stack, innermost frame outward:
+
+   ```
+   2   GalleryCell.body
+   3-7 ViewBodyAccessor.updateBody → DynamicBody.updateValue
+   13  DynamicPreferenceCombiner.info
+   14  DynamicPreferenceCombiner.value
+   20  LazyPreference.value
+   21  ScrollGeometryPreferenceKey.reduce(value:nextValue:)
+   28  LazyPreference.value
+   34-40 ViewGraphRootValueUpdater.render → NSHostingView.layout
+   ```
+
+   The body is demanded as a **dependency of a `ScrollGeometryPreferenceKey` reduction**, during the
+   hosting view's render pass off the AppKit display cycle — not by its parent and not by the model.
+   The declaration is `PagedList.swift:181`:
+
+   ```swift
+   .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in offset.y = y }
+   ```
+
+   The reference-box reasoning above that line is sound as far as it goes — the *container's* body
+   stays inert. What it misses is that the modifier installs a preference on the `ScrollView`, and a
+   preference reduces up the subtree: the cost lands on every resident tile the reduction pulls, not
+   on the view that declared it.
+
+   Two corrections this forces:
+
+   - `standalone.graph` was assumed to be the legitimate evaluation. This stack is graph-classified
+     (the `_layoutSubtree` frames are AppKit's; SwiftUI's `LayoutComputer`/`sizeThatFits` are absent)
+     and is preference-driven. The graph/layout cut is weaker than the preference chain it exposed.
+   - Not yet confirmed as *the* residual. This stack was captured on page arrival, and a first body
+     evaluation must be demanded by something — the combiner may just be the first consumer to ask.
+     The `standalone.layout` stacks discriminate: through `ScrollGeometryPreferenceKey` too → one
+     cause, and ablating the modifier is the check; through `sizeThatFits` on the tile frame → two
+     independent causes.
+
+   A second capture settles the first of those. It is frame-for-frame identical through frame 40,
+   differing only in how the runloop entered (observer callback vs source0): **the graph path is a
+   single shape.** And it scales with tile *arrival* — across seven windows `graph` tracks
+   `FileGalleryCell` and `probe.armed` (9/8/7, 7/9/8, 9/9/9, 11/10/12, 13/14/12), one graph body per
+   newly resident tile. So the preference combiner is the *demand path* for a first evaluation that
+   had to happen anyway, not extra work. `onScrollGeometryChange` still makes the reduction walk the
+   subtree, but it is not the residual.
+
+   The residual is the `layout` bodies, steady at ≈ 0.7 per arriving tile.
+
+   ### The residual, named: an alignment guide descends into the tile
+
+   Five distinct `layout` stacks; four share one shape. Outermost to innermost:
+
+   ```
+   79  LazyVStackLayout.sizeThatFits                  ← PagedListPage.content
+   75  LazyStack.measureEstimates(updatingPosition:index:minor:subviews:cache:)
+   67-73 ForEachState.applyNodes → ForEachList.applyNodes
+   56  LayoutEngine.lengthThatFits(_:in:)
+   52  _FlexFrameLayout.sizeThatFits                  ← .frame(maxWidth: .infinity)  (row)
+   47  _FrameLayout.sizeThatFits                      ← .frame(height: rowHeight)
+   41  _PaddingLayout.sizeThatFits                    ← .padding(.horizontal, spacing)
+   35  _FlexFrameLayout.sizeThatFits                  ← .frame(maxWidth: .infinity)  (gridRow)
+   26-30 StackLayout.placeChildren → sizeChildrenGenerally… → resize   ← the row HStack
+   25  ViewDimensions[AlignmentKey]
+   22-24 UnaryLayoutEngine.explicitAlignment → childPlacement
+   20-21 _FrameLayout.placement                       ← cell(id).frame(width:height:alignment:.top)
+   19  LayoutProxy.dimensions(in:)
+   13  UnaryLayoutComputer<_PaddingLayout>.updateValue ← GalleryCell's .padding(3)
+   2   GalleryCell.body
+   ```
+
+   **Resolving an alignment guide descends into the child.** The row `HStack` in
+   `GalleryPagedList.gridRow` must align its cells vertically, so it reads `ViewDimensions` for the
+   alignment key. The fixed `.frame(width: tileWidth, height: tileHeight, alignment: .top)` does not
+   terminate that query: a frame answers `explicitAlignment` by asking whether its child defines a
+   guide, and asking requires the child's dimensions — hence the body. The tile's size being known
+   statically is irrelevant; it is the *guide* being resolved, not the size. The fifth stack (#0) is
+   the plain sizing variant, `_PaddingLayout.sizeThatFits` descending through `GalleryCell`'s own
+   `.padding(3)`.
+
+   Two candidates die here. `onScrollGeometryChange` is the `graph` path — one body per arriving
+   tile, the legitimate first evaluation. `aspectRatio(4.0 / 3.0, .fit)` appears in none of the five
+   stacks.
+
+   `measureEstimates` walking `ForEach` subviews could have meant O(rows per page) rather than
+   O(visible). The counts rule that out: `layout` holds at ≈ 0.7 × arriving tiles in every window, so
+   it is incremental.
+
+   ### Fix — terminate the alignment query at a leaf
+
+   The body is not cheap enough to accept the residual: each evaluation makes six `@Model` reads
+   through the Observation registrar, formats three strings, and builds four overlay subtrees.
+
+   The descent happens because the `HStack`'s subview is the tile itself, so resolving the vertical
+   alignment guide has to reach `GalleryCell.body`. Make the subview a fixed-size leaf instead and
+   hang the tile off it as an overlay: overlay geometry is defined entirely by its primary, so the
+   guide resolves against `Color.clear` and the tile is laid out inside an already-resolved frame.
+
+   `Color.clear` is hit-testable in SwiftUI, and `rowHeight` is deliberately generous (`GalleryGrid`
+   notes the slack "falls harmlessly below the caption"), so the leaf must be
+   `.allowsHitTesting(false)` — otherwise it would swallow clicks in the slack below a tile that the
+   current `.frame(alignment: .top)` leaves inert.
+
+   There is no unit-testable seam here — the descent is a property of SwiftUI's layout engine, not of
+   our code. The confirmation is the counter measurement against the baseline already recorded above
+   (`layout` ≈ 0.7 × arriving tiles): the `standalone.layout` count should collapse, with
+   `standalone.graph` unchanged at one per arriving tile. If it merely moves the descent one level
+   down, the leaf-termination theory is refuted and a custom `Layout` placing tiles at computed
+   offsets — the geometry `GalleryGrid` already knows — is the remaining fix.
+
+   ### Fix — measured, confirmed
+
+   `GalleryPagedList.gridRow` now packs `Color.clear.allowsHitTesting(false).frame(width:height:)`
+   with `.overlay(alignment: .top) { cell(id) }` instead of framing the cell directly; the rationale
+   above is recorded on the method's doc comment, since it is the kind of thing a later reader would
+   otherwise "simplify" straight back into the direct frame.
+
+   Measured over a 17-window scroll:
+
+   | | Before | After |
+   |---|---|---|
+   | `GalleryCell` per `FileGalleryCell` | 1.26× | **1.01×** (401 / 396) |
+   | `standalone.layout` | ≈ 0.7 × arriving tiles | **1**, in the first window |
+   | `standalone.graph` | 1 × arriving tiles | unchanged, 1 × arriving tiles |
+
+   The alignment descent is gone outright, and every surviving body is the legitimate first
+   evaluation — `graph`, `FileGalleryCell`, and `probe.armed` move together window by window. One
+   body per cell appearance is the floor, so the counter is closed.
+
+   The scroll *feels* worse under instrumentation than it will shipped: `BodyStackProbe.note` calls
+   `Thread.callStackSymbols` on every body evaluation, `dladdr`-symbolicating ~100 frames ~400 times
+   in that scroll. It skews the felt cost, not the counts.
+
+   With the harness out, the scroll is smooth — confirmed in the app.
 
 8. **Own the thumbnail's `@State` in a leaf, not in the tile. Done, verified in the app.**
    In a settled library the
@@ -224,9 +471,9 @@ reader that registers the gate where the count is shown (step 10).
    The premise holds outright: not one `merge changed` in the run. Metadata during a scroll is fully
    settled, so the badges stay on the tile and no `GalleryBadges` split is warranted.
 
-   The tile's invalidation collapsed by about two-thirds but not to 1.0. The residual ≈ 0.26 is step
-   7's unattributed evaluation — the contiguous-within-a-row one `_printChanges` names no input for —
-   which the split was never going to remove.
+   The tile's invalidation collapsed by about two-thirds but not to 1.0. The residual ≈ 0.26 is the
+   evaluation step 7 went on to name — contiguous within a row, `_printChanges` naming no input for
+   it — which the split was never going to remove.
 
    `GalleryCell` is constructed only by `FileGalleryCell.body`, so evaluating more often than its
    parent means SwiftUI re-ran a view value it already held: the source is one of `GalleryCell`'s own
@@ -239,16 +486,22 @@ reader that registers the gate where the count is shown (step 10).
    - **A live `@Query` coarsely refaulting the registered `PlaylistFile`s.** None remains in the app;
      steps 1–4 removed both, and `PlaylistSidebar` / `LibrarySurface` carry comments saying why.
 
-   So it has no store-side source, which is consistent with `_printChanges` naming no input. What is
-   left is SwiftUI's own layout negotiation (the tile's `aspectRatio(.fit)` inside an equal-width grid
-   column), and `_printChanges` cannot see that.
+   So it has no store-side source, which is consistent with `_printChanges` naming no input. That
+   leaves SwiftUI's own layout negotiation, which `_printChanges` cannot see. The specific guess made
+   here — the tile's `aspectRatio(.fit)` inside an equal-width grid column — was wrong: step 7's stack
+   capture found an alignment guide resolving into the tile, with `aspectRatio` in none of the layout
+   stacks. Right layer, wrong construct.
 
-   **There is no tool left that can name it.** The route would be `analyze_trace.py --fanin-for
+   **No Instruments trace could have named it.** The route would be `analyze_trace.py --fanin-for
    "GalleryCell"`, which ranks the source nodes driving a view's updates — but it reads the
-   `swiftui-causes` lane, and that lane has come back empty in every trace recorded for this app
-   (now stated as fact in `doc/profiling.md`). A trace can size the scroll; it cannot attribute this.
-   Note the size of the prize before spending anything further on it: 0.26 extra evaluations of a
-   body with no decode in it, against 983 disk reads in the same run.
+   `swiftui-causes` lane, and that lane has come back empty in every trace recorded for this app (now
+   stated as fact in `doc/profiling.md`). A trace can size the scroll; it cannot attribute this. What
+   did attribute it was `Thread.callStackSymbols` sampled inside the body — step 7, stage 2.
+
+   What the inspection above does *not* rule out is a cause the tooling cannot see rather than one
+   that isn't there: `_printChanges` names inputs, and the badges read the `PlaylistFile` through a
+   plain `let`. Step 7's plan splits that question with an Observation probe, which came back a clean
+   null and took the model out.
 
    What this does *not* claim is a speed-up. Total body evaluations rose: 2.2 tile bodies per
    appearance became 1.26 tile + 2.60 leaf. What improved is the mix — the expensive body (four badge
@@ -307,8 +560,8 @@ reader that registers the gate where the count is shown (step 10).
    `CloudRefreshKeyTests`) both with the layer inert and after deleting it; no test ever depended on
    it, which is its own evidence. No new navigator warnings.
 
-   `cell.memoryHit` retired with the layer; `thumb.diskHit` / `thumb.sourceDecode` stay until the
-   instrumentation comes out.
+   `cell.memoryHit` retired with the layer, and `thumb.diskHit` / `thumb.sourceDecode` went out with
+   the rest of the harness.
 
 10. **A bump wakes the list body but not its rows — the sidebar count needs its own reader. Fixed,
     verified in the app.**
@@ -344,17 +597,16 @@ reader that registers the gate where the count is shown (step 10).
     identical bug. Corrected the "`fileCount` is the trap this exposes" note above, which assumed the
     refetch re-runs the row bodies. 26/26 green, no new navigator warnings.
 
-## Instrumentation — removed
+## Instrumentation
 
-The counters are out of the tree: `ShuTaPla/Debug/RenderLog.swift`, the `Self.logBody` calls on the
-chrome and per-item views, and the `RenderLog.note` write sites (`trySave`, `merge`,
-`persistAndRefresh`, `notePlaylistsChanged`, `sequences.bump`, `persistTimelinePosition`,
-`GalleryThumbnailImage.task`, `ThumbnailService.produceData`, `PlaylistSidebar.row`,
-`PlaylistRowBadge`). `trySave` lost its `#fileID`/`#line` arguments and `merge` its `changed`
-bookkeeping — with nothing reading the result, `setIfChanged` returns `Void`. The evidence they
-produced is quoted in the steps above; the code itself is recoverable from git history.
+The full harness came out after step 10 — `trySave` lost its `#fileID`/`#line` arguments and `merge`
+its `changed` bookkeeping, and with nothing reading the result `setIfChanged` returns `Void`. Those
+three simplifications are permanent; the store-write counters are not coming back.
 
-They answered what they could answer — how many bodies run and what invalidated them — and both
-open questions are past that: the residual ≈ 0.22 `GalleryCell` evaluations that `_printChanges`
-names no input for, and the wall-clock of the per-appearance disk read plus decode. Neither is a
-counting question, so the counters stay out unless a new invalidation question appears.
+Step 7's own harness — `RenderLog` restored verbatim from git (so its ratios compare directly with
+steps 8–9), `Self.logBody` on `GalleryCell` and `FileGalleryCell` as the denominator,
+`ObservationProbe` mirroring the tile's model read set, and `BodyStackProbe` classifying each
+evaluation's caller — went out with the step. The whole `ShuTaPla/Debug/` directory and
+`ObservationProbeTests` are gone; the two views are back to their committed state, so the fix in
+`GalleryPagedList` is the only code left standing from this step. 787/787 green (including the two
+`PlaybackEngineTests` that flake under full-suite load), no new navigator issues.

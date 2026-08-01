@@ -69,10 +69,21 @@ struct GalleryPagedList<ID: Hashable, Cell: View>: View {
 
     /// One grid row: its ids packed left-to-right, each in a fixed tile, with the inter-cell and edge
     /// spacing. The row's height (tile + inter-row gap) is framed by `PagedList`.
+    ///
+    /// Each tile hangs off a fixed-size transparent leaf rather than being framed directly, because
+    /// the row resolves a vertical alignment guide for every subview and a frame answers that by
+    /// asking its child — which evaluates the cell's body on every layout pass, however fixed its
+    /// size already is. An overlay's geometry comes wholly from its primary, so the guide resolves
+    /// against the leaf and the tile is laid out inside an already-resolved frame. The leaf takes no
+    /// hits: `Color.clear` is hit-testable, and `rowHeight` leaves slack below a tile that must stay
+    /// inert.
     private func gridRow(_ row: Int) -> some View {
         HStack(spacing: spacing) {
             ForEach(ids[paging.items(inRow: row, itemCount: ids.count)], id: \.self) { id in
-                cell(id).frame(width: tileWidth, height: tileHeight, alignment: .top)
+                Color.clear
+                    .allowsHitTesting(false)
+                    .frame(width: tileWidth, height: tileHeight)
+                    .overlay(alignment: .top) { cell(id) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
