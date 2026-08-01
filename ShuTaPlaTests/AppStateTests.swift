@@ -23,21 +23,6 @@ private func makeContainer() throws -> ModelContainer {
     return try ModelContainer(for: schema, configurations: [config])
 }
 
-private func makeTempDir() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ShuTaPlaAppStateTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-}
-
-private func scanned(_ name: String, _ type: MediaType) -> ScannedFile {
-    let (tagNames, taggingStatus) = TagParser.fields(for: name)
-    return ScannedFile(
-        relativePath: name, fileName: name, mediaType: type, cloudStatus: .local,
-        fileSize: nil, contentModified: nil, tagNames: tagNames, taggingStatus: taggingStatus
-    )
-}
-
 /// A playlist's files as the store holds them, in sort order — a store-side fetch (ignoring
 /// pending changes), the way the UI reads them. The background scan writes on the scan actor's
 /// own context, so after an `update` the main playlist's `files` relationship is stale; post-scan
@@ -71,34 +56,6 @@ private func addFile(
     let file = insertFile(name, tags: tags, status: status, skipped: skipped, order: order, to: playlist, in: context)
     try? context.save()
     return file
-}
-
-/// Returns a canned scan result regardless of the bookmark it's handed, and a canned listing of
-/// the folder's current files for re-scans (the reconcile infers removals by diffing it against
-/// the playlist's own files).
-private struct StubFileSystem: FileSystemProviding {
-    let result: ScanResult
-    var rescanResult: [ScannedFile] = []
-    /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
-    var trashFails = false
-    /// When set, `rescan` throws — the "folder unreadable, leave membership as it was" path, for
-    /// tests that exercise a re-scan's side effects without it reconciling files away.
-    var rescanFails = false
-    /// When set, `renameFile` throws it — exercises the failure-message mapping.
-    var renameError: FileSystemError?
-
-    func scanFolder(bookmark: Data) async throws -> ScanResult { result }
-    func rescan(bookmark: Data) async throws -> [ScannedFile] {
-        if rescanFails { throw FileSystemError.operationFailed("folder unreadable") }
-        return rescanResult
-    }
-    func renameFile(at url: URL, to newName: String) async throws -> URL {
-        if let renameError { throw renameError }
-        return url.deletingLastPathComponent().appendingPathComponent(newName)
-    }
-    func trashFiles(_ urls: [URL]) async throws -> TrashResult {
-        trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
-    }
 }
 
 // MARK: - Tests
@@ -2955,9 +2912,5 @@ struct AppStateTests {
         // The rollback discarded the pending edit at the store layer, so a later successful save
         // can't silently flush this failed change.
         #expect(context.hasChanges == false)
-    }
-
-    private var emptyResult: ScanResult {
-        ScanResult(files: [], counts: [:], dominantType: nil)
     }
 }

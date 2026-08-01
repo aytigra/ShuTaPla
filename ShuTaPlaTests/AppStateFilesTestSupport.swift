@@ -55,3 +55,53 @@ func insertFile(
     file.tags = context.tags(named: tags)
     return file
 }
+
+/// Returns a canned scan result regardless of the bookmark it's handed, and a canned listing of
+/// the folder's current files for re-scans (the reconcile infers removals by diffing it against
+/// the playlist's own files).
+struct StubFileSystem: FileSystemProviding {
+    let result: ScanResult
+    var rescanResult: [ScannedFile] = []
+    /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
+    var trashFails = false
+    /// When set, `rescan` throws — the "folder unreadable, leave membership as it was" path, for
+    /// tests that exercise a re-scan's side effects without it reconciling files away.
+    var rescanFails = false
+    /// When set, `renameFile` throws it — exercises the failure-message mapping.
+    var renameError: FileSystemError?
+
+    func scanFolder(bookmark: Data) async throws -> ScanResult { result }
+    func rescan(bookmark: Data) async throws -> [ScannedFile] {
+        if rescanFails { throw FileSystemError.operationFailed("folder unreadable") }
+        return rescanResult
+    }
+    func renameFile(at url: URL, to newName: String) async throws -> URL {
+        if let renameError { throw renameError }
+        return url.deletingLastPathComponent().appendingPathComponent(newName)
+    }
+    func trashFiles(_ urls: [URL]) async throws -> TrashResult {
+        trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
+    }
+}
+
+/// A scan that found nothing — the stub result for the suites that drive `AppState` without
+/// caring what the folder holds.
+let emptyResult = ScanResult(files: [], counts: [:], dominantType: nil)
+
+/// A `ScannedFile` for `name`, with the tags/status the parser derives from it — the seed the
+/// scan and re-scan stubs hand back.
+func scanned(_ name: String, _ type: MediaType) -> ScannedFile {
+    let (tagNames, taggingStatus) = TagParser.fields(for: name)
+    return ScannedFile(
+        relativePath: name, fileName: name, mediaType: type, cloudStatus: .local,
+        fileSize: nil, contentModified: nil, tagNames: tagNames, taggingStatus: taggingStatus
+    )
+}
+
+/// A fresh real directory under the temp dir — a bookmark needs a URL that exists.
+func makeTempDir() throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ShuTaPlaTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}

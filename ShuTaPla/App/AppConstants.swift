@@ -25,8 +25,8 @@ nonisolated enum AppConstants {
     /// Below this, the folder is Mixed and the user is prompted to choose.
     static let dominanceThreshold = 0.8
 
-    /// Longest-edge pixel size for gallery thumbnails. `ThumbnailService` sizes its
-    /// in-memory cache budget around this, so the two stay coupled through one value.
+    /// Longest-edge pixel size for gallery thumbnails — the size `ThumbnailService` renders
+    /// and caches on disk, so a change re-keys nothing but does re-render.
     static let galleryThumbnailPixelSize = 440
 
     /// Disk-cache size past which the app flags cache pressure — the Settings size readout turns

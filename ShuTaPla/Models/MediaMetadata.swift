@@ -43,13 +43,23 @@ extension PlaylistFile {
     /// `nil` means "not read", never "the value is nil" — so a disk-cache hit (which reports only
     /// size + fingerprint, no decode) preserves a prior duration/dimensions, while a fresh render or
     /// a size-mismatch re-derivation refreshes every stale field on the record.
+    ///
+    /// Each field goes through `setIfChanged`: both producers re-merge the facts a complete record
+    /// already carries on every display, and an equal write would dirty the record and re-render its
+    /// cell for nothing. A merge that moves nothing leaves the context clean, so the producer's
+    /// following `trySave` is a no-op.
     func merge(_ metadata: MediaMetadata) {
-        if let duration = metadata.duration { self.duration = duration }
-        if let width = metadata.width { self.width = width }
-        if let height = metadata.height { self.height = height }
-        if let fileSizeBytes = metadata.fileSizeBytes { self.fileSizeBytes = fileSizeBytes }
-        if let fingerprint = metadata.fingerprint { self.fingerprint = fingerprint }
-        if let lastModified = metadata.lastModified { self.lastModified = lastModified }
+        /// Fills one field from an incoming value, skipping a `nil` (not read) and an equal one.
+        func fill<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<PlaylistFile, Value?>, _ value: Value?) {
+            guard let value else { return }
+            setIfChanged(keyPath, to: value)
+        }
+        fill(\.duration, metadata.duration)
+        fill(\.width, metadata.width)
+        fill(\.height, metadata.height)
+        fill(\.fileSizeBytes, metadata.fileSizeBytes)
+        fill(\.fingerprint, metadata.fingerprint)
+        fill(\.lastModified, metadata.lastModified)
     }
 
     /// Clears every derived fact so the next display re-derives from scratch: an unconditional reset of

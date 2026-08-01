@@ -11,13 +11,6 @@ import Testing
 import Foundation
 @testable import ShuTaPla
 
-private func makeTempDir() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ShuTaPlaFingerprintTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-}
-
 struct URLFingerprintTests {
 
     /// Renaming a file changes its path but not its bytes, so the fingerprint is unchanged —

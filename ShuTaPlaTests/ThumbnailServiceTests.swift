@@ -30,13 +30,6 @@ private func writeHDRHEIC(to url: URL) throws {
     guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown) }
 }
 
-private func makeTempDir() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ShuTaPlaThumbnailTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-}
-
 /// Reads on-disk size / mtime through a freshly built URL. `URL` caches resource values per value,
 /// so re-reading the original `fileURL` after an in-place rewrite returns the stale pre-rewrite facts
 /// — the production producer always resolves a fresh URL per generation, so only these fixtures, which

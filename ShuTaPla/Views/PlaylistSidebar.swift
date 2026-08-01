@@ -2,31 +2,33 @@
 //  PlaylistSidebar.swift
 //  ShuTaPla
 //
-//  The Manager-mode left panel. Its sections follow the active scope — Video + Image
-//  (visual) or Audio — with full management (create, rename inline, delete, reorder via
-//  drag), and the audio transport inlet pinned at the top, parallel to either scope. Rows
-//  are driven from a `@Query` sorted by `sortOrder` and filtered into sections in memory.
+//  The Manager-mode left panel. Its section follows the active scope — Video, Image or
+//  Audio — with full management (create, rename inline, delete, reorder via drag), and the
+//  audio transport inlet pinned at the top, parallel to either scope.
 //
 
 import SwiftUI
-import SwiftData
 
 struct PlaylistSidebar: View {
     @Environment(AppState.self) private var appState
-
-    @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
 
     // Inline rename: the playlist being edited and its draft text.
     @State private var renaming: Playlist?
     @State private var draftName = ""
 
     var body: some View {
+        // One fetch per body evaluation, shared by the section and its empty state rather than
+        // read twice. Deliberately not a `@Query`: a live query refaults every registered
+        // `Playlist` on any store save, which re-rendered the whole Manager on each gallery
+        // metadata fill. Reading `appState.playlists(ofType:)` registers `playlistsVersion`, so
+        // this body re-runs only when the playlist set, its order, a name or a count changes.
+        let playlists = appState.playlists(ofType: appState.managerScope)
         List {
             importingSection
-            sections
+            section(playlists)
         }
         .listStyle(.sidebar)
-        .overlay { emptyOverlay }
+        .overlay { emptyOverlay(playlists) }
         .safeAreaInset(edge: .top) {
             AudioInlet()
         }
@@ -50,44 +52,20 @@ struct PlaylistSidebar: View {
 
     // MARK: - Sections
 
-    private var videoPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .video } }
-    private var imagePlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .image } }
-    private var audioPlaylists: [Playlist] { allPlaylists.filter { $0.mediaType == .audio } }
-
-    /// The single section for the active scope's media type.
-    @ViewBuilder
-    private var sections: some View {
-        switch appState.managerScope {
-        case .image: section(title: "Image", mediaType: .image)
-        case .video: section(title: "Video", mediaType: .video)
-        case .audio: section(title: "Audio", mediaType: .audio)
-        }
-    }
-
     /// The placeholder shown when the active scope has no playlists.
     @ViewBuilder
-    private var emptyOverlay: some View {
-        switch appState.managerScope {
-        case .image where imagePlaylists.isEmpty:
-            ContentUnavailableView {
-                Label("No Image Playlists", systemImage: "photo.stack")
-            } description: {
-                Text("Add a folder of images.")
+    private func emptyOverlay(_ playlists: [Playlist]) -> some View {
+        if playlists.isEmpty {
+            let (icon, hint): (String, String) = switch appState.managerScope {
+            case .image: ("photo.stack", "Add a folder of images.")
+            case .video: ("film.stack", "Add a folder of videos.")
+            case .audio: ("music.note.list", "Add a folder of audio files.")
             }
-        case .video where videoPlaylists.isEmpty:
             ContentUnavailableView {
-                Label("No Video Playlists", systemImage: "film.stack")
+                Label("No \(appState.managerScope.displayName) Playlists", systemImage: icon)
             } description: {
-                Text("Add a folder of videos.")
+                Text(hint)
             }
-        case .audio where audioPlaylists.isEmpty:
-            ContentUnavailableView {
-                Label("No Audio Playlists", systemImage: "music.note.list")
-            } description: {
-                Text("Add a folder of audio files.")
-            }
-        default:
-            EmptyView()
         }
     }
 
@@ -111,10 +89,8 @@ struct PlaylistSidebar: View {
         }
     }
 
-    @ViewBuilder
-    private func section(title: String, mediaType: MediaType) -> some View {
-        let playlists = allPlaylists.filter { $0.mediaType == mediaType }
-        Section(title) {
+    private func section(_ playlists: [Playlist]) -> some View {
+        Section(appState.managerScope.displayName) {
             ForEach(playlists) { playlist in
                 row(playlist)
             }
@@ -141,18 +117,7 @@ struct PlaylistSidebar: View {
                     Text(playlist.name)
                         .lineLimit(1)
                     Spacer()
-                    if appState.deletingPlaylistIDs.contains(playlist.id) {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.red)
-                    } else if appState.busyPlaylistIDs.contains(playlist.id) {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("\(playlist.fileCount)")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
+                    PlaylistRowBadge(playlist: playlist)
                 }
                 .contentShape(Rectangle())
             }

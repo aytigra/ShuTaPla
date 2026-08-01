@@ -3,12 +3,18 @@
 //  ShuTaPla
 //
 //  Async thumbnail generation for the gallery view. Images are thumbnailed with
-//  `CGImageSource`; videos with `AVAssetImageGenerator`. Results are cached in
-//  memory (`NSCache`) and on disk. The disk cache is keyed by the file's content
-//  fingerprint (`URL.contentFingerprint`), so the same media shares one thumbnail
-//  regardless of which folder or playlist references it, and a rename or move keeps
-//  the entry rather than orphaning it. The fingerprint carries its own invalidation:
-//  a content change yields a new fingerprint and a fresh entry.
+//  `CGImageSource`; videos with `AVAssetImageGenerator`. Results are cached on disk,
+//  keyed by the file's content fingerprint (`URL.contentFingerprint`), so the same
+//  media shares one thumbnail regardless of which folder or playlist references it,
+//  and a rename or move keeps the entry rather than orphaning it. The fingerprint
+//  carries its own invalidation: a content change yields a new fingerprint and a
+//  fresh entry.
+//
+//  The disk cache is the only cache: it is warm across launches and, measured over a
+//  gallery scroll, serves every display (`doc/tasks/gallery_scroll_invalidation_storm.md`
+//  step 9). A decoded-image `NSCache` in front of it earned a 1.6% hit rate for a
+//  128 MB ceiling — redundant with the disk cache rather than additive to it, since
+//  what it spared was a read that hit anyway.
 //
 //  Generation runs off the main actor: the public entry point reads the model on
 //  the main actor (including any persisted fingerprint), then hands Sendable values
@@ -17,11 +23,6 @@
 //  into an `NSImage`. A worker that had to compute the fingerprint itself (the record
 //  didn't carry one yet) reports it back in the returned `MediaMetadata`, so the
 //  gallery's merge persists it and later sessions supply it without the read.
-//
-//  The in-memory cache is bounded by the decoded byte size of its images, so
-//  scrolling a large playlist evicts the least-recently-used thumbnails once the
-//  budget is reached rather than retaining every decoded bitmap. Reloading an
-//  evicted thumbnail is a cheap disk decode.
 //
 
 import Foundation
@@ -35,21 +36,10 @@ import Observation
 @Observable
 final class ThumbnailService {
 
-    /// Decoded thumbnails, keyed by cache key. Spares re-reads while scrolling.
-    /// Bounded by `cacheByteBudget` of decoded pixels; over budget, the cache
-    /// evicts least-recently-used entries.
-    @ObservationIgnored private let memory = NSCache<NSString, NSImage>()
-
-    /// Decoded-pixel ceiling for `memory`. An `AppConstants.galleryThumbnailPixelSize`
-    /// (440 px) thumbnail decodes to ~0.6 MB, so 128 MB holds ~200 of them — comfortably more than any viewport plus its
-    /// scroll buffer, while capping the footprint of a large playlist.
-    private static let cacheByteBudget = 128 * 1024 * 1024
-
     /// Where generated thumbnails are persisted between launches.
     @ObservationIgnored private let cacheDirectory: URL
 
     init(cacheDirectory: URL? = nil) {
-        memory.totalCostLimit = Self.cacheByteBudget
         self.cacheDirectory = cacheDirectory ?? Self.defaultCacheDirectory
     }
 
@@ -76,13 +66,14 @@ final class ThumbnailService {
 
     // MARK: - Public API
 
-    /// A thumbnail for `file`, generated on first request and cached thereafter, paired
-    /// with the metadata generation determined — duration and pixel dimensions for a fresh
-    /// video decode, dimensions for a fresh image, and the file's size whenever the file was
-    /// opened. The image is `nil` when the file can't be read or decoded (the caller shows a
-    /// placeholder); the metadata is empty for a thumbnail served from cache (no file open —
-    /// the caller falls back to the values persisted on the model). `maxPixelSize` is the
-    /// longest edge in pixels.
+    /// A thumbnail for `file`, generated on first request and served from the disk cache
+    /// thereafter, paired with the metadata generation determined — duration and pixel dimensions
+    /// for a fresh video decode, dimensions for a fresh image, and the file's size and modification
+    /// date whenever the file was opened. The image is `nil` when the file can't be read or decoded
+    /// (the caller shows a placeholder); the metadata is empty only when nothing was opened at all
+    /// (a skipped file, an unresolvable bookmark), and a disk-cache hit reports the staleness facts
+    /// without the decode ones, so the caller keeps what the model already holds.
+    /// `maxPixelSize` is the longest edge in pixels.
     func thumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int, folderURL: URL? = nil) async -> (image: NSImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         // A skipped file is wrong-type for its playlist: the decoder can't read it, so there is no
         // thumbnail to render. Keep the placeholder icon without resolving the bookmark or opening
@@ -98,9 +89,6 @@ final class ThumbnailService {
         // thumbnail is incomplete and the produce path re-decodes to settle it.
         let hdrComplete = file.isHDR != nil
         let isLocal = file.cloudStatus == .local
-        let memKey = memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize)
-
-        if let cached = memory.object(forKey: memKey) { return (cached, MediaMetadata(), nil) }
 
         // Generation *and* decode happen off the main actor, so the cell receives a
         // ready-to-draw image and scrolling never blocks on a lazy draw-time decode.
@@ -118,35 +106,7 @@ final class ThumbnailService {
             cacheDirectory: cacheDirectory
         )
         guard let boxed = produced.image else { return (nil, produced.metadata, produced.hdr) }
-
-        memory.setObject(boxed.image, forKey: memKey, cost: Self.byteCost(of: boxed.image))
         return (boxed.image, produced.metadata, produced.hdr)
-    }
-
-    /// Decoded byte size of an image, used as its cache cost: pixel area × 4 (RGBA).
-    /// The image is built from a `CGImage`, so its first representation carries the
-    /// true pixel dimensions.
-    private static func byteCost(of image: NSImage) -> Int {
-        guard let rep = image.representations.first else { return 0 }
-        return rep.pixelsWide * rep.pixelsHigh * 4
-    }
-
-    /// A synchronous in-memory hit for the scroll-hot path — no disk I/O, so a
-    /// cell that has been shown before paints its thumbnail immediately without a
-    /// placeholder flash. Returns `nil` on a miss; the caller then awaits
-    /// `thumbnail(for:in:maxPixelSize:)` to generate it off the main actor.
-    func cachedThumbnail(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSImage? {
-        memory.object(forKey: memoryKey(for: file, in: playlist, maxPixelSize: maxPixelSize))
-    }
-
-    /// Cheap, disk-I/O-free key for the in-memory cache: playlist id + relative path + longest-edge
-    /// pixel size + content fingerprint. The playlist's stable id is collision-free (unlike a
-    /// per-process `hashValue`, which two folders' bookmarks can share and cross-paint). Folding in
-    /// the fingerprint means a content change the record has picked up (a new fingerprint) keys a
-    /// fresh entry, so an in-place edit isn't served a stale decode carried over from earlier in the
-    /// session; an empty string stands in until the first fingerprint is known.
-    private func memoryKey(for file: PlaylistFile, in playlist: Playlist, maxPixelSize: Int) -> NSString {
-        "\(playlist.id.uuidString)|\(file.relativePath)|\(maxPixelSize)|\(file.fingerprint ?? "")" as NSString
     }
 
     /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative

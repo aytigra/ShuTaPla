@@ -77,6 +77,7 @@ extension AppState {
                 modelContext.delete(file)
             }
             persistAndRefresh()
+            notePlaylistsChanged()   // the row's file count
             // Advance whichever channel was playing this playlist off a trashed track, so the
             // engine never holds a file that's no longer in the playlist. Covers every delete
             // entry point (Manager list, Visual Overlay, audio overlay) in one place.

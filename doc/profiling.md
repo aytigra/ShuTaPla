@@ -60,9 +60,12 @@ python3 "$SKILL/scripts/analyze_trace.py" --trace <t> --json-only --top 12
 ```
 - **Hangs lane + `correlations`** — each main-thread hang with `main_running_coverage_pct` (100% =
   fully CPU-bound on main) and its hot symbols. This is where user-perceived lag lives.
-- **`swiftui-causes`** — what keeps invalidating views. On the **host Mac this lane sometimes comes
-  back empty**; fall back to inferring view churn from `AG::Graph::*` and refcount symbols in the
-  time-profiler.
+- **`swiftui-causes` is empty here.** The lane that names what keeps invalidating views has come
+  back empty in **every** trace recorded for this app — host Mac, SwiftUI template, attached to the
+  Debug build. So `--fanin-for "<view>"`, which ranks the source nodes driving one view's updates,
+  has nothing to rank: don't plan an invalidation investigation around it. Attribute view churn
+  from `_printChanges` in the app instead, and use the trace for what it does report — the Hangs
+  lane and the time profiler, i.e. where the wall-clock actually goes.
 - **Sizing a subsystem below the top-N floor.** A subsystem can be real cost yet have every
   individual symbol rank below `--top 12`. Dump the full table and sum it before concluding it's
   negligible:

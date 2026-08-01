@@ -22,15 +22,11 @@ import SwiftUI
 
     @Test func galleryThumbnailKeyChangesWhenFileBecomesLocal() {
         let (playlist, file) = makeFile()
-        let cell = GalleryCell(
-            file: file, playlist: playlist, isSelected: false, isCurrent: false,
-            isRenaming: false, isStripping: false, draftName: .constant(""),
-            onCommitRename: {}, onCancelRename: {}
-        )
+        let thumbnail = GalleryThumbnailImage(file: file, playlist: playlist)
         file.cloudStatus = .inCloud
-        let evicted = cell.thumbnailKey
+        let evicted = thumbnail.thumbnailKey
         file.cloudStatus = .local
-        #expect(cell.thumbnailKey != evicted)   // the flip to local re-fires the thumbnail task
+        #expect(thumbnail.thumbnailKey != evicted)   // the flip to local re-fires the thumbnail task
     }
 
     @Test func listMetadataKeyChangesWhenFileBecomesLocal() {

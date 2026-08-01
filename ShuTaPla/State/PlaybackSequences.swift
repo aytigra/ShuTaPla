@@ -52,7 +52,9 @@ final class PlaybackSequences {
     }
 
     /// Marks every memoized sequence stale, so the next read re-derives from the saved store.
-    func bump() { version &+= 1 }
+    func bump() {
+        version &+= 1
+    }
 
     /// The playlist's ordered playable sequence — the file list, the overlays, and playback share it.
     func sequence(of playlist: Playlist) -> [PersistentIdentifier] {

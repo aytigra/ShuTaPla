@@ -170,6 +170,36 @@ import UniformTypeIdentifiers
         #expect(file.lastModified == Date(timeIntervalSince1970: 3))   // nil incoming → untouched
     }
 
+    /// The identical-write guard. Both producers re-merge the facts a record already carries on
+    /// every appearance — a gallery cell served from the disk thumbnail cache reports its size and
+    /// mtime again — and SwiftData dirties a row on an equal write just as on a real one. Unguarded,
+    /// that is one dirty record (and one save) per cell for the whole of a scroll.
+    @MainActor @Test func mergingIdenticalFactsLeavesTheRecordClean() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let modified = Date(timeIntervalSince1970: 1)
+        let file = fullyCachedFile(size: 100, modified: modified)
+        context.insert(file)
+        try context.save()
+
+        file.merge(MediaMetadata(duration: 10, width: 1920, height: 1080, fileSizeBytes: 100,
+                                 fingerprint: "fp", lastModified: modified))
+        #expect(context.hasChanges == false)   // nothing to flush, so the producers' `trySave` no-ops
+    }
+
+    /// The other half: a genuinely new fact must still be written and still dirty the record.
+    @MainActor @Test func mergingAChangedFactDirtiesTheRecord() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let file = fullyCachedFile(size: 100, modified: Date(timeIntervalSince1970: 1))
+        context.insert(file)
+        try context.save()
+
+        file.merge(MediaMetadata(fileSizeBytes: 200))
+        #expect(file.fileSizeBytes == 200)
+        #expect(context.hasChanges)
+    }
+
     // MARK: - The invalidation primitive
 
     /// A file carrying every cached fact.

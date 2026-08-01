@@ -127,6 +127,21 @@ final class AppState {
     /// into view when a playlist is (re-)selected while the overlay is already open.
     var audioScrollToken = 0
 
+    /// The Observation gate the sidebar lists derive against — `sequences.version` for the playlist
+    /// set. Bumped only by the mutations that change what a sidebar row shows: the playlist set
+    /// itself (create / delete / rename / reorder) and the file create/delete paths, since the rows
+    /// carry `fileCount`. Written through `notePlaylistsChanged()` alone.
+    ///
+    /// The sidebars derive from this rather than a live `@Query<Playlist>` because a mounted query
+    /// refaults *every* registered instance of its entity on *any* store save — including the
+    /// per-cell metadata fills and the ~5s `lastPosition` writes, neither of which changes a
+    /// playlist. Since SwiftData hands the same instance to the query and to every view holding one
+    /// directly, that refault re-fired per-keypath observation across the whole Manager chrome and
+    /// made gallery scroll CPU-bound in AttributeGraph churn. A plain fetch refaults nothing
+    /// (`PlaylistSnapshotRefaultTests`), so deriving on this narrow signal costs one small fetch per
+    /// real change and wakes nothing in between.
+    private(set) var playlistsVersion = 0
+
     /// A user-facing message when persisting a mutation fails. Set by `persistAndRefresh` when the
     /// save throws; the failed edit is rolled back so it can't be flushed by a later save, and the
     /// store-side lists re-derive from the unchanged saved store. Presented by the app-root alert.
@@ -259,6 +274,34 @@ final class AppState {
     /// and the background reconcile path (`update`), which hands its failure back as a `String`.
     static func saveErrorText(_ detail: String) -> String {
         "Couldn’t save your changes: \(detail)"
+    }
+
+    /// Bumps `playlistsVersion`. Called by the mutations that change which playlists exist, their
+    /// order or label, or any playlist's file count — and by nothing else, since every extra bump
+    /// re-renders both sidebar lists.
+    func notePlaylistsChanged() {
+        playlistsVersion &+= 1
+    }
+
+    /// The playlists of `mediaType` in section order — what the two sidebar lists render, in place
+    /// of a live `@Query<Playlist>` (see `playlistsVersion` for why there is no query).
+    ///
+    /// Reading the version here is the Observation dependency: the fetch itself registers none, so
+    /// a body calling this re-runs exactly when a real playlist-set change bumps the version. That
+    /// wakes the list body and re-diffs the set; a row's own `fileCount` needs the separate gate
+    /// below, since a re-run body alone does not re-evaluate the rows.
+    func playlists(ofType mediaType: MediaType) -> [Playlist] {
+        _ = playlistsVersion
+        return modelContext.playlists(ofType: mediaType)
+    }
+
+    /// A playlist's file count for its row badge, gated on the same version — `Playlist.fileCount`
+    /// is likewise a `fetchCount` that registers nothing. Read by `PlaylistRowBadge`, which is a
+    /// view of its own precisely so this gate is registered where the count is shown: a bump
+    /// re-evaluates the enclosing list body, but not the rows (see the badge for why).
+    func fileCount(of playlist: Playlist) -> Int {
+        _ = playlistsVersion
+        return playlist.fileCount
     }
 
     /// Resolves one identifier from a file sequence to its model, or nil if it no longer exists —

@@ -49,15 +49,12 @@ struct LibrarySurface: View {
     let context: LibraryContext
 
     @Environment(AppState.self) private var appState
-    @Query(sort: \Playlist.sortOrder) private var allPlaylists: [Playlist]
 
     @State private var fileRenamingID: UUID?
     @State private var fileDraftName = ""
     // A switch/re-center scroll for the file list, applied by `PagedList`. Set when the channel
     // asks to re-center (a playlist switch bumps `scrollTrigger`).
     @State private var fileScrollCommand: ScrollCommand?
-
-    private var playlists: [Playlist] { allPlaylists.filter { $0.mediaType == context.mediaType } }
 
     /// The current track's index in the file list — where `PagedList` opens with no travel, and
     /// the row a re-center scroll reveals. `nil` when nothing is current or it is filtered out.
@@ -89,7 +86,13 @@ struct LibrarySurface: View {
     // MARK: - Playlists column
 
     private var playlistsColumn: some View {
-        VStack(spacing: 0) {
+        // One fetch per evaluation, shared by the list and its empty state. Deliberately not a
+        // `@Query`: a live query refaults every registered `Playlist` on any store save — including
+        // the ~5s position write this surface itself provokes — re-rendering every view holding one.
+        // Reading `appState.playlists(ofType:)` registers `playlistsVersion` instead, so this
+        // re-evaluates only when the playlist set, its order, a name or a count changes.
+        let playlists = appState.playlists(ofType: context.mediaType)
+        return VStack(spacing: 0) {
             List {
                 ForEach(playlists) { playlist in
                     playlistRow(playlist)
@@ -126,15 +129,7 @@ struct LibrarySurface: View {
             HStack {
                 Text(playlist.name).lineLimit(1)
                 Spacer()
-                if appState.deletingPlaylistIDs.contains(playlist.id) {
-                    ProgressView().controlSize(.small).tint(.red)
-                } else if appState.busyPlaylistIDs.contains(playlist.id) {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("\(playlist.fileCount)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
+                PlaylistRowBadge(playlist: playlist)
             }
             .contentShape(Rectangle())
         }

@@ -24,8 +24,10 @@ final class HDRCache {
     /// Records a still image's decode-determined HDR range on `file`. The gallery thumbnailer and
     /// the image engine each decode a `CGImage` and report its range here. Persists immediately so a
     /// later `includePendingChanges = false` object fetch can't refault the write away before autosave.
+    /// A re-decode that settles the same fact writes nothing, so a re-display leaves the context clean
+    /// and costs no save (`setIfChanged`).
     func record(imageIsHDR: Bool, for file: PlaylistFile) {
-        file.isHDR = imageIsHDR
+        file.setIfChanged(\.isHDR, to: imageIsHDR)
         file.trySave()
     }
 
@@ -35,9 +37,9 @@ final class HDRCache {
     /// so a `nil` gamma is a genuine SDR reading — no PQ/HLG transfer — settling `isHDR` to a
     /// determined `false`, never a guess. Persists immediately for the same reason as the image sink.
     func record(gamma: String?, primaries: String?, for file: PlaylistFile) {
-        file.isHDR = VideoColorTags.isHDR(gamma: gamma)
-        file.hdrGamma = gamma
-        file.hdrPrimaries = primaries
+        file.setIfChanged(\.isHDR, to: VideoColorTags.isHDR(gamma: gamma))
+        file.setIfChanged(\.hdrGamma, to: gamma)
+        file.setIfChanged(\.hdrPrimaries, to: primaries)
         file.trySave()
     }
 

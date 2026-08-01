@@ -169,9 +169,12 @@ nonisolated final class MPVClient: @unchecked Sendable {
             throw MPVError.initializeFailed
         }
 
-        // Surface mpv's own diagnostics (VO/window/embedding decisions, decode errors)
-        // on the event stream so they reach the console — otherwise terminal=no hides them.
-        mpv_request_log_messages(handle, "v")
+        // Surface mpv's own problems (decode failures, VO/window/embedding errors) on the event
+        // stream so they reach the console — otherwise terminal=no hides them. `warn` is the
+        // boundary between a problem and narration: the levels above it report what mpv decided
+        // rather than what went wrong, and at one line per decode they drown the console. Raise it
+        // to `v` (or `debug`) while debugging playback itself.
+        mpv_request_log_messages(handle, "warn")
 
         // Observe the properties the engines mirror as UI state.
         mpv_observe_property(handle, PropertyID.timePos, "time-pos", MPV_FORMAT_DOUBLE)

@@ -126,6 +126,7 @@ extension AppState {
         // creation starts playback (which reads the playback sequence) right below, and the
         // background derivation resolves the playlist by id from the committed store.
         persistAndRefresh()
+        notePlaylistsChanged()   // a new sidebar row
 
         // Player-mode creation comes from a playback overlay (the Visual Overlay or the
         // audio overlay) and starts the new playlist playing; Manager-mode creation loads it

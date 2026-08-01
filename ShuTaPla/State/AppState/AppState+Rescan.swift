@@ -68,6 +68,7 @@ extension AppState {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isNotEmpty else { return }
         playlist.name = trimmed
+        notePlaylistsChanged()   // the row's label
     }
 
     /// Deletes a playlist and its files, clearing any active/selected reference to
@@ -106,6 +107,7 @@ extension AppState {
         deletingPlaylistIDs.remove(id)
         compactSortOrder(for: mediaType)
         persistAndRefresh()
+        notePlaylistsChanged()   // the row is gone and the section renumbered
     }
 
     /// Reorders the playlists of one section. `ordered` is the section's current
@@ -116,6 +118,7 @@ extension AppState {
         for (index, playlist) in copy.enumerated() {
             playlist.sortOrder = index
         }
+        notePlaylistsChanged()   // the section's order
     }
 
     /// Cancels a running background re-scan — the only cancellable Manager operation.
@@ -222,6 +225,7 @@ extension AppState {
         // moment this hop runs. No membership decision is finalized from the stale window.
         modelContext.refreshFromStore(playlist)
         sequences.bump()
+        notePlaylistsChanged()   // the reconcile pruned/appended files, so the row's count moved
         // A re-scan can drop either channel's playing file; advance off it just like a delete
         // does, so neither engine holds a file that's no longer in the playlist.
         coordinator.reconcile(playlistThatChanged: playlist)

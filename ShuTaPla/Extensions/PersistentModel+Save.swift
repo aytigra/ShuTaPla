@@ -10,13 +10,29 @@ import Foundation
 import SwiftData
 
 extension PersistentModel {
-    /// Flushes this model's context to the store, ignoring a failure. The metadata producers (the
-    /// gallery thumbnail merge, the list-mode extract) persist their derived facts this way so an
-    /// unsaved dirty edit isn't refaulted back to stored values by the next
-    /// `includePendingChanges = false` object fetch. A failed save costs nothing more than
+    /// Assigns `value` only when it differs from what's there. SwiftData dirties a record — and
+    /// re-fires its per-keypath Observation — on an *equal* write just as on a real one, so a
+    /// derived-fact producer that re-states what a record already holds costs a re-render and a save
+    /// for nothing. The idempotent sinks (the metadata merge, the HDR records, the cloud-status feed)
+    /// write through this, which is what keeps a gallery scroll over already-cached files from
+    /// dirtying and saving once per cell.
+    nonisolated func setIfChanged<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<Self, Value>, to value: Value) {
+        guard self[keyPath: keyPath] != value else { return }
+        self[keyPath: keyPath] = value
+    }
+
+    /// Flushes this model's context to the store when it has something to flush, ignoring a failure.
+    /// The metadata producers (the gallery thumbnail merge, the list-mode extract) persist their
+    /// derived facts this way so an unsaved dirty edit isn't refaulted back to stored values by the
+    /// next `includePendingChanges = false` object fetch. A failed save costs nothing more than
     /// re-deriving the fact on the next display, so — unlike a user mutation, which routes through
     /// `AppState.persistAndRefresh` for its rollback and error surfacing — it needn't be surfaced.
+    ///
+    /// The `hasChanges` gate is what lets those producers call this unconditionally: a sink that
+    /// re-states facts a record already holds leaves the context clean, so the save is skipped here
+    /// rather than at each call site.
     func trySave() {
+        guard modelContext?.hasChanges == true else { return }
         try? modelContext?.save()
     }
 }

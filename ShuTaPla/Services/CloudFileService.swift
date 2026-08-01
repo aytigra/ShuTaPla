@@ -152,12 +152,14 @@ final class CloudFileService {
 
     /// Writes each update's status onto the file it names, matched by relative path; files no
     /// update mentions keep their current status. The seam the tests drive: a status event flips
-    /// the matching model and leaves the rest untouched.
+    /// the matching model and leaves the rest untouched. A restated status writes nothing — the feed
+    /// re-reports unchanged files, and an equal write would dirty the record and re-render its row
+    /// for a status that never moved (`setIfChanged`).
     func apply(_ updates: [CloudStatusUpdate], to files: [PlaylistFile]) {
         guard updates.isNotEmpty else { return }
         let byPath = Dictionary(files.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
         for update in updates {
-            byPath[update.relativePath]?.cloudStatus = update.status
+            byPath[update.relativePath]?.setIfChanged(\.cloudStatus, to: update.status)
         }
     }
 }
