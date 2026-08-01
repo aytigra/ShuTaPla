@@ -191,13 +191,7 @@ reader that registers the gate where the count is shown (step 10).
    evaluation at all, so this cost is confined to a cell's first appearance.
 
    Counters and `_printChanges` are exhausted: they say how many bodies run, not whether that is
-   where the wall-clock goes. The other per-cell cost is unmeasured and may well dominate — step 9
-   settles that every appearance is a disk read plus a decode, 1880 out of 1880. Sizing *that* would
-   need a fresh Instruments trace per `doc/profiling.md` (host Mac, attach to the Debug build's pid),
-   read for its Hangs lane and time profiler, since the original trace predates steps 1–6 and no
-   longer describes this code. No such trace was recorded: the two stages below named the residual
-   without one, and removing it made the scroll smooth, so the per-appearance disk read never had to
-   be sized. It remains unmeasured.
+   where the wall-clock goes. The two stages below close that gap without a trace.
 
    ### Catching the residual — plan
 
