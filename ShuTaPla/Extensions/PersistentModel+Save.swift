@@ -13,9 +13,14 @@ extension PersistentModel {
     /// Assigns `value` only when it differs from what's there. SwiftData dirties a record — and
     /// re-fires its per-keypath Observation — on an *equal* write just as on a real one, so a
     /// derived-fact producer that re-states what a record already holds costs a re-render and a save
-    /// for nothing. The idempotent sinks (the metadata merge, the HDR records, the cloud-status feed)
-    /// write through this, which is what keeps a gallery scroll over already-cached files from
-    /// dirtying and saving once per cell.
+    /// for nothing. The idempotent sinks (the metadata merge, the HDR records) write through this,
+    /// which is what keeps a gallery scroll over already-cached files from dirtying and saving once
+    /// per cell.
+    ///
+    /// `nonisolated` because a `@Model` type doesn't take the module's MainActor default, so its own
+    /// extension members are nonisolated contexts — `PlaylistFile.merge` is one, and can call only a
+    /// nonisolated sink, though like every caller here it runs on the main actor. `trySave` below is
+    /// MainActor: this protocol extension does take the default.
     nonisolated func setIfChanged<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<Self, Value>, to value: Value) {
         guard self[keyPath: keyPath] != value else { return }
         self[keyPath: keyPath] = value

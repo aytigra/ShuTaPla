@@ -267,6 +267,16 @@ struct ModelTests {
     }
 
     @Test(arguments: [
+        (MediaType.video, "film.stack", "videos"),
+        (MediaType.image, "photo.stack", "images"),
+        (MediaType.audio, "music.note.list", "audio files"),
+    ])
+    func mediaTypePlaceholderCopy(_ type: MediaType, _ image: String, _ noun: String) {
+        #expect(type.systemImage == image)
+        #expect(type.pluralNoun == noun)
+    }
+
+    @Test(arguments: [
         (ServiceFilter.untagged, "tag.slash", "untagged files"),
         (ServiceFilter.invalidTagging, "exclamationmark.triangle", "files with invalid tagging"),
     ])

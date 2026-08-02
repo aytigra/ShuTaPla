@@ -23,6 +23,24 @@ nonisolated enum MediaType: String, Codable, Sendable, CaseIterable {
         case .audio: return "Audio"
         }
     }
+
+    /// SF Symbol standing for a stack of this type's files (the empty-library placeholders).
+    var systemImage: String {
+        switch self {
+        case .video: return "film.stack"
+        case .image: return "photo.stack"
+        case .audio: return "music.note.list"
+        }
+    }
+
+    /// Lowercase plural naming this type's files inside a sentence ("Add a folder of …").
+    var pluralNoun: String {
+        switch self {
+        case .video: return "videos"
+        case .image: return "images"
+        case .audio: return "audio files"
+        }
+    }
 }
 
 /// How an image is scaled to fit the player surface.

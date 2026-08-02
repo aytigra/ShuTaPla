@@ -18,17 +18,19 @@ struct PlaylistSidebar: View {
 
     var body: some View {
         // One fetch per body evaluation, shared by the section and its empty state rather than
-        // read twice. Deliberately not a `@Query`: a live query refaults every registered
-        // `Playlist` on any store save, which re-rendered the whole Manager on each gallery
-        // metadata fill. Reading `appState.playlists(ofType:)` registers `playlistsVersion`, so
-        // this body re-runs only when the playlist set, its order, a name or a count changes.
+        // read twice. Reading it registers `AppState.playlistsVersion` — the gate that decides
+        // when this body re-runs, and why the list is a fetch rather than a `@Query`.
         let playlists = appState.playlists(ofType: appState.managerScope)
         List {
             importingSection
             section(playlists)
         }
         .listStyle(.sidebar)
-        .overlay { emptyOverlay(playlists) }
+        .overlay {
+            if playlists.isEmpty {
+                NoPlaylistsPlaceholder(mediaType: appState.managerScope)
+            }
+        }
         .safeAreaInset(edge: .top) {
             AudioInlet()
         }
@@ -51,23 +53,6 @@ struct PlaylistSidebar: View {
     }
 
     // MARK: - Sections
-
-    /// The placeholder shown when the active scope has no playlists.
-    @ViewBuilder
-    private func emptyOverlay(_ playlists: [Playlist]) -> some View {
-        if playlists.isEmpty {
-            let (icon, hint): (String, String) = switch appState.managerScope {
-            case .image: ("photo.stack", "Add a folder of images.")
-            case .video: ("film.stack", "Add a folder of videos.")
-            case .audio: ("music.note.list", "Add a folder of audio files.")
-            }
-            ContentUnavailableView {
-                Label("No \(appState.managerScope.displayName) Playlists", systemImage: icon)
-            } description: {
-                Text(hint)
-            }
-        }
-    }
 
     /// Transient rows for folders still being scanned, each with a spinner. They
     /// disappear once the finished playlist appears in its section.

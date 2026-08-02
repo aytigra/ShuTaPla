@@ -10,12 +10,6 @@
 //  carries its own invalidation: a content change yields a new fingerprint and a
 //  fresh entry.
 //
-//  The disk cache is the only cache: it is warm across launches and, measured over a
-//  gallery scroll, serves every display (`doc/tasks/gallery_scroll_invalidation_storm.md`
-//  step 9). A decoded-image `NSCache` in front of it earned a 1.6% hit rate for a
-//  128 MB ceiling — redundant with the disk cache rather than additive to it, since
-//  what it spared was a read that hit anyway.
-//
 //  Generation runs off the main actor: the public entry point reads the model on
 //  the main actor (including any persisted fingerprint), then hands Sendable values
 //  (bookmark, relative path, size, fingerprint) to `nonisolated` workers that resolve
@@ -109,9 +103,8 @@ final class ThumbnailService {
         return (boxed.image, produced.metadata, produced.hdr)
     }
 
-    /// Disk-cached thumbnail bytes for a file addressed by bookmark + relative
-    /// path, without the in-memory `NSImage` layer. Used by the gallery's higher
-    /// level path and exercised directly by tests.
+    /// Thumbnail bytes for a file addressed by bookmark + relative path rather than by model —
+    /// the seam `ThumbnailServiceTests` drives the produce and disk-cache paths through.
     func thumbnailData(bookmark: Data, relativePath: String, isVideo: Bool, maxPixelSize: Int, folderURL: URL? = nil) async -> Data? {
         await Self.produceData(
             folderURL: folderURL,

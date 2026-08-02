@@ -13,10 +13,6 @@ import Foundation
 import SwiftData
 @testable import ShuTaPla
 
-/// A one-shot flag for `withObservationTracking`'s `@Sendable` `onChange`, which can't mutate a
-/// captured `var`. The callback runs synchronously on the main actor within the mutation.
-private final class Fired: @unchecked Sendable { var value = false }
-
 @MainActor
 struct CloudFileServiceTests {
 
@@ -128,19 +124,16 @@ struct CloudFileServiceTests {
 
         // A repeated metadata tick reports the same status. Feeding it must not invalidate the
         // observer — with the match-all predicate every file is fed every tick, so an unchanged
-        // write would re-render the whole Manager list + gallery on any metadata change. `onChange`
-        // is `@Sendable`, so record the fire through a reference (it runs synchronously on the main
-        // actor within the mutation — single-threaded in practice).
-        let invalidated = Fired()
-        withObservationTracking { _ = a.cloudStatus } onChange: { invalidated.value = true }
-        service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .inCloud)], to: [a])
-        #expect(!invalidated.value)   // unchanged status → no redundant invalidation
+        // write would re-render the whole Manager list + gallery on any metadata change.
+        let status = { _ = a.cloudStatus }
+        #expect(!firesObservation(reading: status, on: {
+            service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .inCloud)], to: [a])
+        }))
 
         // A genuine transition still notifies observers — the gate suppresses only no-op writes.
-        let changed = Fired()
-        withObservationTracking { _ = a.cloudStatus } onChange: { changed.value = true }
-        service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .local)], to: [a])
-        #expect(changed.value)
+        #expect(firesObservation(reading: status, on: {
+            service.apply([CloudStatusUpdate(relativePath: "a.mp4", status: .local)], to: [a])
+        }))
     }
 
     // The caller resolves the file URL under the playlist folder's live scoped session (the

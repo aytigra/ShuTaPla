@@ -138,6 +138,49 @@ struct HDRCacheTests {
         #expect(file.isHDR == false)
     }
 
+    /// A re-decode that settles the same image range writes nothing: every fresh thumbnail reports
+    /// its finding here, and an equal write would re-render each view reading the badge and dirty
+    /// the record for a fact that never moved. The changed half is the control — the gate suppresses
+    /// only no-op writes.
+    @Test func recordingAnUnchangedImageRangeInvalidatesNothing() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "I", folderBookmark: Data(), folderPath: "/i", mediaType: .image)
+        context.insert(playlist)
+        let file = insertFile("a.heic", order: 0, to: playlist, in: context)
+        try context.save()
+
+        let sink = HDRCache()
+        sink.record(imageIsHDR: true, for: file)
+
+        #expect(!firesObservation(reading: { _ = file.isHDR },
+                                  on: { sink.record(imageIsHDR: true, for: file) }))
+        #expect(firesObservation(reading: { _ = file.isHDR },
+                                 on: { sink.record(imageIsHDR: false, for: file) }))
+        #expect(file.isHDR == false)
+    }
+
+    /// The same for the video sink, across all three columns it writes: restating a decode's tags
+    /// invalidates nothing, while a genuinely new tag still notifies and is written.
+    @Test func recordingUnchangedVideoTagsInvalidatesNothing() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "V", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
+        context.insert(playlist)
+        let file = insertFile("a.mp4", order: 0, to: playlist, in: context)
+        try context.save()
+
+        let sink = HDRCache()
+        sink.record(gamma: "pq", primaries: "bt.2020", for: file)
+
+        let allColumns = { _ = file.isHDR; _ = file.hdrGamma; _ = file.hdrPrimaries }
+        #expect(!firesObservation(reading: allColumns,
+                                  on: { sink.record(gamma: "pq", primaries: "bt.2020", for: file) }))
+        #expect(firesObservation(reading: allColumns,
+                                 on: { sink.record(gamma: "pq", primaries: "display-p3", for: file) }))
+        #expect(file.hdrPrimaries == "display-p3")
+    }
+
     /// The thumbnail-result dispatch — the surface `GalleryCell` calls — routes each `ThumbnailHDR`
     /// case to the matching column writer: an `.image` finding settles `isHDR` alone; a `.video`
     /// finding settles the flag from the gamma and caches the colour strings.

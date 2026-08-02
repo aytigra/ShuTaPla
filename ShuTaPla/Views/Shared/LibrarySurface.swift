@@ -86,11 +86,9 @@ struct LibrarySurface: View {
     // MARK: - Playlists column
 
     private var playlistsColumn: some View {
-        // One fetch per evaluation, shared by the list and its empty state. Deliberately not a
-        // `@Query`: a live query refaults every registered `Playlist` on any store save — including
-        // the ~5s position write this surface itself provokes — re-rendering every view holding one.
-        // Reading `appState.playlists(ofType:)` registers `playlistsVersion` instead, so this
-        // re-evaluates only when the playlist set, its order, a name or a count changes.
+        // One fetch per evaluation, shared by the list and its empty state. Reading it registers
+        // `AppState.playlistsVersion` — the gate that decides when this column re-evaluates, and
+        // why the list is a fetch rather than a `@Query`.
         let playlists = appState.playlists(ofType: context.mediaType)
         return VStack(spacing: 0) {
             List {
@@ -101,11 +99,7 @@ struct LibrarySurface: View {
             .scrollContentBackground(.hidden)
             .overlay {
                 if playlists.isEmpty {
-                    ContentUnavailableView {
-                        Label("No \(context.mediaType.displayName) Playlists", systemImage: "rectangle.stack")
-                    } description: {
-                        Text("Add a folder of \(context.mediaType.displayName.lowercased()) files.")
-                    }
+                    NoPlaylistsPlaceholder(mediaType: context.mediaType)
                 }
             }
 
