@@ -1146,6 +1146,160 @@ struct AppStateTests {
         #expect(Set(playlist.files.map(\.fileName)) == ["b.mp4"])
     }
 
+    @Test func deletingThePlayingFileResumesAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg"]
+        // Real (empty) files: the coordinator skips a local target that isn't on disk.
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        // An image playlist keeps the whole test off libmpv — the image engine has no mpv handle.
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(playlist)
+        for (index, name) in names.enumerated() {
+            insertFile(name, order: index, to: playlist, in: context)
+        }
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        // Advance into the middle of the sequence, then delete the file on screen.
+        appState.coordinator.play(playlist)
+        appState.coordinator.next(playlist)
+        appState.coordinator.next(playlist)
+        let playing = try #require(appState.coordinator.visualCurrentFile)
+        #expect(playing.fileName == "3.jpg")
+
+        let error = await appState.deleteFiles([playing])
+
+        #expect(error == nil)
+        // Playback continues with the next file, not back at the head of the sequence.
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "4.jpg")
+    }
+
+    /// A Manager multi-select delete that takes a whole run of files around the playing one lands
+    /// on the first file *after* that run — the survivors keep their `sortOrder`, so the landing
+    /// is a stored value, not a list position that the removals would have shifted under it.
+    @Test func deletingARunAroundThePlayingFileResumesAtTheFirstSurvivorAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = (1...13).map { String(format: "%02d.jpg", $0) }
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(playlist)
+        let files = names.enumerated().map { insertFile($1, order: $0, to: playlist, in: context) }
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(playlist)
+        for _ in 1...5 { appState.coordinator.next(playlist) }
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "06.jpg")
+
+        // Select 03…10 in the Manager — the playing file plus seven of its neighbours — and delete.
+        let error = await appState.deleteFiles(Array(files[2...9]))
+
+        #expect(error == nil)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "11.jpg")
+    }
+
+    /// The case the captured position exists for: a triage sweep. A service filter has no resume
+    /// slot to read a position from, so the landing can only come from the `sortOrder` the delete
+    /// captured — and it must be the next survivor *inside* the filtered sequence, not the next
+    /// row by `sortOrder`.
+    @Test func deletingThePlayingFileUnderAServiceFilterResumesWithinTheFilteredSet() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4 [beach].jpg", "5.jpg"]
+        let folder = try makeBookmarkedFolder(names)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        let playlist = Playlist(name: "P", folderBookmark: folder.bookmark,
+                                folderPath: folder.url.path, mediaType: .image)
+        context.insert(playlist)
+        for (index, name) in names.enumerated() {
+            let tagged = name.contains("[")
+            insertFile(name, tags: tagged ? ["beach"] : [], status: tagged ? .valid : .untagged,
+                       order: index, to: playlist, in: context)
+        }
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        // The untagged sweep's sequence is 1, 2, 3, 5 — the tagged file sits between 3 and 5.
+        appState.toggleServiceFilter(.untagged, on: playlist)
+        appState.coordinator.play(playlist)
+        appState.coordinator.next(playlist)
+        appState.coordinator.next(playlist)
+        let playing = try #require(appState.coordinator.visualCurrentFile)
+        #expect(playing.fileName == "3.jpg")
+
+        let error = await appState.deleteFiles([playing])
+
+        #expect(error == nil)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "5.jpg")
+    }
+
+    /// The same landing on the audio channel, where `reconcile` reads the position off
+    /// `audioCurrentFile` instead of `visualCurrentFile`. The channel is started directly on the
+    /// third track: the placeholder files never load, so the engine's own advance can't be relied
+    /// on to move the cursor.
+    @Test func deletingThePlayingAudioTrackResumesAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (folder, playlist, files) = try makeAudioPlaylist(tags: [[], [], [], []], in: context)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(playlist, startingAt: files[2])
+        #expect(appState.coordinator.audioCurrentFile?.fileName == "f2.mp3")
+
+        let error = await appState.deleteFiles([files[2]])
+
+        #expect(error == nil)
+        #expect(appState.coordinator.audioCurrentFile?.fileName == "f3.mp3")
+    }
+
+    /// Playback keeps running while the trash is in flight, so the landing must read where the
+    /// channel stands when the rows actually go — not where it stood when the delete was asked for.
+    /// Here the channel advances onto a file that is itself in the delete set: a position read
+    /// before the await names a file that survives, and lands playback *behind* where it was.
+    @Test func deletingAFileTheChannelAdvancedOntoMidTrashResumesAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg"]
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(playlist)
+        let files = names.enumerated().map { insertFile($1, order: $0, to: playlist, in: context) }
+        try context.save()
+        let hook = TrashHook()
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(playlist)
+        appState.coordinator.next(playlist)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "2.jpg")
+        // Mid-trash, an unattended advance moves the channel onto the file being deleted.
+        hook.action = { appState.coordinator.next(playlist) }
+
+        let error = await appState.deleteFiles([files[2]])   // 3.jpg — a Manager selection, not the file on screen
+
+        #expect(error == nil)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "4.jpg")
+    }
+
     // MARK: - Download on demand
 
     @Test func downloadFilesRequestsEvictedTargetsAndMarksThemDownloading() throws {
@@ -2341,6 +2495,106 @@ struct AppStateTests {
 
         #expect(storedFiles(of: image).map(\.fileName) == ["2.jpg"])
         #expect(image.currentFileID == secondID)
+    }
+
+    @Test func rescanPruneResumesAfterTheDroppedFileInsteadOfRewinding() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg"]
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let image = Playlist(name: "I", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(image)
+        for (index, name) in names.enumerated() { addFile(name, order: index, to: image, in: context) }
+        // The re-scan reports the file on screen gone from disk; the rest are still there.
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(
+                result: emptyResult,
+                rescanResult: [scanned("1.jpg", .image), scanned("2.jpg", .image), scanned("4.jpg", .image)]
+            )
+        )
+        defer { appState.coordinator.shutdown() }
+
+        // Advance into the middle of the sequence, as a session that's been running does.
+        appState.coordinator.play(image)
+        appState.coordinator.next(image)
+        appState.coordinator.next(image)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "3.jpg")
+
+        await appState.update(image)
+
+        #expect(storedFiles(of: image).map(\.fileName) == ["1.jpg", "2.jpg", "4.jpg"])
+        // Playback continues with the file that followed the pruned one, not back at the head.
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "4.jpg")
+    }
+
+    @Test func rescanPruneResumesFromTheDroppedFileNotThePruneRange() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg"]
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let image = Playlist(name: "I", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(image)
+        for (index, name) in names.enumerated() { addFile(name, order: index, to: image, in: context) }
+        // Two non-adjacent files vanish: the one on screen and a later one.
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(
+                result: emptyResult,
+                rescanResult: [scanned("1.jpg", .image), scanned("3.jpg", .image), scanned("5.jpg", .image)]
+            )
+        )
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(image)
+        appState.coordinator.next(image)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "2.jpg")
+
+        await appState.update(image)
+
+        // The landing is relative to where playback stood, so it's the next survivor after the
+        // *dropped* file — not past the last file the prune took.
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "3.jpg")
+    }
+
+    /// The re-scan counterpart of `deletingARunAroundThePlayingFileResumesAtTheFirstSurvivorAfterIt`:
+    /// a run deleted straight in the Finder is pruned by the Update rather than by `deleteFiles`,
+    /// and must land the same way. The prune leaves the survivors' `sortOrder` alone (the reconcile
+    /// derives its next order from their max and only appends), so the captured position stays a
+    /// valid bound across it.
+    @Test func rescanPruningARunAroundThePlayingFileResumesAtTheFirstSurvivorAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let names = (1...13).map { String(format: "%02d.jpg", $0) }
+        for name in names { try Data().write(to: dir.appending(path: name)) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let image = Playlist(name: "I", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(image)
+        for (index, name) in names.enumerated() { addFile(name, order: index, to: image, in: context) }
+        // 03…10 are gone from disk; the rest are still there.
+        let survivors = ["01.jpg", "02.jpg", "11.jpg", "12.jpg", "13.jpg"]
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: survivors.map { scanned($0, .image) })
+        )
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(image)
+        for _ in 1...5 { appState.coordinator.next(image) }
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "06.jpg")
+
+        await appState.update(image)
+
+        #expect(storedFiles(of: image).map(\.fileName) == survivors)
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "11.jpg")
     }
 
     @Test func playOnAudioChannelStartsPlaybackAndReScansEachClick() async throws {

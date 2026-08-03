@@ -604,6 +604,79 @@ import SwiftData
         #expect(coordinator.visualCurrentFile == nil)   // but no stale current file
     }
 
+    /// Drives what `AppState.deleteFiles` does to a live channel, on an image playlist (no
+    /// libmpv): seeds `names`, plays and advances into the sequence, checks the channel sits on
+    /// `playing`, then deletes `deleted` and reconciles from where the cursor stood. Returns the
+    /// file the channel lands on. The position is captured off the live row before it goes, as
+    /// the delete site does — `reconcile` runs after the save, where a departed file's
+    /// `sortOrder` can no longer be read.
+    private func landingAfterDeleting(
+        _ deleted: [String],
+        from names: [String],
+        advancing advances: Int,
+        playing: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws -> String? {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(names)
+        let image = makePlaylist(.image, folder: folder, files: names.map { ($0, []) }, in: context)
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        for _ in 0..<advances { coordinator.next(image) }
+        let current = try #require(coordinator.visualCurrentFile, sourceLocation: sourceLocation)
+        #expect(current.fileName == playing, sourceLocation: sourceLocation)
+
+        let resumeFrom = current.sortOrder
+        for file in context.sequenceFiles(of: image) where deleted.contains(file.fileName) {
+            file.playlist = nil
+            context.delete(file)
+        }
+        try context.save()
+        coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
+        coordinator.reconcile(playlistThatChanged: image, resumingFrom: resumeFrom)
+        return coordinator.visualCurrentFile?.fileName
+    }
+
+    @Test func reconcileResumesAfterADeletedFileInsteadOfRewinding() throws {
+        // The Player `[delete]` on a session that's been running a while always takes the file
+        // on screen. Playback continues where it was, not back at the head of the sequence.
+        let landing = try landingAfterDeleting(
+            ["3.jpg"], from: ["1.jpg", "2.jpg", "3.jpg", "4.jpg"], advancing: 2, playing: "3.jpg"
+        )
+        #expect(landing == "4.jpg")
+    }
+
+    @Test func reconcileWrapsToTheHeadWhenTheDeletedFileWasLast() throws {
+        // Nothing follows the departed file, so playback wraps — as a plain advance off the
+        // last file does.
+        let landing = try landingAfterDeleting(
+            ["3.jpg"], from: ["1.jpg", "2.jpg", "3.jpg"], advancing: 2, playing: "3.jpg"
+        )
+        #expect(landing == "1.jpg")
+    }
+
+    @Test func reconcileSkipsPastSuccessorsDeletedAlongsideIt() throws {
+        // A multi-file delete takes the playing file *and* its immediate successor. The landing
+        // is resolved store-side, so it lands on the next *survivor*.
+        let landing = try landingAfterDeleting(
+            ["2.jpg", "3.jpg"], from: ["1.jpg", "2.jpg", "3.jpg", "4.jpg"], advancing: 1, playing: "2.jpg"
+        )
+        #expect(landing == "4.jpg")
+    }
+
+    @Test func reconcileLeavesTheCursorPutWhenAnotherFileIsDeleted() throws {
+        // Deleting some other file (from the Manager list) leaves the playing one in the
+        // sequence, so reconcile returns early and the channel doesn't move.
+        let landing = try landingAfterDeleting(
+            ["1.jpg"], from: ["1.jpg", "2.jpg", "3.jpg"], advancing: 1, playing: "2.jpg"
+        )
+        #expect(landing == "2.jpg")
+    }
+
     @Test func shutdownResetsChannelBookkeeping() throws {
         let container = try makeContainer()
         let context = container.mainContext

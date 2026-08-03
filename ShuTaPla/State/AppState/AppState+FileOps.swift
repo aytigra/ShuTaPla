@@ -69,6 +69,12 @@ extension AppState {
                 return "Delete failed."
             }
 
+            // Where playback stands, read in the window between the trash and the delete: playback
+            // runs on through the trash and can advance onto a file this delete takes, so an earlier
+            // read would land behind where the channel actually is. Read it before the rows go, too
+            // — once the delete is saved the engine's current file is an invalidated instance whose
+            // `sortOrder` can no longer be read.
+            let resumeFrom = coordinator.currentFile(for: playlist)?.sortOrder
             for url in result.trashed {
                 guard let file = byURL[url] else { continue }
                 managerSelection.remove(file.id)
@@ -80,8 +86,10 @@ extension AppState {
             notePlaylistsChanged()   // the row's file count
             // Advance whichever channel was playing this playlist off a trashed track, so the
             // engine never holds a file that's no longer in the playlist. Covers every delete
-            // entry point (Manager list, Visual Overlay, audio overlay) in one place.
-            coordinator.reconcile(playlistThatChanged: playlist)
+            // entry point (Manager list, Visual Overlay, audio overlay) in one place. Playback
+            // continues from where it stood — deleting the file on screen must not rewind the
+            // session to the head of the sequence.
+            coordinator.reconcile(playlistThatChanged: playlist, resumingFrom: resumeFrom)
 
             guard result.failed.isEmpty else {
                 return "\(result.failed.count) file(s) couldn't be moved to the Trash."

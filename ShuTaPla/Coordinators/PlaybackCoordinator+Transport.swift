@@ -136,22 +136,42 @@ extension PlaybackCoordinator {
     }
 
     /// After a filter, deletion, or re-scan prune reshapes a playback sequence, advance the
-    /// channel playing `playlist` off a current file that just left the sequence: jump to the
-    /// first remaining file, or — when nothing remains — settle the now-empty channel. A no-op
-    /// when `playlist` isn't live on a channel, and idempotent when its current file survives.
+    /// channel playing `playlist` off a current file that just left the sequence, or — when
+    /// nothing remains — settle the now-empty channel. A no-op when `playlist` isn't live on a
+    /// channel, and idempotent when its current file survives.
+    ///
+    /// Where it lands depends on how the file left, which only the caller knows:
+    ///
+    /// - `resumingFrom` — the departed file's `sortOrder` — lands on the first *surviving*
+    ///   sequence file at or after it (wrapping to the head when nothing follows). This is the
+    ///   deletion/prune case, where the sequence merely *lost* the current file and playback
+    ///   should carry on from where it was rather than rewind to the start of the session. It is a
+    ///   stored `sortOrder`, not a position in the list, and removing files never renumbers the
+    ///   survivors — so even a multi-file delete of a whole run around the current file lands on
+    ///   the first file after the run, not somewhere past it.
+    /// - Omitted: land on the head of the sequence. The filter-change case, where the sequence
+    ///   is a different set and its first file is the intended entry point.
+    ///
+    /// The position is a parameter rather than read from the playlist's resume slot because
+    /// `activeResumeSlot` is nil for ad-hoc tag filters and for every service filter — precisely
+    /// the triage sweeps where files get deleted in bulk. It also can't be recovered from the
+    /// engine here: this runs after the delete is saved, so the engine's current file is an
+    /// invalidated instance whose `sortOrder` read would trap. The caller captures it before the
+    /// row goes away.
     ///
     /// The empty case diverges by channel. The visual channel stays live and empty (its engine
     /// is unloaded so a later advance/seek can't act on a departed file) so the player keeps
     /// showing its "no files" placeholder and the user can lift the filter from there; the audio
     /// channel has no such placeholder, so it stops the playlist instead (easy to restart from
     /// the audio overlay).
-    func reconcile(playlistThatChanged playlist: Playlist) {
+    func reconcile(playlistThatChanged playlist: Playlist, resumingFrom sortOrder: Int? = nil) {
         guard let channel = channel(of: playlist) else { return }
         let current = channel == .audio ? audioCurrentFile : visualCurrentFile
-        let ids = sequences.sequence(of: playlist)
-        if let current, ids.contains(current.persistentModelID) { return }
-        if let first = ids.first.flatMap(resolveFile(in: playlist)) {
-            jump(playlist, to: first)
+        if let current, sequences.sequence(of: playlist).contains(current.persistentModelID) { return }
+        // One query answers both landings: `.min` is `sequencePredicate`'s "no bound", so an
+        // unbounded `resumeTarget` is the head of the sequence.
+        if let target = sequences.modelContext.resumeTarget(of: playlist, atOrAfter: sortOrder ?? .min) {
+            jump(playlist, to: target)
             return
         }
         switch channel {

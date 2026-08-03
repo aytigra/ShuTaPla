@@ -185,6 +185,11 @@ extension AppState {
     /// surfaces through `saveError`; a no-op or cancelled/rolled-back reconcile leaves the store and
     /// UI untouched.
     func deriveInBackground(_ playlist: Playlist, from current: [ScannedFile]) async {
+        // Where playback stands, read before the reconcile can prune the row out from under it —
+        // afterwards the engine's current file may be a destroyed model whose `sortOrder` can no
+        // longer be read. A prune never renumbers the survivors (the reconcile only appends, from
+        // their max `sortOrder`), so this stays a valid lower bound for the landing below.
+        let resumeFrom = coordinator.currentFile(for: playlist)?.sortOrder
         // No pre-apply cancellation guard: the actor makes the commit decision before its save
         // (rolling back and reporting `.unchanged` if cancelled there), so a committed result is
         // always applied here. Gating the apply on cancellation could strand a commit — store
@@ -197,7 +202,7 @@ extension AppState {
             return
         }
         guard result.changed else { return }
-        applyScanResult(result, to: playlist)
+        applyScanResult(result, to: playlist, resumingFrom: resumeFrom)
     }
 
     /// Finishes a background reconcile on the main actor: the O(1) tail the actor can't do across
@@ -207,7 +212,7 @@ extension AppState {
     /// file, refresh the held playlist so its attributes and `files` reflect the committed write,
     /// bump the version so the store-side file lists re-fetch, and advance either channel off a
     /// dropped playing file.
-    private func applyScanResult(_ result: ScanReconcileResult, to playlist: Playlist) {
+    private func applyScanResult(_ result: ScanReconcileResult, to playlist: Playlist, resumingFrom sortOrder: Int?) {
         let removedIDs = Set(result.removedFileIDs)
         // Drop pending references to pruned files so a confirmation raised over one the re-scan
         // removed can't act on (and dereference) a destroyed model when the user confirms.
@@ -227,8 +232,9 @@ extension AppState {
         sequences.bump()
         notePlaylistsChanged()   // the reconcile pruned/appended files, so the row's count moved
         // A re-scan can drop either channel's playing file; advance off it just like a delete
-        // does, so neither engine holds a file that's no longer in the playlist.
-        coordinator.reconcile(playlistThatChanged: playlist)
+        // does, so neither engine holds a file that's no longer in the playlist — and from where
+        // playback stood, since the sequence only lost files rather than becoming a different set.
+        coordinator.reconcile(playlistThatChanged: playlist, resumingFrom: sortOrder)
     }
 
     /// Renumbers a section's `sortOrder` values to 0..<count after a deletion.

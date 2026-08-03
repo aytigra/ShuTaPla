@@ -56,12 +56,22 @@ func insertFile(
     return file
 }
 
+/// A main-actor callback that runs *inside* an in-flight `trashFiles`, so a test can move playback
+/// across the delete's `await` the way a slideshow or end-of-file advance does. A box rather than a
+/// plain closure because the action usually needs the `AppState` the stub is handed to.
+@MainActor
+final class TrashHook {
+    var action: (() -> Void)?
+}
+
 /// Returns a canned scan result regardless of the bookmark it's handed, and a canned listing of
 /// the folder's current files for re-scans (the reconcile infers removals by diffing it against
 /// the playlist's own files).
 struct StubFileSystem: FileSystemProviding {
     let result: ScanResult
     var rescanResult: [ScannedFile] = []
+    /// When set, runs before `trashFiles` returns.
+    var whileTrashing: TrashHook?
     /// When set, `trashFiles` reports every URL as failed (a locked/permission-denied trash).
     var trashFails = false
     /// When set, `rescan` throws — the "folder unreadable, leave membership as it was" path, for
@@ -80,7 +90,8 @@ struct StubFileSystem: FileSystemProviding {
         return url.deletingLastPathComponent().appendingPathComponent(newName)
     }
     func trashFiles(_ urls: [URL]) async throws -> TrashResult {
-        trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
+        if let whileTrashing { await MainActor.run { whileTrashing.action?() } }
+        return trashFails ? TrashResult(trashed: [], failed: urls) : TrashResult(trashed: urls, failed: [])
     }
 }
 
