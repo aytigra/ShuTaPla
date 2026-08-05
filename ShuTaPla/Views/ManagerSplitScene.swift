@@ -7,11 +7,12 @@
 //  `NSToolbar` whose items align to the split view's dividers via tracking separators.
 //
 //  The toolbar is a real window toolbar, so its controls sit on the traffic-light line,
-//  are fully interactive, and group into three pane-aligned regions: the sidebar region
-//  carries the scope tabs and New Playlist; the center region carries the playlist title
-//  and the scope's playback actions; the inspector region carries the tag controls. Two
-//  `NSTrackingSeparatorToolbarItem`s pin the region boundaries to the sidebar and inspector
-//  dividers, so each region stays bounded by its pane.
+//  are fully interactive, and group into pane-aligned regions: the center region carries
+//  the playlist title and the scope's playback actions; the inspector region carries the
+//  tag controls. Two `NSTrackingSeparatorToolbarItem`s pin the region boundaries to the
+//  sidebar and inspector dividers, so each region stays bounded by its pane. The sidebar's
+//  own controls sit outside the toolbar in a `SidebarToolbarAccessory`, mounted and removed
+//  alongside it.
 //
 //  The panes are SwiftUI (`PlaylistSidebar` / `PlaylistCenterView` / `TagSidebar`) hosted
 //  across the AppKit boundary, so `ManagerEnv` re-injects the SwiftData container and the
@@ -35,11 +36,33 @@ import Observation
 final class ManagerChrome {
     /// Whether the playlists sidebar is collapsed. The scope tabs drive it: clicking the active
     /// scope collapses, clicking either while collapsed expands.
-    var sidebarCollapsed = false
+    var sidebarCollapsed = false {
+        didSet { defaults.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey) }
+    }
     /// Whether the tag inspector is shown.
-    var inspectorVisible = true
+    var inspectorVisible = true {
+        didSet { defaults.set(inspectorVisible, forKey: Self.inspectorVisibleKey) }
+    }
     /// Whether the inspector is in whole-playlist tag-management mode rather than filter-and-edit.
+    /// Deliberately not remembered: a task the user is in the middle of, not a layout preference.
     var managingTags = false
+
+    private static let sidebarCollapsedKey = "managerSidebarCollapsed"
+    private static let inspectorVisibleKey = "managerInspectorVisible"
+    private let defaults: UserDefaults
+
+    /// Restores which side panes were showing when the Manager was last on screen. This object is
+    /// `@State` on a view that Player mode takes off the tree, so it is rebuilt on every mode switch
+    /// as well as on relaunch — the defaults are what carry the layout across both. They sit beside
+    /// the divider positions the split view autosaves, which is the other half of the same memory.
+    ///
+    /// The two panes' defaults differ, so the inspector can't take `bool(forKey:)`'s missing-key
+    /// `false`: a first launch shows it.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        sidebarCollapsed = defaults.bool(forKey: Self.sidebarCollapsedKey)
+        inspectorVisible = defaults.object(forKey: Self.inspectorVisibleKey) as? Bool ?? true
+    }
 }
 
 // MARK: - Environment bridge
@@ -68,6 +91,14 @@ struct ManagerEnv {
             .environment(hdrCache)
             .environment(chrome)
             .modelContainer(modelContainer)
+    }
+
+    /// The same, as an AppKit view sized to its content — what a toolbar item or a titlebar
+    /// accessory needs.
+    func hostingView(_ view: some View) -> NSView {
+        let hosting = NSHostingView(rootView: host(view))
+        hosting.sizingOptions = [.intrinsicContentSize]
+        return hosting
     }
 }
 
@@ -115,6 +146,7 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
     private let inspectorItem: NSSplitViewItem
 
     private var managerToolbar: NSToolbar?
+    private var sidebarAccessory: SidebarToolbarAccessory?
     private weak var hostWindow: NSWindow?
     private var sidebarCollapseObservation: NSKeyValueObservation?
     private var inspectorCollapseObservation: NSKeyValueObservation?
@@ -133,7 +165,9 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         let sidebar = NSHostingController(rootView: env.host(PlaylistSidebar()))
         sidebar.sizingOptions = []
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.minimumThickness = 200
+        // A starting value only: once mounted, `SidebarToolbarAccessory` raises this to whatever its
+        // controls measure, so the pane can never be dragged narrower than the group in the titlebar.
+        sidebarItem.minimumThickness = SidebarToolbarLayout.minimumThicknessFloor
         sidebarItem.canCollapse = true
 
         let center = NSHostingController(rootView: env.host(PlaylistCenterView()))
@@ -176,9 +210,10 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         inspectorItem.holdingPriority = NSLayoutConstraint.Priority(260)
         // Persist the divider positions across launches. Set after the items are installed so the
         // split view restores against the final pane set. Collapse state stays driven by
-        // `ManagerChrome` (applied below), so autosave only governs pane widths.
+        // `ManagerChrome` (applied below), which remembers it across launches itself, so autosave
+        // only governs pane widths.
         splitView.autosaveName = "ManagerSplitView"
-        applyCollapse(animated: false)
+        applyCollapse()
         startObserving()
     }
 
@@ -199,8 +234,9 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
 
     // MARK: Toolbar attachment
 
-    /// Installs the Manager toolbar on the host window, once it has one. Idempotent — safe to call
-    /// from the appearance callbacks and from the representable's update pass.
+    /// Installs the Manager toolbar and the sidebar accessory on the host window, once it has one.
+    /// Idempotent — safe to call from the appearance callbacks and from the representable's update
+    /// pass.
     func attachToolbarIfNeeded() {
         guard let window = view.window else { return }
         hostWindow = window
@@ -213,12 +249,36 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
             window.titleVisibility = .hidden
             window.toolbar = toolbar
         }
+
+        if sidebarAccessory == nil {
+            sidebarAccessory = SidebarToolbarAccessory(env: env, splitViewController: self)
+        }
+        syncSidebarControls()
     }
 
-    /// Removes the Manager toolbar when Manager mode leaves the screen, so Welcome and Player don't
-    /// inherit it.
+    /// Removes the Manager toolbar and the sidebar accessory when Manager mode leaves the screen, so
+    /// Welcome and Player don't inherit them. Both references go with them: a chrome change after
+    /// this point still reaches `syncSidebarControls()`, which must then find nothing to mutate
+    /// rather than reach into a toolbar no window is showing. Re-entering Manager mode builds a
+    /// fresh pair.
     func detachToolbar() {
-        guard let window = hostWindow, window.toolbar === managerToolbar else { return }
+        guard let window = hostWindow else { return }
+        Self.detachChrome(from: window, toolbar: managerToolbar, accessory: sidebarAccessory)
+        managerToolbar = nil
+        sidebarAccessory = nil
+    }
+
+    /// Takes the Manager's chrome back off a window. The accessory goes unconditionally — it is ours
+    /// wherever the window's toolbar has ended up, and one left behind is the sidebar's controls
+    /// sitting on Welcome's or Player's titlebar. The toolbar is only cleared while the window still
+    /// holds ours, since stripping the mode that took over is not ours to do.
+    static func detachChrome(
+        from window: NSWindow, toolbar: NSToolbar?, accessory: NSTitlebarAccessoryViewController?
+    ) {
+        if let accessory, let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
+            window.removeTitlebarAccessoryViewController(at: index)
+        }
+        guard window.toolbar === toolbar else { return }
         window.toolbar = nil
         window.titleVisibility = .visible
     }
@@ -233,24 +293,65 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
 
     // MARK: Pane collapse
 
-    /// Drives the panes to match the chrome, animating user-initiated toggles.
-    private func applyCollapse(animated: Bool) {
-        setCollapsed(sidebarItem, to: env.chrome.sidebarCollapsed, animated: animated)
-        setCollapsed(inspectorItem, to: !env.chrome.inspectorVisible, animated: animated)
+    /// Drives the panes to match the chrome.
+    ///
+    /// Unanimated on purpose: an animated collapse resizes the center pane every frame, and the pane
+    /// is hosted with `sizingOptions = []`, so each of those widths costs a full SwiftUI layout pass
+    /// over the gallery — the center reflows for the whole animation. Snapping is one pass. It also
+    /// settles where the collapsed toolbar items appear: they follow the tracking separator, which
+    /// follows the divider, so an animated divider would slide them in from the sidebar's edge.
+    private func applyCollapse() {
+        setCollapsed(sidebarItem, to: env.chrome.sidebarCollapsed)
+        setCollapsed(inspectorItem, to: !env.chrome.inspectorVisible)
+        syncSidebarControls()
     }
 
-    private func setCollapsed(_ item: NSSplitViewItem, to collapsed: Bool, animated: Bool) {
-        guard item.isCollapsed != collapsed else { return }
-        if animated {
-            item.animator().isCollapsed = collapsed
-        } else {
-            item.isCollapsed = collapsed
+    /// Moves the sidebar's own controls between their two homes: the titlebar accessory while the
+    /// sidebar is open, the toolbar once it collapses — where the system draws them the same glass
+    /// group capsules as every other toolbar group. Exactly one home holds them at a time, and both
+    /// halves key off the chrome rather than off the panes' realized geometry, so they switch with
+    /// the intent that starts the collapse animation instead of with the layout that ends it.
+    private func syncSidebarControls() {
+        let collapsed = env.chrome.sidebarCollapsed
+
+        // Taken out of the window rather than hidden in place: an accessory left mounted keeps its
+        // width, and the toolbar indents its own items past whatever the accessory claims — so the
+        // collapsed controls would start well right of the traffic lights.
+        if let window = hostWindow, let accessory = sidebarAccessory {
+            let mounted = window.titlebarAccessoryViewControllers.firstIndex(of: accessory)
+            if collapsed {
+                if let mounted { window.removeTitlebarAccessoryViewController(at: mounted) }
+            } else if mounted == nil {
+                window.addTitlebarAccessoryViewController(accessory)
+                accessory.updateGeometry()
+            }
+        }
+
+        // Only `collapsedOnlyIdentifiers` ever differ between the two orders, so inserting and
+        // removing them leaves the rest of the toolbar's items — and their hosted views — untouched.
+        if let toolbar = managerToolbar {
+            let wanted = SidebarToolbarLayout.toolbarIdentifiers(sidebarCollapsed: collapsed)
+            for identifier in SidebarToolbarLayout.collapsedOnlyIdentifiers {
+                let present = toolbar.items.firstIndex { $0.itemIdentifier == identifier }
+                if let index = wanted.firstIndex(of: identifier) {
+                    if present == nil { toolbar.insertItem(withItemIdentifier: identifier, at: index) }
+                } else if let present {
+                    toolbar.removeItem(at: present)
+                }
+            }
         }
     }
 
+    /// Writes only a real change: `applyCollapse` runs on any chrome change and drives both panes, so
+    /// most calls already ask for the state the pane is in.
+    private func setCollapsed(_ item: NSSplitViewItem, to collapsed: Bool) {
+        guard item.isCollapsed != collapsed else { return }
+        item.isCollapsed = collapsed
+    }
+
     /// Mirrors chrome → panes (toolbar toggles) and panes → chrome (a divider dragged to the edge),
-    /// keeping the toolbar's highlight in step with the actual layout. The equality guards in
-    /// `setCollapsed` and below break the feedback loop between the two directions.
+    /// keeping the toolbar's highlight in step with the actual layout. The equality guards below are
+    /// what break the feedback loop between the two directions.
     private func startObserving() {
         observeChrome()
         observeScope()
@@ -281,7 +382,7 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.applyCollapse(animated: true)
+                self.applyCollapse()
                 self.observeChrome()
             }
         }
@@ -310,17 +411,13 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
     // MARK: NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [
-            .scopeTabs, .flexibleSpace, .newPlaylist,
-            .sidebarTrackingSeparator,
-            .title, .flexibleSpace, .centerActions,
-            .trailingSeparator,
-            .flexibleSpace, .manageTags, .toggleTags,
-        ]
+        SidebarToolbarLayout.toolbarIdentifiers(sidebarCollapsed: env.chrome.sidebarCollapsed)
     }
 
+    /// The collapsed order, which is the superset: an identifier the toolbar may be asked to insert
+    /// later has to be allowed from the start.
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        SidebarToolbarLayout.toolbarIdentifiers(sidebarCollapsed: true)
     }
 
     func toolbar(
@@ -330,16 +427,17 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
     ) -> NSToolbarItem? {
         switch itemIdentifier {
         case .sidebarTrackingSeparator:
-            // The system identifier (not a custom tracking separator): AppKit anchors the items placed
-            // before it so the scope tabs and New Playlist stay in the toolbar when the sidebar
-            // collapses, instead of spilling into the overflow menu.
+            // Nothing precedes it, so it bounds the center region alone: the title and actions start
+            // at the sidebar divider and the system keeps drawing the divider's hairline through the
+            // toolbar.
             return NSTrackingSeparatorToolbarItem(identifier: .sidebarTrackingSeparator, splitView: splitView, dividerIndex: 0)
+        // The sidebar's controls, for as long as it stays collapsed.
+        case .scopeTabs:
+            return sidebarControl(itemIdentifier, label: "Scope") { ScopeTabs() }
+        case .newPlaylist:
+            return sidebarControl(itemIdentifier, label: "New Playlist") { NewPlaylistButton() }
         case .trailingSeparator:
             return NSTrackingSeparatorToolbarItem(identifier: .trailingSeparator, splitView: splitView, dividerIndex: 1)
-        case .scopeTabs:
-            return hosting(itemIdentifier, label: "Scope", visibility: .high) { ScopeTabs() }
-        case .newPlaylist:
-            return hosting(itemIdentifier, label: "New Playlist", visibility: .high) { NewPlaylistButton() }
         case .title:
             // The title yields first when space is tight, and reads as a plain label, not a control.
             let item = hosting(itemIdentifier, label: "Playlist", visibility: .low) { ManagerTitleLabel() }
@@ -365,16 +463,28 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         @ViewBuilder _ content: () -> some View
     ) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
-        let view = NSHostingView(rootView: env.host(content()))
-        view.sizingOptions = [.intrinsicContentSize]
-        item.view = view
+        item.view = env.hostingView(content())
         item.label = label
         item.visibilityPriority = visibility
         return item
     }
+
+    /// One of the sidebar's own controls, dressed for the toolbar line: padded off the glass capsule
+    /// the toolbar draws around it. That capsule hugs a custom view's bounds, and these buttons are
+    /// laid out edge to edge — deliberately, since on the sidebar there is no capsule to clear — so
+    /// the inset is the item's, never the control's.
+    private func sidebarControl(
+        _ identifier: NSToolbarItem.Identifier,
+        label: String,
+        @ViewBuilder _ content: () -> some View
+    ) -> NSToolbarItem {
+        hosting(identifier, label: label, visibility: .high) {
+            content().padding(.horizontal, SidebarToolbarLayout.toolbarCapsuleInset)
+        }
+    }
 }
 
-private extension NSToolbarItem.Identifier {
+nonisolated extension NSToolbarItem.Identifier {
     static let scopeTabs = NSToolbarItem.Identifier("ManagerScopeTabs")
     static let newPlaylist = NSToolbarItem.Identifier("ManagerNewPlaylist")
     static let title = NSToolbarItem.Identifier("ManagerTitle")
@@ -385,103 +495,6 @@ private extension NSToolbarItem.Identifier {
 }
 
 // MARK: - Toolbar controls
-
-/// The scope selector: the Image, Video, and Audio tabs in a single toolbar item. Expanded, they sit tightly
-/// as sidebar tabs; collapsed, they spread to the spacing of the other toolbar button groups since
-/// each becomes an ordinary bordered toolbar button.
-private struct ScopeTabs: View {
-    @Environment(ManagerChrome.self) private var chrome
-
-    var body: some View {
-        HStack(spacing: chrome.sidebarCollapsed ? 6 : 2) {
-            ScopeTabButton(scope: .image, title: "Image", systemImage: "photo.stack")
-            ScopeTabButton(scope: .video, title: "Video", systemImage: "film.stack")
-            ScopeTabButton(scope: .audio, title: "Audio", systemImage: "music.note.square.stack")
-        }
-    }
-}
-
-/// One scope tab, styled like the navigator toggle in a system toolbar: the active scope reads as a
-/// subtle gray capsule highlight (no accent fill) matching the rounded toolbar buttons, inactive tabs
-/// light up gray on hover. Switching scope is a view-only change — it never starts, stops, or loads a
-/// channel. The tab also drives the sidebar: clicking the active scope collapses the left panel;
-/// clicking either tab while collapsed expands it and selects that scope.
-private struct ScopeTabButton: View {
-    let scope: MediaType
-    let title: String
-    let systemImage: String
-
-    @Environment(AppState.self) private var appState
-    @Environment(ManagerChrome.self) private var chrome
-
-    @State private var hovering = false
-
-    var body: some View {
-        if chrome.sidebarCollapsed {
-            // Collapsed: the sidebar is hidden, so the tabs read as ordinary toolbar buttons —
-            // bordered capsules with the system's padding, matching the other toolbar controls —
-            // rather than naked sidebar tabs. Clicking either expands the sidebar onto that scope.
-            Button(action: activate) {
-                Label(title, systemImage: systemImage)
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .labelStyle(.iconOnly)
-            .help(title)
-        } else {
-            let isActive = appState.managerScope == scope
-            Button(action: activate) {
-              Image(systemName: isActive ? "\(systemImage).fill" : systemImage)
-                    .font(.system(size: 17))
-                    .frame(width: 32, height: 28)
-                    .background(highlight(isActive: isActive))
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .onHover { hovering = $0 }
-            .help(title)
-        }
-    }
-
-    /// The active scope's gray capsule matches the system toolbar's selected-toggle look; an inactive
-    /// scope shows a fainter gray on hover. No accent fill — the icon keeps its label color throughout.
-    @ViewBuilder
-    private func highlight(isActive: Bool) -> some View {
-        if isActive {
-            Capsule().fill(.quaternary)
-        } else if hovering {
-            Capsule().fill(.quaternary.opacity(0.5))
-        }
-    }
-
-    private func activate() {
-        if chrome.sidebarCollapsed {
-            appState.switchScope(to: scope)
-            chrome.sidebarCollapsed = false
-        } else if appState.managerScope == scope {
-            chrome.sidebarCollapsed = true
-        } else {
-            appState.switchScope(to: scope)
-        }
-    }
-}
-
-private struct NewPlaylistButton: View {
-    @Environment(AppState.self) private var appState
-
-    var body: some View {
-        Button {
-            appState.isImportingPlaylist = true
-        } label: {
-            Label("New Playlist", systemImage: "plus")
-        }
-        .buttonStyle(.bordered)
-        .labelStyle(.iconOnly)
-        .disabled(appState.isAddingPlaylist)
-        .help("Add a playlist from a folder")
-    }
-}
 
 /// The current playlist's name, the window's center title. Placeholder when nothing is selected.
 private struct ManagerTitleLabel: View {
