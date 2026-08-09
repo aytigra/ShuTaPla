@@ -41,24 +41,32 @@ mpv is embedded as **libmpv** (`libmpv.dylib`), shipped inside the app bundle's 
 
 ## 3. Data model (SwiftData)
 
-Five `@Model` entities. `Playlist` owns its `PlaylistFile`s (`@Relationship`, cascade delete). `Tag` is a normalized, shared entity each `PlaylistFile` references many-to-many. `AppStateModel` and `GlobalSettings` are persisted singletons. Embedded preferences/filter/saved-search data are `Codable` value types stored inline, not separate entities.
+Seven `@Model` entities. `Playlist` owns its `PlaylistFile`s (`@Relationship`, cascade delete). `Tag` is a normalized, shared entity each `PlaylistFile` references many-to-many. A playlist's tag filters are rows too — `TagFilter` and the `SavedSearch` named over it. `AppStateModel` and `GlobalSettings` are persisted singletons. Preferences are a `Codable` value type stored inline.
 
 ```
 GlobalSettings (singleton)   — default slideshow interval, file-position persistence, image fit mode
 
 Playlist                     — name, folderBookmark (security-scoped), folderPath, mediaType,
  │                             sortOrder, currentFileID, playbackState, createdAt,
+ │                             serviceFilterRaw? (triage filter, lenient decode),
  │                             unfilteredResumeSortOrder?  (no-filter resume slot)
  ├── preferences: PlaylistPreferences   — volume, slideshow on/interval?, imageFitMode?,
  │                                         filePositionPersistence?, viewMode  (nil = use global)
- ├── filterState: FilterState           — selectedTags, filterMode (and/or), serviceFilter?
- ├── savedSearches: [SavedSearch]        — unique tag-set+operator searches, each with resumeSortOrder?
+ ├── currentFilter: TagFilter?           — the tag filter applied right now (cascade)
+ ├── savedSearches: [SavedSearch]        — the searches saved on this playlist (cascade)
  ├── tagFrequency: [String: Int]         — per-playlist tag usage counts (drives dropdown order)
  └── files: [PlaylistFile]
       └── relativePath, fileName, tags: [Tag] (many-to-many), taggingStatusCode (scalar),
           isSkipped, lastPosition?, cached media facts (duration?/width?/height?/fileSizeBytes?),
           fingerprint? (content hash) + lastModified? (on-disk staleness baseline, with fileSizeBytes),
           isHDR?/hdrGamma?/hdrPrimaries? (decode-time HDR cache, §8), sortOrder (shuffled order)
+
+TagFilter                    — mustHaveAll / mustHaveAny / mustNotHaveAll / mustNotHaveAny: [String],
+ │                             keyed by TagFilterField; playlist? (the one applying it now)
+ └── savedSearch: SavedSearch?          — the search named over these lists (cascade both ways;
+                                          nil ⇒ ad-hoc filter)
+
+SavedSearch                  — name, listOrder, resumeSortOrder?, filter: TagFilter?, playlist?
 
 Tag                          — normalizedName (lowercased, @Attribute(.unique)),
                                name (first-seen casing), files: [PlaylistFile] (inverse)
@@ -74,8 +82,10 @@ Singletons use a fetch-or-create pattern (fetch limit 1, insert defaults if abse
 - **`currentFileID` (a UUID), not an index.** Update appends and prunes entries, shifting positions; an ID stays valid through both. Sequence position is recovered from the file's `sortOrder`.
 - **Relative paths in `PlaylistFile`** — so moving the folder and refreshing the bookmark keeps file references valid.
 - **Security-scoped bookmarks** (`folderBookmark: Data`) — a plain path loses access after restart on sandboxed macOS. The app creates a bookmark on folder selection and starts/stops scoped access around use.
-- **Embedded value types** for preferences/filter/saved-searches — avoids a web of one-to-one relationships and makes cascade delete clean.
+- **Embedded value types** for preferences — avoids a web of one-to-one relationships and makes cascade delete clean.
+- **Filters are rows, not an embedded blob.** `captureResumePosition` fires from `setCurrentFile` on every file switch, and against a row that is a one-column `setIfChanged` write instead of re-encoding a whole list; a named saved search also wants its own identity and store-side ordering. A `TagFilter` and the `SavedSearch` over it cascade **both ways** — neither means anything alone — so "an emptied filter is deleted, and its search goes too" is a single `delete(filter)`. Applying a search points `currentFilter` at the search's own row rather than a copy, so editing the filter edits the search and there is no commit step; `currentFilter?.savedSearch == nil` is what "ad-hoc" means. The invariant behind it all: a `TagFilter` with neither `playlist` nor `savedSearch` set is unreachable and must never exist.
 - **Normalized tags** — each `PlaylistFile` references shared `Tag` entities (deduped by lowercased `normalizedName`, with `name` keeping first-seen casing), so a tag filter is a store predicate over the relationship rather than a per-file Swift comparison. Filenames remain the source of truth: a scan/rename re-parses them through `TagParser` and resolves the strings to `Tag`s via `ModelContext.tags(named:)`, and `PlaylistFile.tagNames` (the chip display) derives from the filename so chip *order* is stable (the relationship is an unordered set). `tagFrequency` still aggregates per-playlist usage counts to drive dropdown ordering.
+- **The four filter fields compose at runtime, not in one `#Predicate`.** Each *filled* field becomes its own small `Predicate<PlaylistFile>` — one flat subquery over `file.tags` counted against a threshold — folded pairwise into the scope predicate with `.evaluate(_:)` (`Models/queries/ModelContext+Sequence.swift`, where the macro-expansion ceiling that forces the fold is written up). Only filled fields are built, so an empty field contributes nothing and an all-empty filter *is* the scalar predicate — there is no fast path to keep in step. SwiftData translates the nested tree to SQL, so the fetch stays one store-side query returning identifiers.
 - **`taggingStatus` as a stored scalar** (`taggingStatusCode: Int`, with a computed `taggingStatus` enum accessor) — a `#Predicate` can't capture the enum, so triage filters (untagged / invalid-tagging) compare the scalar instead.
 - **Versioned schema migrations.** `AppMigrationPlan` (a `SchemaMigrationPlan`) declares each `VersionedSchema` and a stage between successive versions.
 
@@ -93,7 +103,7 @@ Two layers: **persisted** SwiftData models (survive launches) and **runtime** `@
 - **Derives filtered file lists store-side as ordered identifiers, resolving only the visible rows.** The filter and current file are persisted per-playlist `@Model` state; the display/playback order is derived by the store from a `#Predicate` over the playlist's effective filter (`Models/queries/ModelContext+Sequence.swift`), returning ordered `[PersistentIdentifier]` and counts so a large playlist is never materialized whole. Views iterate the identifiers in a lazy stack/grid and resolve only the on-screen rows; selection, current-file, and next/previous lookups each resolve just the few files they need. Two slots pointing at the same `Playlist` stay consistent for free — no recompute-and-reconcile machinery. The fetches use `includePendingChanges: false`, which the Observation system doesn't track, so a mutation that reshapes membership or order saves before re-deriving and bumps an observed `sequenceVersion` to drive the re-derive.
 - **Scope is only the sidebar's type filter**, not selection/filter/routing state (`managerScope: .image | .video | .audio`). `switchScope(to:)` sets the scope and pre-loads that scope's remembered playlist.
 - **One converged `select(_:)`** loads the picked playlist into the managed slot (and, for audio, into the audio channel, stopping whichever was live). Overlays keep play-on-select variants (`selectVisualPlaylistInPlayer`, `selectAudioPlaylist`).
-- **Filter edits write to the target playlist's persisted `filterState`**; surfaces re-derive. The one explicit side effect is the live-channel reconcile when an edit drops the file an engine is on.
+- **Filter edits write to the target playlist's `currentFilter` row** (`AppState+Filtering`, every edit routed through one private method so the row's creation and deletion cannot drift); surfaces re-derive. The one explicit side effect is the live-channel reconcile when an edit drops the file an engine is on.
 - **Centralizes scoped folder access** for every file mutation (`beginFolderAccess(to:)`), including the stale/denied-bookmark re-grant prompt, and exposes optimistic-progress state the sidebar renders as spinners (scanning / re-scanning / deleting).
 
 ### PlaybackCoordinator
@@ -126,7 +136,7 @@ Services hold UI-independent logic, are injected into state objects (not views),
 
 - **PlaybackEngines** — `VideoPlaybackEngine` and `AudioPlaybackEngine` each own one `MPVClient`; `ImagePlaybackEngine` is a timer-based slideshow driver with no mpv. Each is `@MainActor @Observable`, exposing time/duration/isPlaying/isLooping for direct SwiftUI observation. Each `AsyncStream<MPVEvent>` has exactly one consumer — the owning engine — which updates its own observable state on `MainActor`; the coordinator observes those. On `eof-reached`, looping replays via mpv's `loop-file`, otherwise the engine advances to the next file in `sortOrder` (the coordinator decides the target).
 
-- **ThumbnailService** (`@MainActor @Observable`) — lazy thumbnails over an on-disk HEIC cache **keyed by the file's content fingerprint** (`URL.contentFingerprint` — the byte size plus a SHA-256 over the head/tail windows), so the same media shares one generated thumbnail across every folder or playlist that references it, and a rename or move keeps the entry instead of orphaning it. The fingerprint carries its own invalidation (a content change yields a new one); it is computed on the first cold load and **persisted back on the `PlaylistFile`** (folded through the `MediaMetadata` merge) so later sessions supply it without re-reading the file. A persisted fingerprint is trusted on the fast path, guarded by a **staleness gate**: when a file's cached on-disk size *or* modification date drifts, the fingerprint is recomputed from the current bytes and the thumbnail re-rendered only if it actually moved — a benign touch (same bytes, bumped mtime) just refreshes the cached `lastModified` so the gate stops firing. Beyond this cold-load path a shared `PlaylistFile.invalidateMetadata` primitive clears the cached facts (fingerprint included) so the next display re-extracts: the scan reconcile and preview open stat the file and compare size/mtime against the cached baseline (`invalidateMetadataIfStale`), and **Remove Audio** — a known in-place change — clears unconditionally and persists it. Because the gallery tile's `thumbnailKey` tracks the fingerprint, clearing it re-fires the live tile's generation (disk-cache hit for unchanged bytes, re-render only when the content actually moved). The disk cache lives under **Application Support**, not the OS-purged Caches directory, so it survives disk pressure and its size / clear-all / clear-orphans management is the app's own; the folder is single-writer, so it holds only live-referenced thumbnails and the orphan sweep removes everything else (an unreferenced `.heic` *or* a stray file), reading live keys from the persisted fingerprints without opening any file. The playlist scan measures the cache's total size off the main actor and publishes a >1 GB **cache-pressure flag** (`@AppStorage`) that surfaces as a banner in the Manager notice strip and colors the size readout in Settings. The `@MainActor` entry reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoded off-main so scrolling never blocks on a draw-time decode). Image frames come from `CGImageSource`; video frames from `AVAssetImageGenerator`, **falling back to `MPVThumbnailer`** for containers AVFoundation can't demux (webm/mkv). Generation also carries the file's running **duration** back with the frame, so the gallery's length badge appears with the thumbnail rather than as a second pass.
+- **ThumbnailService** (`@MainActor @Observable`) — lazy thumbnails over an on-disk HEIC cache **keyed by the file's content fingerprint** (`URL.contentFingerprint` — the byte size plus a SHA-256 over the head/tail windows), so the same media shares one generated thumbnail across every folder or playlist that references it, and a rename or move keeps the entry instead of orphaning it. The fingerprint carries its own invalidation (a content change yields a new one); it is computed on the first cold load and **persisted back on the `PlaylistFile`** (folded through the `MediaMetadata` merge) so later sessions supply it without re-reading the file. A persisted fingerprint is trusted on the fast path, guarded by a **staleness gate**: when a file's cached on-disk size *or* modification date drifts, the fingerprint is recomputed from the current bytes and the thumbnail re-rendered only if it actually moved — a benign touch (same bytes, bumped mtime) just refreshes the cached `lastModified` so the gate stops firing. Beyond this cold-load path a shared `PlaylistFile.invalidateMetadata` primitive clears the cached facts (fingerprint included) so the next display re-extracts: the scan reconcile and preview open stat the file and compare size/mtime against the cached baseline (`invalidateMetadataIfStale`), and **Remove Audio** — a known in-place change — clears unconditionally and persists it. Because the gallery tile's `thumbnailKey` tracks the fingerprint, clearing it re-fires the live tile's generation (disk-cache hit for unchanged bytes, re-render only when the content actually moved). The disk cache lives under **Application Support**, not the OS-purged Caches directory, so it survives disk pressure and its size / clear-all / clear-orphans management is the app's own; the folder is single-writer, so it holds only live-referenced thumbnails and the orphan sweep removes everything else (an unreferenced `.heic` *or* a stray file), reading live keys from the persisted fingerprints without opening any file. The playlist scan measures the cache's total size off the main actor and publishes a >1 GB **cache-pressure flag** (`@AppStorage`) that surfaces as a banner above the Manager's filter strip and colors the size readout in Settings. The `@MainActor` entry reads the model, then `@concurrent` workers resolve the bookmark, render, and return a ready-to-draw `NSImage` (decoded off-main so scrolling never blocks on a draw-time decode). Image frames come from `CGImageSource`; video frames from `AVAssetImageGenerator`, **falling back to `MPVThumbnailer`** for containers AVFoundation can't demux (webm/mkv). Generation also carries the file's running **duration** back with the frame, so the gallery's length badge appears with the thumbnail rather than as a second pass.
 
 - **MPVThumbnailer** — stateless libmpv fallback. Each call spins a short-lived windowless mpv instance (`vo=image`), seeks 10% in, writes one PNG, and tears down — owning a fresh handle, never touching the playback engines' `MPVClient`. Calls are serialized on one background-QoS queue with a per-call deadline. Also exposes `duration(at:)` (loads just far enough to read the demuxer's duration, decoding nothing).
 
@@ -157,6 +167,10 @@ Quick playlist switching in Player mode lives in the overlays' `LibrarySurface` 
 ### Player overlays
 
 Overlays are SwiftUI views composed via `.overlay()` / `.transition()` on `PlayerView`, shown/hidden with `withAnimation` driven by `OverlayManager` state. **Hover zones** use `NSTrackingArea` (via an NSView bridge), not SwiftUI `.onHover`, which doesn't fire at the screen edge in fullscreen. Exclusivity is enforced centrally in `OverlayManager` when an overlay is shown (Expanded audio is exclusive; the Visual Overlay suppresses the bottom controls' hover; Compact audio yields only to Expanded audio); the rules themselves are specified in `features.md`.
+
+### Filter strip
+
+`FilterStrip` (`Views/FilterStrip/`) is one component mounted over every file list — the Manager center, and both overlays as `showsTriage: false`, since triage is entered from the Manager and neither overlay is playable. Its two pieces of logic are out of the view body, `nonisolated` and unit-tested, because both could rot silently: `FilterStripMode` resolves the precedence between a review mode, a Service Filter and a tag filter (all three storable at once, so a tag filter parked under a Service Filter is hidden rather than lost), and `FilterStripLayout` packs the four tag fields into one, two or four columns by width. Everything the strip floats — the `Searches` list, each field's suggestion dropdown — is an overlay over the file list rather than a popover, which sizes to its content instead of the strip's width and is dismissed by the delete confirmation being raised over it; `ClickOutsideMonitor` (`Views/Shared/`) supplies the click-away dismissal a popover would have given, as a local mouse-down monitor that reports without consuming, and it also resigns the AppKit name field. `zIndex` only orders siblings, so raising a dropdown over what follows it is done at each level: the grid raises the open cell within its row, the row within the stack, and itself over the name row. `floatingPanel` is the shared chrome those panels wear — rounded, bordered, clipped, composited, shadowed — the compositing being what keeps `.shadow` from reaching every shape drawn inside.
 
 ### File-list windowing
 
@@ -191,7 +205,7 @@ A tag edit goes: `TagParser` builds the new filename → `FileSystemService.rena
 
 ### Shared tag control
 
-`TagTokenField` is the one multiselect-with-autocomplete control behind both the tag editor and the filter bar. Selected tags are removable chips; typing filters a floating dropdown ranked by match (exact → prefix → substring) then `tagFrequency`, overlaid above following controls (each call site raises its `zIndex`). The static `options(query:knownTags:selected:allowsCreate:)` computes the ranking and is unit-tested directly. `TagEditorView` instantiates it with `allowsCreate: true` (adds to the file); `FilterBar` with `allowsCreate: false` (search-to-select into `filterState`).
+`TagTokenField` is the one multiselect-with-autocomplete control behind both the tag editor and the filter strip. Selected tags are removable chips; typing filters a floating dropdown ranked by match (exact → prefix → substring) then `tagFrequency`, overlaid above following controls (each call site raises its `zIndex`). The static `options(query:knownTags:selected:allowsCreate:)` computes the ranking and is unit-tested directly. `TagEditorView` instantiates it with `allowsCreate: true` (adds to the file); `FilterFieldGrid` with `allowsCreate: false`, four of them, one per `TagFilterField` (search-to-select into that field's list).
 
 The text input is a borderless `NSTextField` wrapper (`TokenTextField`), not a SwiftUI `TextField`: focus, the caret, and the caret-edge key commands (`delete`/arrows/`return`/`esc` via `doCommandBy:`) come straight from AppKit — the layer SwiftUI's `@FocusState`/`onKeyPress` miss on an empty field. The field is inserted only on click (never auto-focuses), and while focused runs a local `leftMouseDown` monitor that resigns focus on an outside click *without* consuming the event, so the same click also lands on whatever it hit.
 
@@ -282,8 +296,8 @@ Within `ShuTaPla/`:
 ```
 App/          @main entry point — app scene and ModelContainer wiring — plus AppConstants
               (extension→media-type maps, thresholds).
-Models/       SwiftData @Model entities and their embedded Codable value types (preferences,
-              filters, saved searches); Migrations/ (versioned schemas + plan) and queries/
+Models/       SwiftData @Model entities and their embedded Codable value types (preferences);
+              Migrations/ (versioned schemas + plan) and queries/
               (scoped ModelContext accessors for the hot paths).
 State/        @MainActor @Observable AppState and its AppState/ partials, playback-sequence
               bookkeeping, and the scoped-folder-access session manager.
@@ -298,8 +312,9 @@ FFmpeg/       The Cffmpeg Clang module (duration probing).
 Engines/      The video/audio/image playback engines that each wrap one medium, plus their
               direct support (playback source/navigation, cloud load gate, HDR image config).
 Views/        The SwiftUI tree — welcome, manager, player, audio, and settings surfaces — with
-              FileCollection/ (windowed list + gallery) and Shared/ (reusable controls, window
-              bridges) subfolders.
+              FileCollection/ (windowed list + gallery), FilterStrip/ (the filter/saved-search
+              strip over every file list) and Shared/ (reusable controls, window bridges)
+              subfolders.
 Extensions/   Small extensions on standard and framework types (URL, Array, NSScreen, CGImage,
               PersistentModel, …).
 Assets.xcassets, AppIcon.icon — the colour asset catalog and the app icon.
@@ -318,7 +333,7 @@ Assets.xcassets, AppIcon.icon — the colour asset catalog and the app icon.
 - **NSTrackingArea over `.onHover` for edges** — `.onHover` never fires at the screen edge in fullscreen (no view to "enter"); a thin tracking rect at each edge detects it.
 - **Security-scoped bookmarks** — the sandbox requires them to persist folder access across launches. The app declares read-write user-selected access (`ENABLE_USER_SELECTED_FILES = readwrite`) since tag edits/renames/trashing write to the folders.
 - **Single actor for file I/O** — operations on the same folder must not interleave; one actor serializes disk access without explicit locking.
-- **Embedded value types for preferences/filters** — separate entities would create a web of one-to-one relationships complicating queries and cascade; Codable structs keep the model flat.
+- **Embedded value types for preferences** — a separate entity would create a web of one-to-one relationships complicating queries and cascade; a Codable struct keeps the model flat. Tag filters go the other way and are rows (§3): they are written on every file switch and ordered store-side, which a blob makes expensive.
 
 ---
 
@@ -334,6 +349,6 @@ Unit and integration tests use **Swift Testing** (`import Testing`); `ShuTaPlaUI
 
 Architectural hooks, not planned features — the design accommodates them without structural change:
 
-- **Advanced filter expressions** (per-tag AND/OR, grouped) — `FilterState` can grow from a flat tag list to a node tree.
+- **Top-level OR in the tag filter** (`(A AND B) OR (C AND D)`) — needs a real expression builder: `TagFilter`'s four lists would grow into a node tree, which the runtime predicate fold already composes anyway.
 - **File system watching** — the one-shot re-scan on activation can extend to FSEvents/DispatchSource monitoring.
 - **Keyboard shortcut customization** — the `HotkeyRouter` action mapping can be made configurable.

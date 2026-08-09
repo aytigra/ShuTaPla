@@ -153,11 +153,14 @@ final class AppState {
     /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
     var pendingConfirmation: PendingConfirmation?
 
-    /// A user-facing message when a confirmation's destructive work fails. One channel — only one
-    /// confirmation runs at a time — presented once by the app-root `RootView` alert (where the
-    /// audio overlay can't double-present it over the Manager panel); its title carries each
-    /// family's wording.
-    var confirmationError: ConfirmationError?
+    /// A user-facing report that an operation failed or was refused. One channel for all of them,
+    /// presented by the app-root `RootView` alert, which outlives the surface the work was started
+    /// from: a destructive confirmation's file operation is async, and the Manager panel or the
+    /// player overlay that raised it can be gone by the time it fails. Its title carries each site's
+    /// wording. Living on `AppState` rather than in the raising view is what lets the `HotkeyRouter`
+    /// see it — a view-local alert leaves `[esc]` swallowed by the router and bare keys reaching
+    /// playback behind the modal.
+    var errorNotice: ErrorNotice?
 
     /// Raises the folder picker for adding a playlist. The Welcome screen and the sidebar's
     /// plus button both set this; the shared `AddPlaylistFlow` modifier presents the picker.

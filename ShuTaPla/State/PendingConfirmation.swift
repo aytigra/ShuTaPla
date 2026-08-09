@@ -26,6 +26,8 @@ enum PendingConfirmation {
     case tagRemoval(String)
     /// Delete the given playlist and its files.
     case playlistDelete(Playlist)
+    /// Delete the given saved search, and with it the filter it names.
+    case savedSearchDelete(SavedSearch)
 }
 
 extension PendingConfirmation {
@@ -65,6 +67,12 @@ extension PendingConfirmation {
         return playlist
     }
 
+    /// The saved search this confirmation would delete, or `nil` for other kinds.
+    var savedSearchToDelete: SavedSearch? {
+        guard case .savedSearchDelete(let search) = self else { return nil }
+        return search
+    }
+
     /// This confirmation with any files a re-scan removed dropped from its payload, or `nil` if
     /// that leaves nothing to confirm — so confirming can't act on (and dereference) a destroyed
     /// model. Non-file confirmations pass through unchanged. Reads only the stored `id`, which a
@@ -81,16 +89,17 @@ extension PendingConfirmation {
             return removed.contains(file.id) ? nil : self
         case .audioDelete(let file):
             return removed.contains(file.id) ? nil : self
-        case .tagRemoval, .playlistDelete:
+        case .tagRemoval, .playlistDelete, .savedSearchDelete:
             return self
         }
     }
 }
 
-/// A confirmation's destructive work failed. One channel for every family (only one runs at a
-/// time); the title is set at the confirm site since that's where what-failed is known, so a
-/// single host can present them all without losing each family's wording.
-struct ConfirmationError {
+/// An operation failed or was refused, in the words of the site that knows why. One channel for
+/// every such report — a destructive confirmation's work, a tag edit, a save the store already
+/// covers — so a single host can present them all without losing each site's wording, and the
+/// `HotkeyRouter` has one flag to register rather than one per surface.
+struct ErrorNotice {
     let title: String
     let message: String
 }

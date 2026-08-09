@@ -55,6 +55,10 @@ struct TagTokenField<ChipMenu: View>: View {
     var autoFocus: Bool = false
     let onAdd: (String) -> Void
     let onRemove: (String) -> Void
+    /// Reports when the field starts and stops editing. The dropdown floats over whatever is below
+    /// it, and `zIndex` only orders siblings — so a host that stacks several of these (or puts
+    /// anything under them) needs to know which one is open to raise it above the rest.
+    var onEditingChanged: (Bool) -> Void = { _ in }
     @ViewBuilder let chipMenu: (String) -> ChipMenu
 
     @State private var input = ""
@@ -67,6 +71,12 @@ struct TagTokenField<ChipMenu: View>: View {
     @State private var lastRight: Date?
 
     private let rowHeight: CGFloat = 30
+
+    /// The height of every line of the field, chips included. An empty field shows only its
+    /// placeholder and an editing one only the text input, each a different height again, so
+    /// without one figure for all three a field changes height as it fills — and four of these
+    /// standing side by side in the filter grid disagree by whether they happen to hold a tag.
+    private let chipHeight: CGFloat = 20
 
     var body: some View {
         field
@@ -95,6 +105,7 @@ struct TagTokenField<ChipMenu: View>: View {
             }
             inputSlot
         }
+        .frame(minHeight: chipHeight, alignment: .leading)
         .padding(6)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         .overlay(
@@ -145,7 +156,8 @@ struct TagTokenField<ChipMenu: View>: View {
         }
         .font(.caption)
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        // Sized rather than padded, so the chip and the field's other lines are one figure.
+        .frame(height: chipHeight)
         .background(
             Color.accentColor.opacity(selectedChip == index ? 0.4 : 0.18),
             in: Capsule()
@@ -192,9 +204,7 @@ struct TagTokenField<ChipMenu: View>: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: CGFloat(min(options.count, 6)) * rowHeight)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
-        .shadow(radius: 8, y: 2)
+        .floatingPanel(.regularMaterial)
     }
 
     private func optionRow(_ option: TagOption, index: Int) -> some View {
@@ -226,6 +236,7 @@ struct TagTokenField<ChipMenu: View>: View {
         editing = true
         selectedChip = chip
         highlighted = 0
+        onEditingChanged(true)
     }
 
     private func endEditing() {
@@ -233,6 +244,7 @@ struct TagTokenField<ChipMenu: View>: View {
         input = ""
         selectedChip = nil
         highlighted = 0
+        onEditingChanged(false)
     }
 
     // MARK: - Caret / chip navigation (only fired at the input's caret edges)
@@ -379,7 +391,8 @@ extension TagTokenField where ChipMenu == EmptyView {
         placeholder: String,
         autoFocus: Bool = false,
         onAdd: @escaping (String) -> Void,
-        onRemove: @escaping (String) -> Void
+        onRemove: @escaping (String) -> Void,
+        onEditingChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.init(
             tokens: tokens,
@@ -389,6 +402,7 @@ extension TagTokenField where ChipMenu == EmptyView {
             autoFocus: autoFocus,
             onAdd: onAdd,
             onRemove: onRemove,
+            onEditingChanged: onEditingChanged,
             chipMenu: { _ in EmptyView() }
         )
     }

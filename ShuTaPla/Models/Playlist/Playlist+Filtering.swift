@@ -2,9 +2,10 @@
 //  Playlist+Filtering.swift
 //  ShuTaPla
 //
-//  The playlist's saved-search memory and the tag rewrites that keep filters in step with a
-//  playlist-wide tag rename or removal. Pure model edits over `filterState` and `savedSearches`;
-//  the orchestration around them (persist, cursor restore, re-center) stays on `AppState`.
+//  The tag rewrites that keep a playlist's filters in step with a playlist-wide tag rename or
+//  removal. Every filter the playlist owns is reached — the one applied now and each saved search's
+//  — and each maps all four of its lists. Pure model edits; the orchestration around them (persist,
+//  cursor restore, re-center) stays on `AppState`.
 //
 
 import Foundation
@@ -12,62 +13,42 @@ import SwiftData
 
 @MainActor
 extension Playlist {
-    /// Remembers the current tag filter as a saved search (most-recent first, unique by tag set +
-    /// operator). A no-op when the filter is empty.
-    func saveCurrentSearch() {
-        guard filterState.isNotEmpty else { return }
-        promoteSearch(SavedSearch(tags: filterState.selectedTags, mode: filterState.filterMode))
+    /// The saved searches in dropdown order. `savedSearches` is unordered, as every SwiftData
+    /// to-many is, so every read site — and every reorder — goes through this.
+    var sortedSavedSearches: [SavedSearch] {
+        savedSearches.sorted { $0.listOrder < $1.listOrder }
     }
 
-    /// Re-applies a saved search — sets it as the active filter and moves it to the top of the
-    /// recents. The caller settles the cursor (`filterChanged`).
-    func applySavedSearch(_ search: SavedSearch) {
-        filterState.serviceFilter = nil
-        filterState.selectedTags = search.tags
-        filterState.filterMode = search.mode
-        promoteSearch(search)
-    }
+    /// The saved search applied right now, or nil for an ad-hoc filter. Applying a search points
+    /// `currentFilter` at the search's own row rather than a copy, so this *is* the question "which
+    /// search is active" — there is nothing else to compare against.
+    var activeSavedSearch: SavedSearch? { currentFilter?.savedSearch }
 
-    /// Removes a saved search from the recents.
-    func removeSavedSearch(_ search: SavedSearch) {
-        savedSearches.removeAll { $0.matches(search) }
-    }
-
-    /// Moves the matching saved search to the top of the recents, or inserts `search` when none
-    /// matches. An existing match is kept as-is — preserving its captured `resumeSortOrder` — so
-    /// re-saving a filter that is already saved never discards its remembered position.
-    private func promoteSearch(_ search: SavedSearch) {
-        let existing = savedSearches.first { $0.matches(search) }
-        var searches = savedSearches.filter { !$0.matches(search) }
-        searches.insert(existing ?? search, at: 0)
-        savedSearches = searches
-    }
-
-    /// Maps every tag in the active tag filter and the saved searches through `transform`, keeping
-    /// filter state in step with a playlist-wide tag rename so the filter doesn't keep pointing at
-    /// a tag that no longer exists on disk.
-    func rewriteFilterTag(_ transform: (String) -> String) {
-        filterState.selectedTags = TagParser.dedupe(filterState.selectedTags.map(transform))
-        savedSearches = savedSearches.map {
-            var search = $0
-            search.tags = TagParser.dedupe($0.tags.map(transform))
-            return search
+    /// Every filter this playlist owns: the applied one plus each saved search's. The applied filter
+    /// is either ad-hoc (reached only through `currentFilter`) or a search's, in which case both
+    /// paths name the same row — so the pair below is deduped by identity.
+    private var ownedFilters: [TagFilter] {
+        var filters = savedSearches.compactMap(\.filter)
+        if let current = currentFilter, !filters.contains(where: { $0 === current }) {
+            filters.append(current)
         }
+        return filters
     }
 
-    /// Drops `tag` from the active tag filter and the saved searches after a playlist-wide removal.
-    /// A saved search that referenced the tag is discarded outright when removing it would leave one
-    /// tag or none — a resume position belongs to a specific tag combination, so it goes with the
-    /// search rather than orphaning onto a narrower one. A search left with two or more tags
-    /// survives, rewritten to the remainder; one that never carried the tag is untouched.
+    /// Maps every tag of every owned filter through `transform`, so a playlist-wide rename leaves no
+    /// filter pointing at a tag that no longer exists on disk.
+    func rewriteFilterTag(_ transform: (String) -> String) {
+        for filter in ownedFilters { filter.rewriteTags(transform) }
+    }
+
+    /// Drops `tag` from every owned filter after a playlist-wide removal. A filter left with all
+    /// four lists empty is deleted, taking any search saved over it — the same rule as emptying the
+    /// lists by hand, since a search over no lists matches everything and names a combination that
+    /// no longer exists.
     func dropFilterTag(_ tag: String) {
-        filterState.selectedTags.removeAll { TagParser.sameTag($0, tag) }
-        savedSearches = savedSearches.compactMap { search in
-            let remaining = search.tags.filter { !TagParser.sameTag($0, tag) }
-            guard remaining.count == search.tags.count || remaining.count > 1 else { return nil }
-            var updated = search
-            updated.tags = remaining
-            return updated
+        for filter in ownedFilters {
+            filter.dropTag(tag)
+            if filter.isEmpty { modelContext?.delete(filter) }
         }
     }
 }

@@ -2,44 +2,43 @@
 //  SavedSearch.swift
 //  ShuTaPla
 //
-//  Embedded value type stored on `Playlist`. A remembered tag search — a unique
-//  tag-set + operator combination, each carrying its own playback resume position.
-//  Re-applying an existing one moves it to the top instead of duplicating.
+//  A name and a remembered playback position over one `TagFilter`. Applying a search points the
+//  playlist's `currentFilter` at the search's own filter row rather than a copy, so editing the
+//  filter edits the search — there is no commit step, and `currentFilter?.savedSearch` is what
+//  "which search is active" means (nil ⇒ ad-hoc).
 //
 
 import Foundation
+import SwiftData
 
-nonisolated struct SavedSearch: Codable, Sendable, Hashable, Identifiable {
-    /// Stable identity for list display, independent of the tags/operator (which a
-    /// playlist-wide tag rename can rewrite). Equality/dedup use `matches`, not this.
-    let id: UUID
-    var tags: [String]
-    var mode: FilterMode
+@Model
+final class SavedSearch {
+    /// Stands in for a name the user left blank, so no display site nil-coalesces or renders an
+    /// empty row.
+    nonisolated static let defaultName = "Unnamed search"
 
-    /// The playback resume position last played under this search, as a point on the playlist's
-    /// shuffle axis (`PlaylistFile.sortOrder`). `nil` until played under, and cleared by Reshuffle.
+    /// Non-optional with a default, so no display site nil-coalesces. Several searches may share a
+    /// name; the tags of their filter, shown under it, are what tell them apart.
+    var name: String = SavedSearch.defaultName
+
+    /// Stable insertion order, not most-recently-used — applying a search never reorders the list
+    /// under the user; only the explicit reorder control rewrites it. Every read site sorts by it,
+    /// because `Playlist.savedSearches` is unordered as every SwiftData to-many is.
+    var listOrder: Int = 0
+
+    /// The playback position last played under this search, as a point on the playlist's shuffle
+    /// axis (`PlaylistFile.sortOrder`). `nil` until played under, and cleared by Reshuffle.
     var resumeSortOrder: Int?
 
-    init(id: UUID = UUID(), tags: [String], mode: FilterMode, resumeSortOrder: Int? = nil) {
-        self.id = id
-        self.tags = tags
-        self.mode = mode
+    /// The lists this search was saved over. Cascades both ways with `TagFilter.savedSearch`, so
+    /// deleting either end reaps the pair.
+    @Relationship(deleteRule: .cascade) var filter: TagFilter?
+
+    var playlist: Playlist?
+
+    init(name: String = SavedSearch.defaultName, listOrder: Int = 0, resumeSortOrder: Int? = nil) {
+        self.name = name
+        self.listOrder = listOrder
         self.resumeSortOrder = resumeSortOrder
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        // Searches saved before the stable id are minted one on read.
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        tags = try container.decode([String].self, forKey: .tags)
-        mode = try container.decode(FilterMode.self, forKey: .mode)
-        // Absent in searches saved before per-filter resume positions.
-        resumeSortOrder = try container.decodeIfPresent(Int.self, forKey: .resumeSortOrder)
-    }
-
-    /// Two searches are the same combination when they cover the same tag set
-    /// (order-insensitive) under the same operator.
-    func matches(_ other: SavedSearch) -> Bool {
-        mode == other.mode && Set(tags) == Set(other.tags)
     }
 }

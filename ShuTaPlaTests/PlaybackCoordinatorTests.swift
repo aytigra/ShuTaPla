@@ -25,7 +25,7 @@ import SwiftData
     // MARK: - Fixtures
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let schema = appTestSchema
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -226,7 +226,7 @@ import SwiftData
             .video, folder: folder,
             files: [("1.mp4", ["beach"]), ("2.mp4", ["city"]), ("3.mp4", ["beach"])], in: context
         )
-        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["beach"])
         try context.save()
 
         let sequence = context.sequenceFiles(of: playlist)
@@ -541,7 +541,7 @@ import SwiftData
 
         // Filter to "b" — the playing "1.jpg" (tagged "a") is excluded, so reconciling
         // jumps to the first file that still matches.
-        image.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        applyTagFilter(to: image, in: context, mustHaveAny: ["b"])
         try context.save()
         coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: image)
@@ -569,7 +569,7 @@ import SwiftData
         let currentID = coordinator.visualCurrentFile?.id
 
         // The playing file still matches the new filter, so reconciling leaves it put.
-        image.filterState = FilterState(selectedTags: ["a"], filterMode: .or)
+        applyTagFilter(to: image, in: context, mustHaveAny: ["a"])
         try context.save()
         coordinator.reconcile(playlistThatChanged: image)
         #expect(coordinator.visualCurrentFile?.id == currentID)
@@ -594,7 +594,7 @@ import SwiftData
         // A filter that matches nothing empties the sequence. The channel stays set (so the
         // player shows its "no files" placeholder), but the engine's current file is cleared
         // so a later advance/seek can't act on a file no longer in the playlist.
-        image.filterState = FilterState(selectedTags: ["nonexistent"], filterMode: .or)
+        applyTagFilter(to: image, in: context, mustHaveAny: ["nonexistent"])
         try context.save()
         coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: image)
@@ -858,7 +858,7 @@ import SwiftData
         coordinator.play(audio)
         let firstID = coordinator.audioCurrentFile?.id
 
-        audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        applyTagFilter(to: audio, in: context, mustHaveAny: ["b"])
         try context.save()
         coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)
@@ -882,7 +882,7 @@ import SwiftData
         coordinator.play(audio)
         #expect(coordinator.audioCurrentFile != nil)
 
-        audio.filterState = FilterState(selectedTags: ["none"], filterMode: .or)
+        applyTagFilter(to: audio, in: context, mustHaveAny: ["none"])
         try context.save()
         coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)
@@ -972,7 +972,7 @@ import SwiftData
 
         // A filter drops the paused current track: reconcile jumps to the survivor, but the
         // channel must stay paused — loading the new file can't silently resume playback.
-        audio.filterState = FilterState(selectedTags: ["b"], filterMode: .or)
+        applyTagFilter(to: audio, in: context, mustHaveAny: ["b"])
         try context.save()
         coordinator.sequences.bump()   // persist+bump, as AppState.persistAndRefresh does before reconcile
         coordinator.reconcile(playlistThatChanged: audio)

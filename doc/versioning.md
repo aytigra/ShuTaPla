@@ -73,6 +73,11 @@ supported lightweight change, so a throwaway column is never needed.
    pre-change shape). Pin the **whole relationship component together** — copying one model drags
    the models it relates to, because their relationships must resolve to same-version types. Models
    with no relationship into the changed component can keep referencing the live types.
+   Pin the **embedded Codable value types** a pinned model stores as well (`LegacyFilter` holds the
+   filter's): a composite attribute's members are part of the entity hash, so a live struct that
+   later gains or loses a field would retroactively reshape a frozen version. The pinned copy needs
+   only the stored members — a historical shape has no behaviour to keep — and it may be renamed or
+   nested freely, because the hash covers the members' names and types but not the type's own name.
 2. **Create the new `SchemaV(N+1)`**: a fresh `versionIdentifier`, with `models` referencing the
    **live** types.
 3. **Make the live model change.**
@@ -80,6 +85,15 @@ supported lightweight change, so a throwaway column is never needed.
    the old version to the new one.
 5. **Point `ShuTaPlaApp` at the new version.**
 6. **Add a migration test** (below).
+
+Steps 1–5 land **together**, in one change. A version carries no shape of its own — it is a name for
+whatever its `models` declare — so a `SchemaV(N+1)` registered before step 3 is byte-identical to
+`SchemaVN`, and **two registered versions may not share a checksum**: `ModelContainer(migrationPlan:)`
+rejects the plan with `NSInvalidArgumentException: Duplicate version checksums detected.` That is an
+uncaught Objective-C exception, not a thrown Swift error — it aborts the process rather than
+surfacing as a `loadIssue`, and in the test host it kills the run mid-flight. So the version cannot be
+laid down as groundwork ahead of the model change it exists to record; freezing the old shape (step 1)
+is the only half that can go first, and only if the app is left pointing at a still-live version.
 
 ### Lightweight vs custom stage
 
@@ -104,3 +118,14 @@ Prove the stage preserves the non-derivable rows:
 
 Hold the `ModelContainer` for the whole test body and use a temp store URL you delete in a `defer`
 (see the SwiftData test-trap notes in CLAUDE.md).
+
+## Pinning is guarded by frozen hashes, not by the migration tests
+
+`SchemaVersionHashTests` records each registered version's entity version hashes — read straight from
+a fresh store's `Z_METADATA` — against golden values. That is the number CoreData compares an existing
+store against to place it in the plan, so a pinned version that stops producing its golden hash can no
+longer be reached by stores in the field.
+
+A migration test cannot cover this: it writes with the pinned copies and reads with them, so a shifted
+hash moves both sides together and the migration still succeeds. Freezing a version means adding its
+hashes there; changing one is only ever correct alongside a new version and stage.

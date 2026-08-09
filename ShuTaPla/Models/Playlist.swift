@@ -35,12 +35,24 @@ final class Playlist {
 
     var createdAt: Date = Date()
 
-    // Embedded value types (JSON-encoded by SwiftData).
+    // Embedded value type (JSON-encoded by SwiftData).
     var preferences: PlaylistPreferences = PlaylistPreferences()
-    var filterState: FilterState = FilterState()
 
-    /// Most recent unique saved searches, each carrying its own resume position.
+    /// The tag filter applied right now, or nil when the playlist is unfiltered. Cascade-owned, but
+    /// being applied is not ownership in the other direction: reassigning this fires no delete rule,
+    /// so the outgoing row survives and only an *ad-hoc* one is deleted deliberately.
+    @Relationship(deleteRule: .cascade, inverse: \TagFilter.playlist)
+    var currentFilter: TagFilter?
+
+    /// Unordered, as every SwiftData to-many is; `sortedSavedSearches` is what read sites use.
+    @Relationship(deleteRule: .cascade, inverse: \SavedSearch.playlist)
     var savedSearches: [SavedSearch] = []
+
+    /// The triage filter's `rawValue`, or nil for none. Stored as a string rather than the enum so a
+    /// value no longer in `ServiceFilter` — a case removed in a later version — reads back as "no
+    /// filter" instead of failing the attribute's decode. Independent of the tag filter: a tag
+    /// filter set underneath survives a detour through triage.
+    var serviceFilterRaw: String?
 
     /// Resume position for the unfiltered state, as a point on the shuffle axis
     /// (`PlaylistFile.sortOrder`). The no-filter counterpart of `SavedSearch.resumeSortOrder`;
@@ -68,5 +80,11 @@ final class Playlist {
         self.sortOrder = sortOrder
         self.playbackState = .stopped
         self.createdAt = Date()
+    }
+
+    /// `serviceFilterRaw` read as the enum — an unrecognized stored value reads as no filter.
+    var serviceFilter: ServiceFilter? {
+        get { serviceFilterRaw.flatMap(ServiceFilter.init(rawValue:)) }
+        set { serviceFilterRaw = newValue?.rawValue }
     }
 }

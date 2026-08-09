@@ -3,10 +3,11 @@
 //  ShuTaPla
 //
 //  The Manager-mode right panel, shown in one of two modes selected from the toolbar:
-//  the default filter-and-edit mode (FilterBar over the playlist's tags, plus
-//  TagEditorView for the current file-list selection) and a tag-management mode
-//  (PlaylistTagsView) for renaming or removing tags across the whole playlist. Shows
-//  a placeholder when no playlist is selected.
+//  the default tag-editing mode (a preview of the current file-list selection over
+//  TagEditorView for it) and a tag-management mode (PlaylistTagsView) for renaming or
+//  removing tags across the whole playlist. Shows a placeholder when no playlist is
+//  selected. Filtering is not here — it lives in the center strip, over the file list
+//  it narrows.
 //
 
 import SwiftUI
@@ -21,7 +22,7 @@ struct TagSidebar: View {
             if managingTags {
                 PlaylistTagsView(playlist: playlist)
             } else {
-                filterAndEdit(playlist)
+                tagEditing(playlist)
             }
         } else {
             VStack(spacing: 8) {
@@ -38,25 +39,19 @@ struct TagSidebar: View {
         }
     }
 
-    private func filterAndEdit(_ playlist: Playlist) -> some View {
-        // Not one outer `ScrollView`: the filter, editor, and preview summary stay fixed while the
+    private func tagEditing(_ playlist: Playlist) -> some View {
+        // Not one outer `ScrollView`: the editor and the preview summary stay fixed while the
         // preview's name list owns the remaining height with its own scroll, so a long selection
         // scrolls internally instead of growing the sidebar.
         VStack(alignment: .leading, spacing: 0) {
-            // Both dropdowns float downward over the siblings below them, so their draw order runs
-            // top-to-bottom: the filter's dropdown must win over the editor, and the editor's over
-            // the preview.
-            FilterBar(playlist: playlist)
-                .zIndex(2)
-            Divider()
-
             // The read-only preview of what the editor is acting on — the file(s) still selected,
             // including any pushed out of the effective filter by an edit.
             ManagerSelectionPreview(playlist: playlist)
             Divider()
 
+            // The editor's tag dropdown floats downward over whatever follows it.
             TagEditorView(playlist: playlist, files: appState.selectedManagerFiles())
-              .zIndex(1)
+                .zIndex(1)
             Spacer(minLength: 0)
         }
     }

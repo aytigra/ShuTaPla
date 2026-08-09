@@ -25,7 +25,7 @@ import UniformTypeIdentifiers
     /// `trySave()` persists. The container is returned for the caller to hold for the whole body
     /// (trap class 1); the recorded HDR fact is asserted on the same live instance.
     private func makeFile(_ name: String) throws -> (ModelContainer, PlaylistFile) {
-        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let schema = appTestSchema
         let container = try ModelContainer(
             for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
         let file = PlaylistFile(relativePath: name, fileName: name)

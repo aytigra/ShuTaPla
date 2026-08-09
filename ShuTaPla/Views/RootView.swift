@@ -61,19 +61,20 @@ struct RootView: View {
         } message: {
             Text(appState.saveError ?? "")
         }
-        // A confirmation's destructive work failed. Presented app-wide from one host so the audio
-        // overlay (which co-mounts over the Manager panel) can't double-present it; the carried
-        // title names the family.
+        // An operation failed or was refused, wherever it was raised from. Presented app-wide from
+        // one host so the audio overlay (which co-mounts over the Manager panel) can't double-present
+        // it, and so a surface that goes away mid-operation still gets its report shown; the carried
+        // title names the site.
         .alert(
-            appState.confirmationError?.title ?? "",
+            appState.errorNotice?.title ?? "",
             isPresented: Binding(
-                get: { appState.confirmationError != nil },
-                set: { if !$0 { appState.confirmationError = nil } }
+                get: { appState.errorNotice != nil },
+                set: { if !$0 { appState.errorNotice = nil } }
             )
         ) {
-            Button("OK", role: .cancel) { appState.confirmationError = nil }
+            Button("OK", role: .cancel) { appState.errorNotice = nil }
         } message: {
-            Text(appState.confirmationError?.message ?? "")
+            Text(appState.errorNotice?.message ?? "")
         }
         .addPlaylistFlow()
         .background(WindowCloseBridge { appState.windowWasClosed() })

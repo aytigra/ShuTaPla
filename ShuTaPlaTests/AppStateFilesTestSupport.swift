@@ -56,6 +56,29 @@ func insertFile(
     return file
 }
 
+/// Applies a tag filter to `playlist`: builds the row, inserts it, and points `currentFilter` at
+/// it. Like `insertFile` it does **not** save — the store-side derivations ignore pending changes,
+/// so a caller that then derives a sequence must save first.
+@MainActor
+@discardableResult
+func applyTagFilter(
+    to playlist: Playlist,
+    in context: ModelContext,
+    mustHaveAll: [String] = [],
+    mustHaveAny: [String] = [],
+    mustNotHaveAll: [String] = [],
+    mustNotHaveAny: [String] = []
+) -> TagFilter {
+    let filter = TagFilter()
+    filter.mustHaveAll = mustHaveAll
+    filter.mustHaveAny = mustHaveAny
+    filter.mustNotHaveAll = mustNotHaveAll
+    filter.mustNotHaveAny = mustNotHaveAny
+    context.insert(filter)
+    playlist.currentFilter = filter
+    return filter
+}
+
 /// A main-actor callback that runs *inside* an in-flight `trashFiles`, so a test can move playback
 /// across the delete's `await` the way a slideshow or end-of-file advance does. A box rather than a
 /// plain closure because the action usually needs the `AppState` the stub is handed to.

@@ -20,7 +20,6 @@ struct TagEditorView: View {
     @Environment(AppState.self) private var appState
 
     @State private var renameDraft = ""
-    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -28,14 +27,6 @@ struct TagEditorView: View {
             content
         }
         .padding(12)
-        .alert(
-            "Tag change failed",
-            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
     }
 
     @ViewBuilder
@@ -99,7 +90,7 @@ struct TagEditorView: View {
     private func commitInvalidRename(_ file: PlaylistFile) {
         let name = renameDraft
         Task {
-            if let error = await appState.renameFile(file, to: name) { errorMessage = error }
+            if let error = await appState.renameFile(file, to: name) { report(error) }
         }
     }
 
@@ -107,14 +98,21 @@ struct TagEditorView: View {
 
     private func add(_ tag: String) {
         Task {
-            if let error = await appState.addTag(tag, to: editableFiles) { errorMessage = error }
+            if let error = await appState.addTag(tag, to: editableFiles) { report(error) }
         }
     }
 
     private func remove(_ tag: String) {
         Task {
-            if let error = await appState.removeTag(tag, from: editableFiles) { errorMessage = error }
+            if let error = await appState.removeTag(tag, from: editableFiles) { report(error) }
         }
+    }
+
+    /// A failed edit goes to the app-wide notice rather than a local alert: the `HotkeyRouter` can
+    /// only hold the keyboard for a modal it can see on `AppState`, and the editor is mounted in
+    /// three places that would otherwise each carry their own copy of the alert.
+    private func report(_ message: String) {
+        appState.errorNotice = ErrorNotice(title: "Tag change failed", message: message)
     }
 
     // MARK: - Derived

@@ -28,7 +28,7 @@ import AppKit
     // MARK: - Fixtures
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let schema = appTestSchema
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -726,8 +726,10 @@ import AppKit
 
         // A single-button error alert (here a failed audio strip) is still a modal that owns
         // the keyboard: bare keys must be swallowed and `[enter]`/`[esc]` pass through to it,
-        // rather than leaking to playback behind the alert.
-        f.appState.confirmationError = ConfirmationError(title: "Couldn't remove audio", message: "Couldn't remove audio.")
+        // rather than leaking to playback behind the alert. One channel carries every such
+        // report — a refused save, a failed tag edit — so this holds for all of them, and it is
+        // why none of them may be raised from a view's own `@State`.
+        f.appState.errorNotice = ErrorNotice(title: "Couldn't remove audio", message: "Couldn't remove audio.")
 
         let current = f.playlist.currentFileID
         #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed

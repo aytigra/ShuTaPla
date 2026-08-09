@@ -19,10 +19,7 @@ struct CloudFileServiceTests {
     /// A fresh in-memory container with the full app schema, held for the whole test body
     /// so its `mainContext` never orphans (trap class 1).
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([
-            Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self,
-            AppStateModel.self, GlobalSettings.self,
-        ])
+        let schema = appTestSchema
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

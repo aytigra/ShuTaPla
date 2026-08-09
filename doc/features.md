@@ -20,7 +20,7 @@ Capitalized terms below are used precisely throughout this document.
 
 - **Manager mode** — the windowed view for browsing and organizing playlists, their files, tags and filters.
 - **Player mode** — the fullscreen view that presents video or image playback.
-- **Managed Playlist** — the single playlist Manager mode is bound to; its sidebar, center file list, Filter Bar, and tag inspector all act on this one playlist.
+- **Managed Playlist** — the single playlist Manager mode is bound to; its sidebar, center file list with its Filter Strip, and tag inspector all act on this one playlist.
 - **Visual Channel** — the shared playback channel for video *or* image, presented in fullscreen during Player mode.
 - **Audio Channel** — the independent audio playback channel that runs in parallel with the Visual Channel and never enters fullscreen on its own.
 - **Visual Channel Playlist** — the playlist currently loaded on the Visual Channel. It is *transient*: loaded when Player mode starts and ejected on Stop, which exits Player mode and hands the playlist back to Manager mode as the Managed Playlist.
@@ -38,7 +38,7 @@ Capitalized terms below are used precisely throughout this document.
 - **Suppression** — the single transient layer that halts all playback over the per-playlist states (`playback = playing && !suppression`).
 - **Key Context** — the routing target (Visual Channel or Audio Overlay) that currently receives arrow / `[space]` / `[l]` / seek keys.
 - **Tag Editor** — the multi-select tag-input control used identically in the Manager inspector, the Visual Overlay, and the Audio Overlay.
-- **Filter Bar** — the tag-filter control (tag multi-select + AND/OR switch + saved searches) used across those same three surfaces.
+- **Filter Strip** — the row at the top of the file list on those same three surfaces, holding everything that narrows a playlist: the four-field tag filter (collapsed behind a caret), the saved searches over it, and the Service Filter counters.
 
 ## Platform and window
 
@@ -54,6 +54,6 @@ Capitalized terms below are used precisely throughout this document.
 | [Playlists, creation, and switching](features/playlists.md) | First launch; creating playlists (folder classification, dominance, Mixed prompt); what a playlist stores; global settings; Reshuffle vs. Update; playback order/wrap-around; the Stopped/Playing/Paused state machine and transitions; concurrent playlists; Player-mode quick switching. |
 | [Manager mode](features/manager-mode.md) | The Stopped-state windowed view: Scopes, toolbar/panel layout, list/gallery view modes, the find-duplicates tool, the thumbnail-cache-pressure banner, file interactions (select, play, multi-select, rename, Remove Audio), and playlist-wide tag operations. |
 | [Tag system](features/tags.md) | Tag syntax in filenames; invalid tagging; the known-tags cache; the Tag Editor UI; tag-input hotkeys; on-disk rename semantics and graceful failure. |
-| [Filtering and search](features/filtering.md) | Per-playlist tag filter (AND/OR); the three Service Filters; how filtering affects playback; filter persistence and saved-search history. |
+| [Filtering and search](features/filtering.md) | The Filter Strip; the per-playlist four-field tag filter; the three Service Filters and how they take precedence; how filtering affects playback; filter persistence and saved searches. |
 | [Playback controls](features/playback-controls.md) | `[esc]` priority chain; Player- and Manager-mode hotkey tables and Key Context; overlay exclusivity/dismissal rules; the Pause Overlay; Suppression vs. per-playlist pause. |
 | [Players (video, image, audio)](features/players.md) | The video, image, and audio players: hover zones, the Visual Overlay, image fit modes and slideshow, the Audio Inlet and Audio Overlay, audio controls, and parallel audio mixing. |

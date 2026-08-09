@@ -18,7 +18,7 @@ import SwiftData
 struct PlaylistPlaybackTests {
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let schema = appTestSchema
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -58,7 +58,7 @@ struct PlaylistPlaybackTests {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
-        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["beach"])
         try context.save()
 
         #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["tagged [beach].mp4"])
@@ -70,7 +70,8 @@ struct PlaylistPlaybackTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
         // A tag filter is set too, to prove the triage filter overrides it.
-        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .and, serviceFilter: .untagged)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["beach"])
+        playlist.serviceFilter = .untagged
         try context.save()
 
         #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["untagged.mp4"])
@@ -81,7 +82,7 @@ struct PlaylistPlaybackTests {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
-        playlist.filterState.serviceFilter = .invalidTagging
+        playlist.serviceFilter = .invalidTagging
         try context.save()
 
         #expect(context.sequenceFiles(of: playlist).map(\.fileName) == ["invalid [ab].mp4"])

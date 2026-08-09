@@ -26,13 +26,7 @@ struct DeletedModelResolutionTests {
 
     /// A fresh in-memory container held for the whole test body (trap class 1).
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([
-            Playlist.self,
-            PlaylistFile.self,
-            ShuTaPla.Tag.self,
-            AppStateModel.self,
-            GlobalSettings.self,
-        ])
+        let schema = appTestSchema
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [configuration])
     }

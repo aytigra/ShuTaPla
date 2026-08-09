@@ -3,9 +3,11 @@
 //  ShuTaPlaTests
 //
 //  Task 17 (Stage B) — the store-side derivation on `ModelContext`: the ordered sequence
-//  identifiers, the skipped-review list, and the triage counts, under no filter, each service
-//  filter, and tag AND/OR. The fetches use `includePendingChanges: false`, so every scenario
-//  saves before deriving; a separate case pins that an unsaved insert is not yet visible.
+//  identifiers, the skipped-review list, the triage counts and the path-scoped lookups, under no
+//  filter and under each service filter. The fetches use `includePendingChanges: false`, so every
+//  scenario saves before deriving; a separate case pins that an unsaved insert is not yet visible.
+//  The tag filter's own rules live in `TagFilterPredicateTests`, over a fixture built to
+//  discriminate them; what belongs here is only the precedence between the two filter kinds.
 //
 
 import Testing
@@ -18,7 +20,7 @@ struct SequenceStoreTests {
 
     /// Holds the container for the whole body so the context never orphans (trap class 1).
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+        let schema = appTestSchema
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -36,7 +38,7 @@ struct SequenceStoreTests {
         ids.compactMap { (context.model(for: $0) as? PlaylistFile)?.fileName }
     }
 
-    /// One of each triage category plus tagged members that exercise AND/OR.
+    /// One of each triage category, plus tagged members a tag filter can select against.
     private func seededPlaylist(in context: ModelContext) throws -> Playlist {
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
         context.insert(playlist)
@@ -70,12 +72,12 @@ struct SequenceStoreTests {
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        playlist.filterState.serviceFilter = .untagged
+        playlist.serviceFilter = .untagged
         try context.save()
         #expect(names(context.sequence(of: playlist), in: context) == ["untagged.jpg"])
         #expect(context.sequenceNotEmpty(in: playlist))
 
-        playlist.filterState.serviceFilter = .invalidTagging
+        playlist.serviceFilter = .invalidTagging
         try context.save()
         #expect(names(context.sequence(of: playlist), in: context) == ["invalid [ab].jpg"])
         #expect(context.sequenceNotEmpty(in: playlist))
@@ -92,69 +94,22 @@ struct SequenceStoreTests {
         #expect(!names(context.sequence(of: playlist), in: context).contains("skip.txt"))
     }
 
-    @Test func tagOrFilterMatchesAnySelectedTag() throws {
+    @Test func theServiceFilterWinsOverASetTagFilter() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = try seededPlaylist(in: context)
 
-        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .or)
+        // The two are storable together, and the store resolves them by precedence: the tag filter
+        // underneath survives the detour and comes back when the triage filter is cleared.
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["beach"])
+        playlist.serviceFilter = .untagged
         try context.save()
-        // OR matches any of beach/sunny: all three tagged files.
+        #expect(names(context.sequence(of: playlist), in: context) == ["untagged.jpg"])
+
+        playlist.serviceFilter = nil
+        try context.save()
         #expect(names(context.sequence(of: playlist), in: context)
-            == ["a [beach].jpg", "b [beach sunny].jpg", "c [sunny].jpg"])
-    }
-
-    @Test func tagAndFilterRequiresEverySelectedTag() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = try seededPlaylist(in: context)
-
-        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .and)
-        try context.save()
-        // AND matches files carrying both tags: only the doubly-tagged file.
-        #expect(names(context.sequence(of: playlist), in: context) == ["b [beach sunny].jpg"])
-    }
-
-    @Test func tagNotAnyFilterExcludesEverySelectedTag() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = try seededPlaylist(in: context)
-
-        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .notAny)
-        try context.save()
-        // Complement of OR: files carrying neither tag — the two untagged files are included
-        // (honest "has none of the selected tags"), the three tagged ones excluded.
-        #expect(names(context.sequence(of: playlist), in: context)
-            == ["untagged.jpg", "invalid [ab].jpg"])
-    }
-
-    @Test func tagNotAllFilterExcludesFilesCarryingEverySelectedTag() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = try seededPlaylist(in: context)
-
-        playlist.filterState = FilterState(selectedTags: ["beach", "sunny"], filterMode: .notAll)
-        try context.save()
-        // Complement of AND: only the doubly-tagged file has both, so every other non-skipped file
-        // (missing at least one — including the untagged ones) is included.
-        #expect(names(context.sequence(of: playlist), in: context)
-            == ["a [beach].jpg", "c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"])
-    }
-
-    @Test func singleSelectedTagMakesNotAllAndNotAnyCoincide() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = try seededPlaylist(in: context)
-
-        // With one selected tag, "missing all of it" == "has none of it": both exclude a and b.
-        let expected = ["c [sunny].jpg", "untagged.jpg", "invalid [ab].jpg"]
-        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAll)
-        try context.save()
-        #expect(names(context.sequence(of: playlist), in: context) == expected)
-
-        playlist.filterState = FilterState(selectedTags: ["beach"], filterMode: .notAny)
-        try context.save()
-        #expect(names(context.sequence(of: playlist), in: context) == expected)
+            == ["a [beach].jpg", "b [beach sunny].jpg"])
     }
 
     @Test func playlistForwardersMatchTheContextMethods() throws {

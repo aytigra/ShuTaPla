@@ -6,7 +6,8 @@
 //  the V6→V7 migration — PlaylistFile's `fingerprint` column — but before its `lastModified` column.
 //  Its Playlist/PlaylistFile/Tag are pinned copies frozen *before* `lastModified`; pinning one model
 //  of the relationship component drags the whole component, so its relationships resolve to
-//  same-version types. AppStateModel/GlobalSettings/SchemaMarker carry no reference into it and reuse
+//  same-version types. The filter value types its Playlist embeds are pinned as `LegacyFilter` copies
+//  for the same reason. AppStateModel/GlobalSettings/SchemaMarker carry no reference into it and reuse
 //  the live types. This is the `from` side of the V7→V8 lightweight migration (see `doc/versioning.md`).
 //
 
@@ -33,8 +34,8 @@ enum SchemaV7: VersionedSchema {
         var playbackState: PlaybackState = PlaybackState.stopped
         var createdAt: Date = Date()
         var preferences: PlaylistPreferences = PlaylistPreferences()
-        var filterState: FilterState = FilterState()
-        var savedSearches: [SavedSearch] = []
+        var filterState: LegacyFilter.State = LegacyFilter.State()
+        var savedSearches: [LegacyFilter.SavedSearch] = []
         var unfilteredResumeSortOrder: Int?
         var tagFrequency: [String: Int] = [:]
 

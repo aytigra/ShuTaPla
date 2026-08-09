@@ -6,7 +6,8 @@
 //  the V7→V8 migration — PlaylistFile's `lastModified` column — but before its HDR columns
 //  (`isHDR`/`hdrGamma`/`hdrPrimaries`). Its Playlist/PlaylistFile/Tag are pinned copies frozen
 //  *before* the HDR fields; pinning one model of the relationship component drags the whole
-//  component, so its relationships resolve to same-version types. AppStateModel/GlobalSettings/
+//  component, so its relationships resolve to same-version types. The filter value types its Playlist
+//  embeds are pinned as `LegacyFilter` copies for the same reason. AppStateModel/GlobalSettings/
 //  SchemaMarker carry no reference into it and reuse the live types. This is the `from` side of the
 //  V8→V9 lightweight migration (see `doc/versioning.md`).
 //
@@ -34,8 +35,8 @@ enum SchemaV8: VersionedSchema {
         var playbackState: PlaybackState = PlaybackState.stopped
         var createdAt: Date = Date()
         var preferences: PlaylistPreferences = PlaylistPreferences()
-        var filterState: FilterState = FilterState()
-        var savedSearches: [SavedSearch] = []
+        var filterState: LegacyFilter.State = LegacyFilter.State()
+        var savedSearches: [LegacyFilter.SavedSearch] = []
         var unfilteredResumeSortOrder: Int?
         var tagFrequency: [String: Int] = [:]
 

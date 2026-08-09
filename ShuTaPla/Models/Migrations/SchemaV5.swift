@@ -5,7 +5,8 @@
 //  The pre-index baseline — the shape every existing store carries, stamped `Schema.Version(5,0,0)`.
 //  Its Playlist/PlaylistFile/Tag are pinned copies frozen *before* PlaylistFile's `#Index` and
 //  before the `SchemaMarker` entity SchemaV6 adds. Pinning one model of the relationship component
-//  drags the whole component, so its relationships resolve to same-version types;
+//  drags the whole component, so its relationships resolve to same-version types. The filter value
+//  types its Playlist embeds are pinned as `LegacyFilter` copies for the same reason;
 //  AppStateModel/GlobalSettings carry no reference into it and reuse the live types. This is the
 //  `from` side of the V5→V6 lightweight migration (see `doc/versioning.md`).
 //
@@ -32,8 +33,8 @@ enum SchemaV5: VersionedSchema {
         var playbackState: PlaybackState = PlaybackState.stopped
         var createdAt: Date = Date()
         var preferences: PlaylistPreferences = PlaylistPreferences()
-        var filterState: FilterState = FilterState()
-        var savedSearches: [SavedSearch] = []
+        var filterState: LegacyFilter.State = LegacyFilter.State()
+        var savedSearches: [LegacyFilter.SavedSearch] = []
         var unfilteredResumeSortOrder: Int?
         var tagFrequency: [String: Int] = [:]
 

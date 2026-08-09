@@ -3,12 +3,12 @@
 //  ShuTaPla
 //
 //  The modal confirmations (Manager, Player, and extended-overlay audio delete; remove-audio;
-//  playlist-wide tag removal; sidebar playlist delete). Each `request*` sets `pendingConfirmation`
-//  to its case — the state a blocking `.alert` / `.confirmationDialog` binds to; the shared
-//  `confirmConfirmation` runs the destructive work as a retained, self-pruning Task so its
-//  SwiftData work is owned rather than fire-and-forget. The `request*` functions stay distinct
-//  because their guards differ (video-only strip, current-track reads); everything after the
-//  request is one path.
+//  playlist-wide tag removal; sidebar playlist delete; saved-search delete). Each `request*` sets
+//  `pendingConfirmation` to its case — the state a blocking `.alert` / `.confirmationDialog` binds
+//  to; the shared `confirmConfirmation` runs whatever touches the file system as a retained,
+//  self-pruning Task so its SwiftData work is owned rather than fire-and-forget. The `request*`
+//  functions stay distinct because their guards differ (video-only strip, current-track reads);
+//  everything after the request is one path.
 //
 
 import Foundation
@@ -91,6 +91,13 @@ extension AppState {
         pendingConfirmation = .playlistDelete(playlist)
     }
 
+    /// Requests confirmation to delete `search` (the expanded filter strip's button). Confirmed
+    /// because the delete takes the filter with it through the cascade, so a search deleted while
+    /// applied leaves the playlist unfiltered — not something to do on a stray click.
+    func requestSavedSearchDelete(_ search: SavedSearch) {
+        pendingConfirmation = .savedSearchDelete(search)
+    }
+
     // MARK: - Cancel / confirm
 
     /// Dismisses the pending confirmation without acting on it.
@@ -99,7 +106,7 @@ extension AppState {
     }
 
     /// Runs the pending confirmation's destructive work as a retained, self-pruning Task,
-    /// routing any failure to `confirmationError` (its title naming the family), then clears the
+    /// routing any failure to `errorNotice` (its title naming the family), then clears the
     /// pending state. A no-op when nothing is pending.
     func confirmConfirmation() {
         guard let pending = pendingConfirmation else { return }
@@ -112,18 +119,23 @@ extension AppState {
             guard files.isNotEmpty else { return }
             runConfirmation {
                 if let error = await self.stripAudio(from: files) {
-                    self.confirmationError = ConfirmationError(title: "Couldn't remove audio", message: error)
+                    self.errorNotice = ErrorNotice(title: "Couldn't remove audio", message: error)
                 }
             }
         case .tagRemoval(let tag):
             guard let playlist = managedPlaylist else { return }
             runConfirmation {
                 if let error = await self.removeTagAcrossPlaylist(playlist, tag: tag) {
-                    self.confirmationError = ConfirmationError(title: "Couldn't remove tag", message: error)
+                    self.errorNotice = ErrorNotice(title: "Couldn't remove tag", message: error)
                 }
             }
         case .playlistDelete(let playlist):
             runConfirmation { await self.delete(playlist) }
+        case .savedSearchDelete(let search):
+            // The only synchronous family: the delete is a store edit and its cascade, with no file
+            // work to own — `deleteSavedSearch` persists and settles the surfaces itself.
+            guard let playlist = search.playlist else { return }
+            deleteSavedSearch(search, on: playlist)
         }
     }
 
@@ -139,7 +151,7 @@ extension AppState {
         // advancing past an undeleted file.
         runConfirmation {
             if let error = await self.deleteFiles(files) {
-                self.confirmationError = ConfirmationError(title: "Couldn't move to Trash", message: error)
+                self.errorNotice = ErrorNotice(title: "Couldn't move to Trash", message: error)
             }
         }
     }

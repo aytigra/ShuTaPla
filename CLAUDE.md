@@ -72,16 +72,15 @@ This project uses `~/.claude-ios/` as the Claude Code configuration directory (n
 
 Locally installed skills live in `/Users/aytm/.claude-ios/skills/`.
 
-**Loading the matching skill is mandatory, and it is the first step — before you start reading or changing the code, not after.**
+**Loading the relevant skills is mandatory, and it is the first step — before you start reading or changing the code, not after.**
 
-| Skill | Path | Load when the work touches |
-|-------|------|---------|
-| **swiftui-expert-skill** | `skills/swiftui-expert-skill/` | State management (`@Observable`, `@MainActor`, `@Environment`), Observation tracking, view composition, performance patterns, ForEach identity, LazyVStack/LazyVGrid, animations, accessibility, Liquid Glass (iOS 26+) — and any SwiftData-backed view reactivity |
-| **swift-concurrency** | `skills/swift-concurrency/` | async/await, actors, Sendable, AsyncStream, Task groups, Swift 6 migration, data race safety, `Mutex` |
-| **swift-testing-expert** | `skills/swift-testing-expert/` | Swift Testing framework (`@Test`, `#expect`, `#require`), parameterized tests, traits/tags, async testing, XCTest migration |
-| **mobile-ios-design** | `skills/mobile-ios-design/` | HIG principles, SF Symbols, Dynamic Type, navigation patterns, layout, dark mode, accessibility |
+- `skills/swiftui-expert-skill/`
+- `skills/swift-concurrency/`
+- `skills/swift-testing-expert/`
+- `skills/mobile-ios-design/`
+Each skill has a `SKILL.md` with workflow decision trees and a `references/` directory with detailed topic guides. Read the SKILL.md first, then drill into references as needed, or do a search across all of them: `cd ~/.claude-ios/skills && grep -RinE "…" .` (simlinks).
 
-Each skill has a `SKILL.md` with workflow decision trees and a `references/` directory with detailed topic guides. Read the SKILL.md first, then drill into references as needed.
+**Consult the skills again whenever an obstacle survives two or three attempts** — the same trigger as the documentation-and-web-search rule above. An unexplained compiler error, a runtime trap, or an API that won't do what it should is a signal to go read or search, inventing a workaround before searching is how a supported, straightforward route gets missed.
 
 ## Testing
 

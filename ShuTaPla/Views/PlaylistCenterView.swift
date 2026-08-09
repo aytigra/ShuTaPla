@@ -2,10 +2,9 @@
 //  PlaylistCenterView.swift
 //  ShuTaPla
 //
-//  The Manager center panel for the active scope: the tagging counter notices and the
-//  file list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the
-//  Manager toolbar. Owns the shared delete, remove-audio, and error confirmations used
-//  by the list's interactions.
+//  The Manager center panel for the active scope: the cache banner, the filter strip, and the file
+//  list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the Manager toolbar.
+//  Owns the shared delete, remove-audio, and error confirmations used by the list's interactions.
 //
 
 import SwiftUI
@@ -82,12 +81,17 @@ struct PlaylistCenterView: View {
 
     // MARK: - Center
 
-    /// The managed playlist's center: notices over its file list. Visual playlists offer the
-    /// gallery presentation; audio has no gallery, so it is always the list.
+    /// The managed playlist's center: the filter strip over its file list. Visual playlists offer
+    /// the gallery presentation; audio has no gallery, so it is always the list.
     @ViewBuilder
     private func center(_ playlist: Playlist) -> some View {
         VStack(spacing: 0) {
-            noticeBar(playlist)
+            if cacheOverLimit { cacheBanner }
+            // Raised over the file list so the strip's saved-search dropdown and the expanded
+            // fields' tag dropdowns overlay the rows instead of being clipped by them.
+            FilterStrip(playlist: playlist)
+                .zIndex(1)
+            Divider()
             // One view type across every scope switch: audio has no gallery, so it is always
             // the list. Passing the presentation as `layout` (rather than picking between two
             // view types) keeps the browser's identity and scroll/selection state when the
@@ -106,21 +110,7 @@ struct PlaylistCenterView: View {
         ContentUnavailableView("Select a Playlist", systemImage: "rectangle.stack")
     }
 
-    // MARK: - Counter notices
-
-    /// A review mode's banner while one is active, otherwise the triage counts.
-    @ViewBuilder
-    private func noticeBar(_ playlist: Playlist) -> some View {
-        let _ = appState.sequences.version   // re-derive the counts (or the mode) when the sequence changes
-        if cacheOverLimit { cacheBanner }
-        if appState.duplicateSearchActive {
-            duplicateNotice
-        } else if appState.skippedReviewActive {
-            skippedReviewNotice
-        } else {
-            serviceFilterNotices(playlist)
-        }
-    }
+    // MARK: - Cache banner
 
     /// Shown while the on-disk thumbnail cache is over the caution threshold; a click opens
     /// Settings, where the cache can be cleared.
@@ -138,86 +128,4 @@ struct PlaylistCenterView: View {
         Divider()
     }
 
-    /// Signals the find-duplicates mode and gives an explicit way out; any filter interaction or
-    /// playlist switch also leaves it.
-    @ViewBuilder
-    private var duplicateNotice: some View {
-        HStack(spacing: 8) {
-            Label("Showing duplicates", systemImage: "square.on.square")
-            Spacer()
-            Button("Done") { appState.setDuplicateSearch(false) }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        Divider()
-    }
-
-    /// Signals the skipped-review mode and gives an explicit way out; a filter interaction or
-    /// playlist switch also leaves it.
-    @ViewBuilder
-    private var skippedReviewNotice: some View {
-        HStack(spacing: 8) {
-            Label("Showing skipped", systemImage: "nosign")
-            Spacer()
-            Button("Done") { appState.setSkippedReview(false) }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        Divider()
-    }
-
-    /// Untagged / invalid-tagging counts each toggle the matching service filter (which overrides
-    /// the tag filter while active); the skipped count enters the skipped-review mode instead —
-    /// skipped files are wrong-type/unplayable, reviewed as a list rather than filtered into playback.
-    @ViewBuilder
-    private func serviceFilterNotices(_ playlist: Playlist) -> some View {
-        let (untagged, invalid, skipped) = playlist.serviceFilterCounts
-
-        if untagged > 0 || invalid > 0 || skipped > 0 {
-            HStack(spacing: 8) {
-                if untagged > 0 { filterNotice("\(untagged) untagged", filter: .untagged, on: playlist) }
-                if invalid > 0 { filterNotice("\(invalid) invalid tagging", filter: .invalidTagging, on: playlist) }
-                if skipped > 0 {
-                    notice("\(skipped) skipped", systemImage: "nosign", isActive: false, help: "Review skipped files") {
-                        appState.reviewSkipped(in: playlist)
-                    }
-                }
-                Spacer()
-            }
-            .font(.caption)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            Divider()
-        }
-    }
-
-    private func filterNotice(_ text: String, filter: ServiceFilter, on playlist: Playlist) -> some View {
-        let isActive = playlist.filterState.serviceFilter == filter
-        return notice(text, systemImage: filter.systemImage, isActive: isActive,
-                      help: isActive ? "Show all files" : "Show only these") {
-            appState.toggleServiceFilter(filter, on: playlist)
-        }
-    }
-
-    private func notice(
-        _ text: String, systemImage: String, isActive: Bool, help: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(text, systemImage: systemImage)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(isActive ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : Color.clear, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-        .help(help)
-    }
 }

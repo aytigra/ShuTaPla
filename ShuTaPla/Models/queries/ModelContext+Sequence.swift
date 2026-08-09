@@ -4,7 +4,7 @@
 //
 //  The order a playlist's file list shows and playback walks, derived store-side. One rule —
 //  the playlist's *effective filter*: the triage filter when one is set, otherwise the
-//  persisted tag filter — expressed as a `#Predicate` so the store does the filtering, sorts
+//  persisted tag filter — expressed as a predicate so the store does the filtering, sorts
 //  by `sortOrder`, and returns just the ordered `PersistentIdentifier`s. Skipped (wrong-type)
 //  files are excluded from every filter, so one sequence serves both the file list and playback;
 //  the skipped files themselves are reached only through `skippedSequence`, the review tool's list.
@@ -180,11 +180,14 @@ extension ModelContext {
     /// `atOrAfter` adds a lower `sortOrder` bound — `.min` (the default) means no bound, so every
     /// list/sequence caller keeps its behavior; `resumeTarget` passes a real bound to fetch the
     /// first file from a point.
+    ///
+    /// Only the *filled* fields are built, so an empty field contributes no subquery and an
+    /// all-empty filter composes down to the scalar scope itself — which is why there is no
+    /// separate unfiltered fast path.
     private func sequencePredicate(for playlist: Playlist, atOrAfter minSortOrder: Int = .min) -> Predicate<PlaylistFile> {
         let pid = playlist.persistentModelID
-        let filter = playlist.filterState
 
-        if let service = filter.serviceFilter {
+        if let service = playlist.serviceFilter {
             switch service {
             case .untagged:
                 return triagePredicate(pid: pid, code: TaggingStatus.untagged.code, atOrAfter: minSortOrder)
@@ -193,37 +196,15 @@ extension ModelContext {
             }
         }
 
-        guard filter.isNotEmpty else {
-            return #Predicate { $0.playlist?.persistentModelID == pid && !$0.isSkipped && $0.sortOrder >= minSortOrder }
+        let scope = #Predicate<PlaylistFile> { file in
+            file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
         }
-
-        let names = Array(Set(filter.selectedTags.map { $0.lowercased() }))
-        // The `.and`/`.notAll` pair counts the file's selected tags: `names` is deduped, so a file
-        // carries all of them iff that count equals `required`. A nested
-        // `allSatisfy { tags.contains { … } }` is an unsupported subquery, so this flat count stands
-        // in for it — and the negatives negate the same flat shapes (no subquery reintroduced).
-        let required = names.count
-        switch filter.filterMode {
-        case .or:
-            return #Predicate { file in
-                file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
-                    && file.tags.contains { names.contains($0.normalizedName) }
-            }
-        case .notAny:
-            return #Predicate { file in
-                file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
-                    && !file.tags.contains { names.contains($0.normalizedName) }
-            }
-        case .and:
-            return #Predicate { file in
-                file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
-                    && file.tags.filter { names.contains($0.normalizedName) }.count == required
-            }
-        case .notAll:
-            return #Predicate { file in
-                file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
-                    && file.tags.filter { names.contains($0.normalizedName) }.count != required
-            }
+        guard let filter = playlist.currentFilter else { return scope }
+        return filter.filledFields.reduce(scope) { combined, filled in
+            // Deduped and lowercased per field, so a tag typed twice (or in two casings) can never
+            // raise must-have-all's threshold past what any file can reach.
+            let names = Array(Set(filled.tags.map { $0.lowercased() }))
+            return andPredicate(combined, fieldPredicate(filled.field, names: names))
         }
     }
 
@@ -236,4 +217,46 @@ extension ModelContext {
                 && $0.sortOrder >= minSortOrder
         }
     }
+}
+
+// MARK: - Tag-filter clauses
+
+/// One field's rule, as a threshold against the count of the file's tags that appear in `names`:
+/// must-have-all ≥ n, must-have-any ≥ 1, must-not-have-all < n, must-not-have-any < 1. Every field
+/// collapses to that one comparison, so the four differ only in two numbers.
+private func fieldPredicate(_ field: TagFilterField, names: [String]) -> Predicate<PlaylistFile> {
+    switch field {
+    case .mustHaveAll: return countPredicate(names: names, threshold: names.count, atLeast: true)
+    case .mustHaveAny: return countPredicate(names: names, threshold: 1, atLeast: true)
+    case .mustNotHaveAll: return countPredicate(names: names, threshold: names.count, atLeast: false)
+    case .mustNotHaveAny: return countPredicate(names: names, threshold: 1, atLeast: false)
+    }
+}
+
+/// A single flat subquery over `file.tags` compared against `threshold` — the shape a `#Predicate`
+/// translates to SQL. A nested `allSatisfy { tags.contains { … } }` over a captured array is an
+/// unsupported subquery that traps at fetch, so the count stands in for it and the negatives negate
+/// the same flat shape rather than reintroducing one.
+private func countPredicate(names: [String], threshold: Int, atLeast: Bool) -> Predicate<PlaylistFile> {
+    atLeast
+        ? #Predicate<PlaylistFile> { file in
+            file.tags.filter { names.contains($0.normalizedName) }.count >= threshold
+        }
+        : #Predicate<PlaylistFile> { file in
+            file.tags.filter { names.contains($0.normalizedName) }.count < threshold
+        }
+}
+
+/// Two predicates AND-joined by nesting them with `.evaluate(_:)`.
+///
+/// The four fields cannot live in one `#Predicate`: the macro expands to a single deeply nested
+/// generic expression and the type-checker gives up ("unable to type-check this expression in
+/// reasonable time") at roughly three `file.tags` subqueries or four conjuncts — it is the whole
+/// expression's complexity, not the subqueries as such. Folding small predicates pairwise keeps
+/// every expansion far under that ceiling; runtime nesting depth is unconstrained, and SwiftData
+/// still translates the nested node to SQL, so the fetch stays one store-side query.
+private func andPredicate(
+    _ lhs: Predicate<PlaylistFile>, _ rhs: Predicate<PlaylistFile>
+) -> Predicate<PlaylistFile> {
+    #Predicate<PlaylistFile> { file in lhs.evaluate(file) && rhs.evaluate(file) }
 }

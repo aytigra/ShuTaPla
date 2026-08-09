@@ -2,7 +2,7 @@
 //  SchemaIndexMigrationTests.swift
 //  ShuTaPlaTests
 //
-//  Guards the two lightweight migrations that a store rides through:
+//  Guards the lightweight migrations that a store rides through:
 //
 //  - V5→V6 ships PlaylistFile's `#Index`. A fetch index is excluded from CoreData's entity version
 //    hash, so an index-only change never reaches a store that already exists — the migration would be
@@ -18,6 +18,11 @@
 //  - V8→V9 adds PlaylistFile's additive optional HDR columns — `isHDR` and the video colour strings
 //    `hdrGamma`/`hdrPrimaries` — the same way; existing rows survive, keep their earlier facts, and
 //    open with all three `nil`.
+//  - V9→V10 turns the tag filter into store rows: Playlist's `filterState` composite and
+//    `savedSearches` blob are dropped for the `TagFilter` and `SavedSearch` entities plus a
+//    `serviceFilterRaw` column. A dropped column and an added entity are both lightweight, and no
+//    data is carried across — a filter is cheap to re-enter — so the guard is that the store opens
+//    and its files, tags and unfiltered resume position survive.
 //
 //  Each test lays down a store at the pinned pre-change shape, releases that container so it
 //  flushes and closes the SQLite file, then reopens the same URL through the migration plan and
@@ -91,6 +96,11 @@ private func hasColumn(atStore url: URL, table: String, column: String) -> Bool 
         }
         return false
     }, default: false)
+}
+
+/// Every table in the store — the ground truth for an entity having been added or removed.
+private func tableNames(atStore url: URL) -> [String] {
+    stringColumn(atStore: url, query: "SELECT name FROM sqlite_master WHERE type='table'")
 }
 
 /// The `CREATE INDEX` statements SwiftData emitted into the store's SQLite file.
@@ -295,5 +305,70 @@ struct SchemaIndexMigrationTests {
         #expect(scalarInt(atStore: url,
             query: "SELECT COUNT(*) FROM ZPLAYLISTFILE WHERE ZFINGERPRINT IS NOT NULL") == 2,
                 "the fingerprint survives the migration")
+    }
+
+    /// A V9 store migrates to V10, where the tag filter becomes store rows: Playlist's `filterState`
+    /// composite and `savedSearches` blob are dropped, the `TagFilter` and `SavedSearch` entities
+    /// appear, and `serviceFilterRaw` is added. Filters are cheap to re-enter, so nothing is carried
+    /// across — the assertion is that a store holding a filter and saved searches *opens*, its files
+    /// and tags survive, and the playlist comes back unfiltered.
+    @Test func migratingAV9StoreReplacesTheFilterBlobWithRows() throws {
+        let url = URL.temporaryDirectory.appending(path: "schema-filter-\(UUID().uuidString).store")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Phase 1 — write at the pinned pre-rows shape, with a filter and two saved searches set.
+        do {
+            let schema = Schema(versionedSchema: SchemaV9.self)
+            let container = try ModelContainer(
+                for: schema, migrationPlan: nil,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+            let context = container.mainContext
+            let playlist = SchemaV9.Playlist(
+                name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+            var filter = LegacyFilter.State()
+            filter.selectedTags = ["beach", "sun"]
+            filter.filterMode = .or
+            playlist.filterState = filter
+            playlist.savedSearches = [
+                LegacyFilter.SavedSearch(id: UUID(), tags: ["beach"], mode: .and, resumeSortOrder: 1),
+                LegacyFilter.SavedSearch(id: UUID(), tags: ["sun"], mode: .or, resumeSortOrder: nil),
+            ]
+            playlist.unfilteredResumeSortOrder = 4
+            context.insert(playlist)
+            let beach = SchemaV9.Tag(name: "beach", normalizedName: "beach")
+            context.insert(beach)
+            for (i, name) in ["a [beach].jpg", "b.jpg"].enumerated() {
+                let file = SchemaV9.PlaylistFile(relativePath: name, fileName: name, sortOrder: i)
+                file.playlist = playlist
+                if name.contains("beach") { file.tags = [beach] }
+                context.insert(file)
+            }
+            try context.save()
+        }
+        #expect(!tableNames(atStore: url).contains("ZTAGFILTER"), "the V9 store has no filter rows")
+
+        // Phase 2 — reopen through V10 + the plan, then release so the store flushes before reads.
+        do {
+            let schema = Schema(versionedSchema: SchemaV10.self)
+            _ = try ModelContainer(
+                for: schema, migrationPlan: AppMigrationPlan.self,
+                configurations: [ModelConfiguration(schema: schema, url: url)])
+        }
+        let tables = tableNames(atStore: url)
+        #expect(tables.contains("ZTAGFILTER"), "the V9→V10 migration adds the TagFilter entity")
+        #expect(tables.contains("ZSAVEDSEARCH"), "the V9→V10 migration adds the SavedSearch entity")
+        #expect(hasColumn(atStore: url, table: "ZPLAYLIST", column: "ZSERVICEFILTERRAW"),
+                "the triage filter moves to its own column")
+        #expect(!hasColumn(atStore: url, table: "ZPLAYLIST", column: "ZFILTERSTATE"),
+                "the filter composite is dropped")
+
+        #expect(rowCount(atStore: url, table: "ZPLAYLISTFILE") == 2, "every file survives")
+        #expect(orderedFileNames(atStore: url) == ["a [beach].jpg", "b.jpg"],
+                "files survive in shuffle order")
+        #expect(rowCount(atStore: url, table: "ZTAG") == 1, "the tag row survives")
+        #expect(rowCount(atStore: url, table: "ZTAGFILTER") == 0, "no filter is carried across")
+        #expect(rowCount(atStore: url, table: "ZSAVEDSEARCH") == 0, "no saved search is carried across")
+        #expect(scalarInt(atStore: url, query: "SELECT ZUNFILTEREDRESUMESORTORDER FROM ZPLAYLIST") == 4,
+                "the unfiltered resume position survives — it is not part of the filter")
     }
 }

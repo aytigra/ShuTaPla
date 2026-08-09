@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The player-mode library surface: three columns — a single-type playlist selector,
-//  the active playlist's filtered file list (topped by its `FilterBar`), and a tag editor
+//  the active playlist's filtered file list (topped by its `FilterStrip`), and a tag editor
 //  for the current file. It drives one playback channel, wired through a `LibraryContext`
 //  that supplies the channel-specific slots and actions; the audio overlay and the
 //  Visual Overlay both render their lower body from it. Shared `AppState` / coordinator
@@ -135,10 +135,11 @@ struct LibrarySurface: View {
 
     private var fileColumn: some View {
         VStack(spacing: 0) {
-            // The channel playlist's own filter bar, editing its persisted filter directly.
-            // Raised above the file list so its floating tag dropdown overlays the rows below.
+            // The channel playlist's own filter strip, editing its persisted filter directly, and
+            // without the triage surfaces — those are entered from the Manager. Raised above the
+            // file list so its dropdowns overlay the rows below.
             if let playlist = context.activePlaylist {
-                FilterBar(playlist: playlist)
+                FilterStrip(playlist: playlist, showsTriage: false)
                     .zIndex(1)
             }
             Divider()

@@ -16,13 +16,7 @@ struct ModelTests {
 
     /// A fresh in-memory container with the full app schema.
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([
-            Playlist.self,
-            PlaylistFile.self,
-            ShuTaPla.Tag.self,
-            AppStateModel.self,
-            GlobalSettings.self,
-        ])
+        let schema = appTestSchema
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [configuration])
     }
@@ -173,8 +167,7 @@ struct ModelTests {
         prefs.viewMode = .gallery
         prefs.galleryMinItemWidth = 320
         playlist.preferences = prefs
-        playlist.filterState = FilterState(selectedTags: ["a", "b"], filterMode: .or, serviceFilter: .untagged)
-        playlist.savedSearches = [SavedSearch(tags: ["x", "y"], mode: .and)]
+        playlist.serviceFilter = .untagged
         playlist.tagFrequency = ["beach": 3, "sunny": 1]
         context.insert(playlist)
         try context.save()
@@ -189,48 +182,54 @@ struct ModelTests {
         #expect(stored.preferences.filePositionPersistence == true)
         #expect(stored.preferences.viewMode == .gallery)
         #expect(stored.preferences.galleryMinItemWidth == 320)
-        #expect(stored.filterState.selectedTags == ["a", "b"])
-        #expect(stored.filterState.filterMode == .or)
-        #expect(stored.filterState.serviceFilter == .untagged)
-        #expect(stored.savedSearches.count == 1)
-        #expect(stored.savedSearches.first?.tags == ["x", "y"])
+        #expect(stored.serviceFilter == .untagged)
         #expect(stored.tagFrequency["beach"] == 3)
     }
 
-    // MARK: - FilterState coding
+    // MARK: - Filter rows
 
-    @Test func filterStateRoundTripsServiceFilter() throws {
-        let original = FilterState(selectedTags: ["beach"], filterMode: .or, serviceFilter: .invalidTagging)
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(FilterState.self, from: data)
-        #expect(decoded == original)
-        #expect(decoded.serviceFilter == .invalidTagging)
+    @Test func filterRowsRoundTripThroughTheStore() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        let filter = TagFilter()
+        filter.mustHaveAll = ["a", "b"]
+        filter.mustNotHaveAny = ["c"]
+        let search = SavedSearch(name: "Beach shots", listOrder: 2, resumeSortOrder: 7)
+        context.insert(playlist)
+        context.insert(filter)
+        context.insert(search)
+        search.playlist = playlist
+        search.filter = filter
+        playlist.currentFilter = filter
+        try context.save()
+
+        // Re-fetch from a fresh context backed by the same store.
+        let context2 = ModelContext(container)
+        let stored = try #require(try context2.fetch(FetchDescriptor<Playlist>()).first)
+        #expect(stored.currentFilter?.mustHaveAll == ["a", "b"])
+        #expect(stored.currentFilter?.mustNotHaveAny == ["c"])
+        #expect(stored.currentFilter?.mustHaveAny.isEmpty == true)
+        // Applying a search points at its own filter row, so the cycle resolves both ways.
+        #expect(stored.currentFilter?.savedSearch?.name == "Beach shots")
+        #expect(stored.savedSearches.map(\.listOrder) == [2])
+        #expect(stored.savedSearches.first?.resumeSortOrder == 7)
+        #expect(stored.savedSearches.first?.filter === stored.currentFilter)
     }
 
-    /// A filter persisted before triage filters were stored has no `serviceFilter` key;
-    /// it must decode to `nil` rather than failing, so existing playlists keep loading.
-    @Test func filterStateDecodesWithoutServiceFilterKey() throws {
-        let legacy = #"{"selectedTags":["beach"],"filterMode":"and"}"#.data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(FilterState.self, from: legacy)
-        #expect(decoded.selectedTags == ["beach"])
-        #expect(decoded.filterMode == .and)
-        #expect(decoded.serviceFilter == nil)
-    }
+    /// A raw value no longer in `ServiceFilter` — a triage case removed in a later version, still
+    /// sitting in a store — reads as "no filter" rather than failing the load. That leniency is why
+    /// the column is a string rather than the enum.
+    @Test func anUnrecognizedServiceFilterReadsAsNone() {
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        playlist.serviceFilterRaw = "removedCase"
+        #expect(playlist.serviceFilter == nil)
 
-    @Test func savedSearchRoundTripsResumeSortOrder() throws {
-        let original = SavedSearch(tags: ["beach"], mode: .or, resumeSortOrder: 7)
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(SavedSearch.self, from: data)
-        #expect(decoded.resumeSortOrder == 7)
-    }
-
-    /// A search persisted before per-filter resume positions has no `resumeSortOrder` key;
-    /// it must decode to `nil` rather than failing, so existing playlists keep loading.
-    @Test func savedSearchDecodesWithoutResumeSortOrderKey() throws {
-        let legacy = #"{"id":"5BD9F8E0-0000-0000-0000-000000000000","tags":["beach"],"mode":"and"}"#.data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(SavedSearch.self, from: legacy)
-        #expect(decoded.tags == ["beach"])
-        #expect(decoded.resumeSortOrder == nil)
+        playlist.serviceFilter = .invalidTagging
+        #expect(playlist.serviceFilterRaw == "invalidTagging")
+        playlist.serviceFilter = nil
+        #expect(playlist.serviceFilterRaw == nil)
     }
 
     // MARK: - Enum raw values
@@ -248,7 +247,6 @@ struct ModelTests {
     @Test func allEnumRawValuesDecode() {
         #expect(ImageFitMode(rawValue: "cover") == .cover)
         #expect(ViewMode(rawValue: "gallery") == .gallery)
-        #expect(FilterMode(rawValue: "and") == .and)
         #expect(TaggingStatus(rawValue: "invalid") == .invalid)
         #expect(PlaybackState(rawValue: "paused") == .paused)
         #expect(CloudStatus(rawValue: "downloading") == .downloading)

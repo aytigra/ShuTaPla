@@ -17,7 +17,6 @@ struct PlaylistTagsView: View {
 
     @State private var renamingTag: String?
     @State private var renameDraft = ""
-    @State private var errorMessage: String?
     @FocusState private var renameFieldFocused: Bool
 
     /// Tags sorted alphabetically (case-insensitive) so a given tag is easy to find.
@@ -46,14 +45,6 @@ struct PlaylistTagsView: View {
                 .keyboardShortcut(.cancelAction)
         } message: {
             Text("This renames the files on disk and can't be undone.")
-        }
-        .alert(
-            "Tag change failed",
-            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
         }
     }
 
@@ -135,12 +126,15 @@ struct PlaylistTagsView: View {
         // malformed entry is reported rather than silently dropped.
         guard new.isNotEmpty, !TagParser.sameTag(new, oldTag) else { return }
         guard TagParser.isValidTag(new) else {
-            errorMessage = "“\(new)” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters)."
+            appState.errorNotice = ErrorNotice(
+                title: "Tag change failed",
+                message: "“\(new)” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters)."
+            )
             return
         }
         Task {
             if let error = await appState.renameTagAcrossPlaylist(playlist, from: oldTag, to: new) {
-                errorMessage = error
+                appState.errorNotice = ErrorNotice(title: "Tag change failed", message: error)
             }
         }
     }

@@ -18,7 +18,7 @@ import Synchronization
 
 @MainActor
 private func makeContainer() throws -> ModelContainer {
-    let schema = Schema([Playlist.self, PlaylistFile.self, ShuTaPla.Tag.self, AppStateModel.self, GlobalSettings.self])
+    let schema = appTestSchema
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return try ModelContainer(for: schema, configurations: [config])
 }
@@ -470,7 +470,7 @@ struct AppStateTests {
 
         // Derived: tags and frequency now reflect the filenames, and a tag filter matches.
         #expect(playlist.tagFrequency["beach"] == 1)
-        appState.toggleFilterTag("beach", on: playlist)
+        appState.setTagFilter(to: "beach", on: playlist)
         #expect(appState.managerFiles.map(\.fileName) == ["b [beach].mp4"])
     }
 
@@ -699,89 +699,61 @@ struct AppStateTests {
         #expect(skipped.sortOrder == 5)         // skipped stays after the playable files
     }
 
-    @Test func savedSearchesAreNotCapped() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        context.insert(playlist)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-
-        for i in 0..<11 {
-            playlist.filterState = FilterState(selectedTags: ["t\(i)"], filterMode: .and)
-            appState.saveCurrentSearch(on: playlist)
-        }
-
-        #expect(playlist.savedSearches.count == 11)
-    }
-
-    /// Re-saving a filter that already exists as a saved search keeps that search (and its
-    /// captured resume position) rather than replacing it with a fresh nil-resume copy.
-    @Test func resavingExistingSearchKeepsItsResumePosition() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        playlist.savedSearches = [SavedSearch(tags: ["a"], mode: .and, resumeSortOrder: 4)]
-        context.insert(playlist)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-
-        playlist.filterState = FilterState(selectedTags: ["a"], filterMode: .and)
-        appState.saveCurrentSearch(on: playlist)
-
-        #expect(playlist.savedSearches.count == 1)                    // not duplicated
-        #expect(playlist.savedSearches.first?.resumeSortOrder == 4)   // resume preserved
-    }
-
-    /// Saving a genuinely new filter still records it, starting with no resume position.
-    @Test func savingNewFilterStartsWithNoResumePosition() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        context.insert(playlist)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-
-        playlist.filterState = FilterState(selectedTags: ["new"], filterMode: .and)
-        appState.saveCurrentSearch(on: playlist)
-
-        #expect(playlist.savedSearches.first?.tags == ["new"])
-        #expect(playlist.savedSearches.first?.resumeSortOrder == nil)
+    /// Saves a search over a fresh filter carrying `mustHaveAll`, attached to `playlist`.
+    @MainActor
+    @discardableResult
+    private func addSearch(
+        _ name: String, tags: [String], resumeSortOrder: Int? = nil,
+        to playlist: Playlist, in context: ModelContext
+    ) -> SavedSearch {
+        let filter = TagFilter()
+        filter.mustHaveAll = tags
+        let search = SavedSearch(name: name, listOrder: playlist.savedSearches.count,
+                                 resumeSortOrder: resumeSortOrder)
+        context.insert(filter)
+        context.insert(search)
+        search.playlist = playlist
+        search.filter = filter
+        return search
     }
 
     @Test func renameTagPreservesSavedSearchResumePosition() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        playlist.savedSearches = [SavedSearch(tags: ["old"], mode: .and, resumeSortOrder: 3)]
         context.insert(playlist)
+        let search = addSearch("Old", tags: ["old"], resumeSortOrder: 3, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
         await appState.renameTagAcrossPlaylist(playlist, from: "old", to: "new")
 
-        #expect(playlist.savedSearches.first?.tags == ["new"])
-        #expect(playlist.savedSearches.first?.resumeSortOrder == 3)
+        #expect(search.filter?.mustHaveAll == ["new"])
+        #expect(search.resumeSortOrder == 3)
     }
 
-    /// Deleting a tag drops every saved search that referenced it and would be left with one tag
-    /// or none (its resume position goes with it, never orphaned onto a narrowed combination),
-    /// keeps a search left with ≥2 tags (rewritten to the remainder, resume intact), and never
-    /// touches a search that didn't reference the tag.
-    @Test func removeTagDeletesSavedSearchesLeftWithAtMostOneTag() async throws {
+    /// Removing a tag discards a saved search only when it leaves *every* list of that search's
+    /// filter empty — the resume position goes with it rather than orphaning onto a combination
+    /// nobody named. A search with a tag left anywhere survives, rewritten to the remainder, and one
+    /// that never carried the tag is untouched.
+    @Test func removeTagDropsOnlySearchesLeftWithNoTagsAtAll() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        playlist.savedSearches = [
-            SavedSearch(tags: ["gone"], mode: .and, resumeSortOrder: 1),            // → 0 tags, dropped
-            SavedSearch(tags: ["gone", "a"], mode: .and, resumeSortOrder: 2),       // → 1 tag, dropped
-            SavedSearch(tags: ["gone", "a", "b"], mode: .and, resumeSortOrder: 3),  // → 2 tags, kept
-            SavedSearch(tags: ["a", "b"], mode: .and, resumeSortOrder: 4),          // never referenced it
-        ]
         context.insert(playlist)
+        addSearch("Only gone", tags: ["gone"], resumeSortOrder: 1, to: playlist, in: context)
+        addSearch("Gone plus one", tags: ["gone", "a"], resumeSortOrder: 2, to: playlist, in: context)
+        addSearch("Unrelated", tags: ["a", "b"], resumeSortOrder: 4, to: playlist, in: context)
+        // A search whose only remaining tag sits in a *different* field still survives.
+        let split = addSearch("Split", tags: ["gone"], resumeSortOrder: 5, to: playlist, in: context)
+        split.filter?.mustNotHaveAny = ["b"]
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
         await appState.removeTagAcrossPlaylist(playlist, tag: "gone")
 
-        // Only the ≥2-tag survivor (rewritten) and the unrelated search remain, resumes intact.
-        #expect(playlist.savedSearches.map(\.tags) == [["a", "b"], ["a", "b"]])
-        #expect(playlist.savedSearches.map(\.resumeSortOrder) == [3, 4])
+        let surviving = playlist.sortedSavedSearches
+        #expect(surviving.map(\.name) == ["Gone plus one", "Unrelated", "Split"])
+        #expect(surviving.map { $0.filter?.mustHaveAll ?? [] } == [["a"], ["a", "b"], []])
+        #expect(surviving.map(\.resumeSortOrder) == [2, 4, 5])
     }
 
     @Test func reshuffleClearsResumePositions() throws {
@@ -789,8 +761,8 @@ struct AppStateTests {
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
         playlist.unfilteredResumeSortOrder = 4
-        playlist.savedSearches = [SavedSearch(tags: ["a"], mode: .and, resumeSortOrder: 2)]
         context.insert(playlist)
+        addSearch("A", tags: ["a"], resumeSortOrder: 2, to: playlist, in: context)
         let file = PlaylistFile(relativePath: "v.mp4", fileName: "v.mp4", sortOrder: 0)
         file.playlist = playlist
         context.insert(file)
@@ -799,7 +771,7 @@ struct AppStateTests {
         appState.reshuffle(playlist)
 
         #expect(playlist.unfilteredResumeSortOrder == nil)
-        #expect(playlist.savedSearches.first?.resumeSortOrder == nil)
+        #expect(playlist.savedSearches.allSatisfy { $0.resumeSortOrder == nil })
     }
 
     // MARK: - Per-filter resume restore on filter change (Step 3)
@@ -829,7 +801,7 @@ struct AppStateTests {
         let context = container.mainContext
         let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 2
-        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["aaa"])
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -849,8 +821,7 @@ struct AppStateTests {
         let files = ["aaa", "bbb", "aaa", "bbb"].enumerated().map { index, tag in
             addFile("f\(index) [\(tag)].jpg", tags: [tag], status: .valid, order: index, to: playlist, in: context)
         }
-        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
-        playlist.savedSearches = [search]
+        let search = addSearch("A", tags: ["aaa"], resumeSortOrder: 2, to: playlist, in: context)
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -866,7 +837,7 @@ struct AppStateTests {
         let context = container.mainContext
         let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 99   // past the last file
-        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["aaa"])
         playlist.currentFileID = files[1].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -886,9 +857,9 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
-        appState.toggleFilterTag("aaa", on: playlist)   // ad-hoc (no matching saved search)
+        appState.setTagFilter(to: "aaa", on: playlist)   // ad-hoc — no search saved over it
 
-        #expect(playlist.activeResumeSlot == nil)
+        #expect(playlist.activeResumeSortOrder == nil)
         #expect(playlist.currentFileID == files[1].id)   // still in the filtered set, cursor kept
     }
 
@@ -912,7 +883,7 @@ struct AppStateTests {
         let context = container.mainContext
         let (playlist, files) = makeFilterPlaylist(count: 4, tags: ["aaa"], in: context)
         playlist.unfilteredResumeSortOrder = 2
-        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["aaa"])
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -962,7 +933,7 @@ struct AppStateTests {
         let files = ["aaa", "bbb", "aaa", "bbb"].enumerated().map { index, tag in
             addFile("f\(index) [\(tag)].jpg", tags: [tag], status: .valid, order: index, to: playlist, in: context)
         }
-        playlist.filterState = FilterState(selectedTags: ["aaa"], filterMode: .and)
+        applyTagFilter(to: playlist, in: context, mustHaveAll: ["aaa"])
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -1010,8 +981,7 @@ struct AppStateTests {
         let (folder, playlist, files) = try makeAudioPlaylist(
             tags: [["xxx"], ["aaa"], ["aaa"], ["xxx"]], in: context)
         defer { try? FileManager.default.removeItem(at: folder.url) }
-        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
-        playlist.savedSearches = [search]
+        let search = addSearch("A", tags: ["aaa"], resumeSortOrder: 2, to: playlist, in: context)
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -1032,8 +1002,7 @@ struct AppStateTests {
         let (folder, playlist, files) = try makeAudioPlaylist(
             tags: [["xxx"], ["aaa"], ["aaa"], ["xxx"]], in: context)
         defer { try? FileManager.default.removeItem(at: folder.url) }
-        let search = SavedSearch(tags: ["aaa"], mode: .and, resumeSortOrder: 2)
-        playlist.savedSearches = [search]
+        let search = addSearch("A", tags: ["aaa"], resumeSortOrder: 2, to: playlist, in: context)
         playlist.currentFileID = files[0].id
         try context.save()
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
@@ -1065,7 +1034,7 @@ struct AppStateTests {
 
         // A filter that matches nothing empties the sequence: the visual channel stays live but its
         // engine is unloaded (the "no files" placeholder). `currentFileID` still points at f0.
-        appState.toggleFilterTag("nomatch", on: image)
+        appState.setTagFilter(to: "nomatch", on: image)
         #expect(appState.coordinator.liveVisualPlaylist === image)
         #expect(appState.coordinator.visualCurrentFile == nil)
 
@@ -1763,7 +1732,19 @@ struct AppStateTests {
 
     // MARK: - Filtering (Task 7)
 
-    @Test func tagFilterAppliesAndOrCorrectly() async throws {
+    /// Sets a filter with the given fields and settles the surfaces, as an editing path does.
+    @MainActor
+    private func filter(
+        _ playlist: Playlist, in context: ModelContext, of appState: AppState,
+        mustHaveAll: [String] = [], mustHaveAny: [String] = [],
+        mustNotHaveAll: [String] = [], mustNotHaveAny: [String] = []
+    ) {
+        applyTagFilter(to: playlist, in: context, mustHaveAll: mustHaveAll, mustHaveAny: mustHaveAny,
+                       mustNotHaveAll: mustNotHaveAll, mustNotHaveAny: mustNotHaveAny)
+        appState.persistAndRefresh()
+    }
+
+    @Test func eachFilterFieldNarrowsTheManagerList() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
@@ -1777,14 +1758,19 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanFails: true))
         appState.manage(playlist)
 
-        appState.toggleFilterTag("beach", on: playlist)
+        filter(playlist, in: context, of: appState, mustHaveAll: ["beach"])
         #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach sun].mp4", "b [beach].mp4"])
 
-        appState.toggleFilterTag("sun", on: playlist)  // AND beach + sun
+        filter(playlist, in: context, of: appState, mustHaveAll: ["beach", "sun"])
         #expect(appState.managerFiles.map(\.fileName) == ["a [beach sun].mp4"])
 
-        appState.setFilterMode(.or, on: playlist)       // beach OR sun
+        filter(playlist, in: context, of: appState, mustHaveAny: ["beach", "sun"])
         #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach sun].mp4", "b [beach].mp4"])
+
+        // The combination no single match mode could express: tagged, but not with both.
+        filter(playlist, in: context, of: appState,
+               mustHaveAny: ["beach", "sun"], mustNotHaveAll: ["beach", "sun"])
+        #expect(appState.managerFiles.map(\.fileName) == ["b [beach].mp4"])
 
         await appState.updateTask?.value
     }
@@ -1819,7 +1805,7 @@ struct AppStateTests {
 
         // The filter dropdown's known tags come back, and filtering by a re-mirrored tag matches.
         #expect(playlist.tagFrequency["beach"] == 2)
-        appState.toggleFilterTag("beach", on: playlist)
+        appState.setTagFilter(to: "beach", on: playlist)
         #expect(Set(appState.managerFiles.map(\.fileName)) == ["a [beach].jpg", "b [beach sunny].jpg"])
     }
 
@@ -1871,7 +1857,7 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult, rescanFails: true))
         appState.manage(playlist)
 
-        appState.toggleFilterTag("beach", on: playlist)
+        appState.setTagFilter(to: "beach", on: playlist)
         #expect(appState.managerFiles.map(\.fileName) == ["a [beach].mp4"])
 
         appState.toggleServiceFilter(.untagged, on: playlist)  // overrides the tag filter
@@ -1886,6 +1872,28 @@ struct AppStateTests {
         await appState.updateTask?.value
     }
 
+    /// The two filter kinds are deliberately asymmetric, and this pins both ends: enabling triage
+    /// leaves `currentFilter` standing (so the tag filter comes back when triage is cleared), while
+    /// setting a tag filter clears triage — without which the edit would land on a filter the strip
+    /// is hiding and look like it did nothing.
+    @Test func settingATagFilterClearsTheServiceFilterButNotTheReverse() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.setTagFilter(to: "beach", on: playlist)
+        appState.toggleServiceFilter(.untagged, on: playlist)
+        #expect(playlist.serviceFilter == .untagged)
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])   // parked, not destroyed
+
+        appState.setTagFilter(to: "sun", on: playlist)
+        #expect(playlist.serviceFilter == nil)
+        #expect(playlist.currentFilter?.mustHaveAll == ["sun"])
+    }
+
     @Test func switchingPlaylistsRestoresPersistedFilter() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -1893,7 +1901,7 @@ struct AppStateTests {
         let p2 = Playlist(name: "P2", folderBookmark: Data(), folderPath: "/p2", mediaType: .video, sortOrder: 1)
         context.insert(p1)
         context.insert(p2)
-        p1.filterState = FilterState(selectedTags: ["beach"], filterMode: .and)
+        applyTagFilter(to: p1, in: context, mustHaveAll: ["beach"])
         addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: p1, in: context)
         addFile("b.mp4", order: 1, to: p1, in: context)
         addFile("c.mp4", order: 0, to: p2, in: context)
@@ -1992,18 +2000,20 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
 
-        // Filter by "beach" and remember it as a saved search.
-        appState.toggleFilterTag("beach", on: playlist)
-        appState.saveCurrentSearch(on: playlist)
+        // Filter by "beach" through a search saved over it, plus a second, parked search.
+        let active = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        let parked = addSearch("Also beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(active, on: playlist)
         #expect(appState.managerFiles.count == 2)
 
         let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
 
         #expect(error == nil)
-        // The active filter and the saved search follow the rename rather than pointing
-        // at the now-nonexistent "beach", so the filtered list stays populated.
-        #expect(playlist.filterState.selectedTags == ["shore"])
-        #expect(playlist.savedSearches.first?.tags == ["shore"])
+        // The applied filter and every saved search follow the rename rather than pointing at the
+        // now-nonexistent "beach", so the filtered list stays populated.
+        #expect(playlist.currentFilter?.mustHaveAll == ["shore"])
+        #expect(active.filter?.mustHaveAll == ["shore"])
+        #expect(parked.filter?.mustHaveAll == ["shore"])
         #expect(appState.managerFiles.count == 2)
 
         await appState.updateTask?.value
@@ -2022,15 +2032,17 @@ struct AppStateTests {
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
 
-        // A pre-existing multi-tag AND filter that the click must replace outright.
-        appState.setFilterMode(.and, on: playlist)
-        appState.toggleFilterTag("beach", on: playlist)
-        appState.toggleFilterTag("sun", on: playlist)
+        // A pre-existing multi-field filter that the click must replace outright.
+        filter(playlist, in: context, of: appState,
+               mustHaveAll: ["beach", "sun"], mustNotHaveAny: ["x"])
         #expect(appState.managerFiles.count == 1)
 
         appState.setTagFilter(to: "beach", on: playlist)
 
-        #expect(playlist.filterState.selectedTags == ["beach"])   // replaced, not appended
+        // A fresh filter with one must-have-all tag: replaced outright, not merged field by field.
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])
+        #expect(playlist.currentFilter?.isEmpty == false)
+        #expect(playlist.currentFilter?.mustNotHaveAny.isEmpty == true)
         #expect(appState.managerFiles.count == 2)                 // both "beach" files now show
 
         await appState.updateTask?.value
@@ -2048,26 +2060,19 @@ struct AppStateTests {
         addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
-        playlist.savedSearches = [
-            SavedSearch(tags: ["beach"], mode: .or),
-            SavedSearch(tags: ["beach", "sun"], mode: .or),
-            SavedSearch(tags: ["beach", "sun", "sea"], mode: .or),
-        ]
+        addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        addSearch("Beach and sun", tags: ["beach", "sun"], to: playlist, in: context)
 
-        appState.setFilterMode(.or, on: playlist)
-        appState.toggleFilterTag("beach", on: playlist)
-        appState.toggleFilterTag("sun", on: playlist)
+        filter(playlist, in: context, of: appState, mustHaveAny: ["beach", "sun"])
         #expect(appState.managerFiles.count == 2)
 
         await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
 
-        // The removed tag is gone from the active filter. The saved searches left with ≤1 tag
-        // (beach-only → none, beach+sun → just "sun") are dropped; only the three-tag one
-        // survives, rewritten to the remaining two.
-        #expect(playlist.filterState.selectedTags == ["sun"])
-        #expect(playlist.savedSearches.count == 1)
-        #expect(playlist.savedSearches.first?.tags == ["sun", "sea"])
-        #expect(playlist.savedSearches.first?.mode == .or)
+        // The removed tag is gone from the applied filter. The search left with nothing at all is
+        // dropped; the two-tag one survives, rewritten to the remainder.
+        #expect(playlist.currentFilter?.mustHaveAny == ["sun"])
+        #expect(playlist.savedSearches.map(\.name) == ["Beach and sun"])
+        #expect(playlist.savedSearches.first?.filter?.mustHaveAll == ["sun"])
         #expect(appState.managerFiles.count == 1)   // only the file that still has "sun"
 
         await appState.updateTask?.value
@@ -2092,18 +2097,21 @@ struct AppStateTests {
         // The fire-and-forget trash fails, so the player reports the message instead of
         // silently advancing, and the file stays in the playlist.
         var waited = 0
-        while appState.confirmationError == nil && waited < 100 {
+        while appState.errorNotice == nil && waited < 100 {
             try? await Task.sleep(for: .milliseconds(20))
             waited += 1
         }
-        #expect(appState.confirmationError != nil)
+        #expect(appState.errorNotice != nil)
         #expect(file.playlist === playlist)
         #expect(playlist.files.contains { $0 === file })
     }
 
     // MARK: - Saved searches (Task 7)
 
-    @Test func savedSearchSavesRecallsAndMovesToTop() async throws {
+    /// Applying a search points the playlist at the search's *own* filter row rather than a copy —
+    /// which is what makes editing the lists afterwards edit the search — and never reorders the
+    /// list, so the dropdown stays where the user put it.
+    @Test func applyingASavedSearchAdoptsItsFilterRowAndKeepsTheOrder() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
@@ -2111,24 +2119,315 @@ struct AppStateTests {
         addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         appState.manage(playlist)
+        let beach = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        let sun = addSearch("Sun", tags: ["sun"], to: playlist, in: context)
 
-        appState.toggleFilterTag("beach", on: playlist)
-        appState.saveCurrentSearch(on: playlist)
-        appState.clearTagFilter(on: playlist)
-        appState.toggleFilterTag("sun", on: playlist)
-        appState.saveCurrentSearch(on: playlist)
+        appState.applySavedSearch(sun, on: playlist)
+        #expect(playlist.currentFilter === sun.filter)
+        #expect(playlist.currentFilter?.savedSearch === sun)   // which search is active
 
-        #expect(playlist.savedSearches.count == 2)
-        #expect(playlist.savedSearches.first?.tags == ["sun"])
-
-        // Re-applying the older one recalls it and moves it to the top (no dupe).
-        appState.applySavedSearch(SavedSearch(tags: ["beach"], mode: .and), on: playlist)
-        #expect(playlist.filterState.selectedTags == ["beach"])
+        appState.applySavedSearch(beach, on: playlist)
+        #expect(playlist.currentFilter === beach.filter)
         #expect(appState.managerFiles.map(\.fileName) == ["a [beach sun].mp4"])
-        #expect(playlist.savedSearches.count == 2)
-        #expect(playlist.savedSearches.first?.tags == ["beach"])
+        // The outgoing search's filter survives being replaced — only an ad-hoc one is discarded.
+        #expect(sun.filter?.mustHaveAll == ["sun"])
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Beach", "Sun"])
 
         await appState.updateTask?.value
+    }
+
+    /// Clearing an ad-hoc filter deletes its row — nothing else can reach it — while clearing a
+    /// saved one leaves the search intact for the dropdown.
+    @Test func clearingDiscardsAnAdHocFilterAndKeepsASavedOne() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.setTagFilter(to: "beach", on: playlist)
+        appState.clearTagFilter(on: playlist)
+        #expect(playlist.currentFilter == nil)
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
+
+        let saved = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(saved, on: playlist)
+        appState.clearTagFilter(on: playlist)
+        #expect(playlist.currentFilter == nil)
+        #expect(saved.filter?.mustHaveAll == ["beach"])
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 1)
+    }
+
+    // MARK: - Filter row lifecycle (Task 17)
+
+    /// The token edits are the only path a `TagFilter` row appears or disappears on, and each field
+    /// drives it alike: the first tag added to an unfiltered playlist inserts the row, and removing
+    /// the last one deletes it — so an all-empty filter never exists.
+    @Test(arguments: TagFilterField.allCases)
+    func togglingATagCreatesTheFilterRowAndTheLastRemovalDeletesIt(field: TagFilterField) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.toggleFilterTag("beach", in: field, on: playlist)
+        #expect(playlist.currentFilter?[field] == ["beach"])
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 1)
+
+        // A second tag lands in the same field; only that field is touched.
+        appState.toggleFilterTag("sun", in: field, on: playlist)
+        #expect(playlist.currentFilter?[field] == ["beach", "sun"])
+        #expect(playlist.currentFilter?.filledFields.count == 1)
+
+        appState.toggleFilterTag("beach", in: field, on: playlist)   // toggles back off
+        #expect(playlist.currentFilter?[field] == ["sun"])
+
+        appState.toggleFilterTag("sun", in: field, on: playlist)     // the last one leaves
+        #expect(playlist.currentFilter == nil)
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
+    }
+
+    /// Fields are independent: emptying one leaves the others standing, and only the last token to
+    /// leave the whole filter takes the row with it.
+    @Test func emptyingOneFieldLeavesTheOthersAndOnlyTheLastTokenDropsTheFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.toggleFilterTag("Beach", in: .mustHaveAny, on: playlist)
+        appState.toggleFilterTag("sun", in: .mustHaveAny, on: playlist)
+        appState.toggleFilterTag("dusk", in: .mustNotHaveAll, on: playlist)
+
+        appState.toggleFilterTag("beach", in: .mustHaveAny, on: playlist)   // matched case-insensitively
+        appState.toggleFilterTag("sun", in: .mustHaveAny, on: playlist)
+        #expect(playlist.currentFilter?.filledFields.map(\.field) == [.mustNotHaveAll])
+
+        appState.toggleFilterTag("dusk", in: .mustNotHaveAll, on: playlist)
+        #expect(playlist.currentFilter == nil)
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
+    }
+
+    /// Emptying the lists of an *active saved search* deletes the search along with the filter —
+    /// unconfirmed, unlike `Clear`, because the name described a combination that no longer exists
+    /// and a search over no lists would match everything.
+    @Test func emptyingTheLastFieldTakesTheActiveSavedSearchWithIt() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+
+        appState.toggleFilterTag("beach", in: .mustHaveAll, on: playlist)
+
+        #expect(playlist.currentFilter == nil)
+        #expect(playlist.savedSearches.isEmpty)
+        #expect(try context.fetchCount(FetchDescriptor<SavedSearch>()) == 0)
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
+    }
+
+    /// Applying a search points at its own row, so a token edit afterwards edits the search itself
+    /// — write-through, with no commit step — and the search keeps its remembered position.
+    @Test func editingAFieldUnderAnActiveSearchEditsTheSearch() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach", tags: ["beach"], resumeSortOrder: 4, to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+
+        appState.toggleFilterTag("sun", in: .mustHaveAny, on: playlist)
+
+        #expect(search.filter?.mustHaveAny == ["sun"])
+        #expect(search.filter === playlist.currentFilter)
+        #expect(search.resumeSortOrder == 4)
+    }
+
+    /// A token edit clears the triage filter for the same reason the `PlaylistTagsView` tap does:
+    /// the strip hides a tag filter while triage is on, so the edit would otherwise look inert.
+    @Test func aTokenEditClearsTheServiceFilter() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.toggleServiceFilter(.untagged, on: playlist)
+        appState.toggleFilterTag("beach", in: .mustHaveAll, on: playlist)
+
+        #expect(playlist.serviceFilter == nil)
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])
+    }
+
+    /// Saving names the row already applied rather than copying it — which is what makes later
+    /// edits edit the search — and a second search over the same combination is refused by name,
+    /// per field and regardless of order or casing.
+    @Test func savingNamesTheAppliedRowAndRefusesADuplicateCombination() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.toggleFilterTag("beach", in: .mustHaveAll, on: playlist)
+        appState.toggleFilterTag("sun", in: .mustHaveAll, on: playlist)
+        let adHoc = playlist.currentFilter
+        appState.saveCurrentSearch(named: "  Beach  ", on: playlist)
+        #expect(appState.errorNotice == nil)
+
+        let search = try #require(playlist.savedSearches.first)
+        #expect(search.name == "Beach")                     // trimmed
+        #expect(search.filter === adHoc)                    // saved over the row, not a copy
+        #expect(playlist.currentFilter?.savedSearch === search)   // and so it is now the active one
+
+        // The same combination reached from a fresh ad-hoc filter, reordered and re-cased.
+        appState.clearTagFilter(on: playlist)
+        appState.toggleFilterTag("SUN", in: .mustHaveAll, on: playlist)
+        appState.toggleFilterTag("Beach", in: .mustHaveAll, on: playlist)
+        appState.saveCurrentSearch(named: "Same again", on: playlist)
+        // Refused through the app-wide notice channel, which is what makes the alert modal to the
+        // `HotkeyRouter` — a view-local one would leave `[esc]` swallowed and bare keys live behind it.
+        #expect(appState.errorNotice?.title == "Already saved")
+        #expect(appState.errorNotice?.message.contains("Beach") == true)
+        #expect(playlist.savedSearches.count == 1)
+        appState.errorNotice = nil
+
+        // A genuinely different combination — the same names in another field — is not a duplicate.
+        appState.toggleFilterTag("beach", in: .mustHaveAny, on: playlist)
+        appState.toggleFilterTag("sun", in: .mustHaveAny, on: playlist)
+        appState.toggleFilterTag("sun", in: .mustHaveAll, on: playlist)
+        appState.toggleFilterTag("beach", in: .mustHaveAll, on: playlist)
+        appState.saveCurrentSearch(named: "", on: playlist)
+        #expect(appState.errorNotice == nil)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Beach", SavedSearch.defaultName])
+        #expect(playlist.sortedSavedSearches.map(\.listOrder) == [0, 1])
+    }
+
+    @Test func renamingASavedSearchFallsBackToThePlaceholderOnABlankName() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+
+        appState.renameSavedSearch(search, to: "  Shore  ")
+        #expect(search.name == "Shore")
+
+        appState.renameSavedSearch(search, to: "   ")
+        #expect(search.name == SavedSearch.defaultName)
+    }
+
+    /// Deleting a search takes its filter through the cascade, so deleting the *active* one leaves
+    /// the playlist unfiltered rather than keeping its lists as an ad-hoc filter. The survivors are
+    /// renumbered, so the next save — which appends at `count` — can't collide across the gap.
+    @Test func deletingTheActiveSearchUnfiltersAndRenumbersTheRest() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let beach = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        addSearch("Sun", tags: ["sun"], to: playlist, in: context)
+        addSearch("Dusk", tags: ["dusk"], to: playlist, in: context)
+        appState.applySavedSearch(beach, on: playlist)
+
+        appState.deleteSavedSearch(beach, on: playlist)
+
+        #expect(playlist.currentFilter == nil)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Sun", "Dusk"])
+        #expect(playlist.sortedSavedSearches.map(\.listOrder) == [0, 1])
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 2)   // the deleted pair went
+
+        // The gap is closed, so the search saved next appends after the survivors.
+        appState.toggleFilterTag("mist", in: .mustHaveAll, on: playlist)
+        appState.saveCurrentSearch(named: "Mist", on: playlist)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Sun", "Dusk", "Mist"])
+    }
+
+    /// Deleting a parked search leaves the applied filter alone — only the dropdown changes.
+    @Test func deletingAParkedSearchLeavesTheAppliedFilterStanding() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let beach = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        let parked = addSearch("Sun", tags: ["sun"], to: playlist, in: context)
+        appState.applySavedSearch(beach, on: playlist)
+
+        appState.deleteSavedSearch(parked, on: playlist)
+
+        #expect(playlist.currentFilter === beach.filter)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Beach"])
+    }
+
+    /// The dropdown's up/down buttons are the only thing that rewrites `listOrder`; a move off
+    /// either end does nothing.
+    @Test func movingASavedSearchRewritesTheListOrder() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let beach = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        addSearch("Sun", tags: ["sun"], to: playlist, in: context)
+        let dusk = addSearch("Dusk", tags: ["dusk"], to: playlist, in: context)
+
+        appState.moveSavedSearch(dusk, by: -1, on: playlist)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Beach", "Dusk", "Sun"])
+        #expect(playlist.sortedSavedSearches.map(\.listOrder) == [0, 1, 2])
+
+        appState.moveSavedSearch(beach, by: -1, on: playlist)   // already first
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Beach", "Dusk", "Sun"])
+
+        appState.moveSavedSearch(beach, by: 1, on: playlist)
+        #expect(playlist.sortedSavedSearches.map(\.name) == ["Dusk", "Beach", "Sun"])
+    }
+
+    /// The strip's delete asks first, and the ask goes through `pendingConfirmation` — which is what
+    /// makes `HotkeyRouter` hand the alert the keyboard instead of routing bare keys to playback.
+    /// Nothing is deleted until it is confirmed, and cancelling leaves the search applied.
+    @Test func deletingASavedSearchFromTheStripIsConfirmedFirst() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let beach = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(beach, on: playlist)
+
+        appState.requestSavedSearchDelete(beach)
+        #expect(appState.pendingConfirmation?.savedSearchToDelete === beach)
+        #expect(playlist.sortedSavedSearches.count == 1)
+
+        appState.cancelConfirmation()
+        #expect(appState.pendingConfirmation == nil)
+        #expect(playlist.currentFilter === beach.filter)
+
+        appState.requestSavedSearchDelete(beach)
+        appState.confirmConfirmation()
+        #expect(appState.pendingConfirmation == nil)
+        #expect(playlist.sortedSavedSearches.isEmpty)
+        #expect(playlist.currentFilter == nil)                                // the cascade took the filter
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
     }
 
     @Test func renameTagOntoExistingTagIsRefused() async throws {
@@ -2268,19 +2567,6 @@ struct AppStateTests {
         #expect(appState.managerSelection == [files[5].id])
     }
 
-    @Test func saveCurrentSearchIsANoOpWithAnEmptyFilter() throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
-        context.insert(playlist)
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        appState.managedPlaylist = playlist
-
-        // No tags selected → nothing to remember.
-        appState.saveCurrentSearch(on: playlist)
-        #expect(playlist.savedSearches.isEmpty)
-    }
-
     @Test func rescanRemovalClearsPendingDeleteForThatFile() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -2336,13 +2622,13 @@ struct AppStateTests {
         appState.remember(audio)   // occupy the audio channel slot; channel files derive from it
         #expect(appState.audioChannelFiles.count == 3)
 
-        appState.toggleFilterTag("jazz", on: audio)
+        filter(audio, in: context, of: appState, mustHaveAll: ["jazz"])
         #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1 [jazz mellow].mp3", "2 [jazz].mp3"])
 
-        appState.toggleFilterTag("mellow", on: audio)       // AND jazz + mellow
+        filter(audio, in: context, of: appState, mustHaveAll: ["jazz", "mellow"])
         #expect(appState.audioChannelFiles.map(\.fileName) == ["1 [jazz mellow].mp3"])
 
-        appState.setFilterMode(.or, on: audio)              // jazz OR mellow
+        filter(audio, in: context, of: appState, mustHaveAny: ["jazz", "mellow"])
         #expect(Set(appState.audioChannelFiles.map(\.fileName)) == ["1 [jazz mellow].mp3", "2 [jazz].mp3"])
 
         appState.clearTagFilter(on: audio)
@@ -2815,7 +3101,7 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         appState.remember(audio)
-        appState.toggleFilterTag("blues", on: audio)   // a filter the resume track does not match
+        appState.setTagFilter(to: "blues", on: audio)   // a filter the resume track does not match
 
         // Mirrors the Manager: when the remembered file is filtered out of view, there's
         // nothing to highlight or center on.

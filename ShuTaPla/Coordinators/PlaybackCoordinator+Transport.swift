@@ -153,7 +153,7 @@ extension PlaybackCoordinator {
     ///   is a different set and its first file is the intended entry point.
     ///
     /// The position is a parameter rather than read from the playlist's resume slot because
-    /// `activeResumeSlot` is nil for ad-hoc tag filters and for every service filter — precisely
+    /// `activeResumeSortOrder` is nil for ad-hoc tag filters and for every service filter — precisely
     /// the triage sweeps where files get deleted in bulk. It also can't be recovered from the
     /// engine here: this runs after the delete is saved, so the engine's current file is an
     /// invalidated instance whose `sortOrder` read would trap. The caller captures it before the

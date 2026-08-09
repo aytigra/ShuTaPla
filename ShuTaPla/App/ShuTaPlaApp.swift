@@ -38,7 +38,7 @@ struct ShuTaPlaApp: App {
             self._appState = State(initialValue: nil)
             return
         }
-        let schema = Schema(versionedSchema: SchemaV9.self)
+        let schema = Schema(versionedSchema: SchemaV10.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer
         do {
