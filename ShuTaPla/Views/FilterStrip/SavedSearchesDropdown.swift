@@ -32,11 +32,12 @@ struct SavedSearchesDropdown: View {
     /// Roughly six rows — past that the panel is running down over the file list it filters.
     private static let maximumHeight: CGFloat = 260
 
-    private var searches: [SavedSearch] { playlist.sortedSavedSearches }
-
     var body: some View {
+        // Sorted once per evaluation and handed down: read as a computed property it would re-sort on
+        // every access, and the rows ask for it — for the divider, for each button's bounds — n times.
+        let searches = playlist.sortedSavedSearches
         ScrollView {
-            list
+            list(searches)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { contentHeight = $0 }
         }
         .frame(height: min(contentHeight, Self.maximumHeight))
@@ -51,7 +52,7 @@ struct SavedSearchesDropdown: View {
         .background(ClickOutsideMonitor(anchorHeight: anchorHeight, onOutside: onPick))
     }
 
-    private var list: some View {
+    private func list(_ searches: [SavedSearch]) -> some View {
         VStack(spacing: 0) {
             if searches.isEmpty {
                 Text("No saved searches yet. Set a filter, name it, and press Save.")
@@ -61,15 +62,15 @@ struct SavedSearchesDropdown: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else {
-                ForEach(searches) { search in
-                    row(search)
-                    if search !== searches.last { Divider() }
+                ForEach(Array(searches.enumerated()), id: \.element) { index, search in
+                    if index > 0 { Divider() }
+                    row(search, at: index, of: searches.count)
                 }
             }
         }
     }
 
-    private func row(_ search: SavedSearch) -> some View {
+    private func row(_ search: SavedSearch, at index: Int, of count: Int) -> some View {
         HStack(spacing: 8) {
             Button { apply(search) } label: {
                 VStack(alignment: .leading, spacing: 3) {
@@ -84,8 +85,8 @@ struct SavedSearchesDropdown: View {
             }
             .buttonStyle(.plain)
 
-            move(search, by: -1, systemImage: "chevron.up", help: "Move up")
-            move(search, by: 1, systemImage: "chevron.down", help: "Move down")
+            move(search, by: -1, from: index, of: count)
+            move(search, by: 1, from: index, of: count)
 
             Button(role: .destructive) { appState.requestSavedSearchDelete(search) } label: {
                 Image(systemName: "trash")
@@ -100,13 +101,17 @@ struct SavedSearchesDropdown: View {
         .background(isActive(search) ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : .clear)
     }
 
-    private func move(_ search: SavedSearch, by offset: Int, systemImage: String, help: String) -> some View {
-        Button { appState.moveSavedSearch(search, by: offset, on: playlist) } label: {
-            Image(systemName: systemImage)
+    /// One of the reorder pair, `offset` being -1 or +1 — which is direction enough to name the
+    /// button, so the arrow and the help text follow from it rather than being spelled per side.
+    /// Disabled at the end it would move off, mirroring `moveSavedSearch`'s own no-op there.
+    private func move(_ search: SavedSearch, by offset: Int, from index: Int, of count: Int) -> some View {
+        let up = offset < 0
+        return Button { appState.moveSavedSearch(search, by: offset, on: playlist) } label: {
+            Image(systemName: up ? "chevron.up" : "chevron.down")
         }
         .buttonStyle(.borderless)
-        .disabled(!searches.indices.contains((searches.firstIndex { $0 === search } ?? 0) + offset))
-        .help(help)
+        .disabled(!(0..<count).contains(index + offset))
+        .help(up ? "Move up" : "Move down")
     }
 
     private func isActive(_ search: SavedSearch) -> Bool {

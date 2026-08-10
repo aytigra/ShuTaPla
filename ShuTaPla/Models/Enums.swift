@@ -128,7 +128,7 @@ nonisolated enum CloudStatus: String, Sendable {
 }
 
 /// A triage filter that overrides the tag filter while set. Mutually exclusive,
-/// and persisted on the playlist's `filterState` so triage resumes across launches.
+/// and persisted on the playlist's `serviceFilterRaw` so triage resumes across launches.
 nonisolated enum ServiceFilter: String, Codable, Sendable {
     case untagged
     case invalidTagging

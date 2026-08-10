@@ -29,10 +29,8 @@ struct FilterStrip: View {
 
     @State private var expanded = false
     @State private var searchesOpen = false
-    @State private var nameDraft = ""
     /// The collapsed row's height — where the `Searches` dropdown hangs from.
     @State private var rowHeight: CGFloat = 0
-    @FocusState private var nameFocused: Bool
 
     private var mode: FilterStripMode {
         FilterStripMode.resolve(
@@ -218,68 +216,11 @@ struct FilterStrip: View {
             // Raised so a field's suggestion dropdown draws over the name row rather than under it.
             FilterFieldGrid(playlist: playlist)
                 .zIndex(1)
-            nameRow
+            // Keyed to the playlist, which the rest of the strip is not: the row holds a typed draft
+            // and an uncommitted rename, and both belong to the playlist they were entered over.
+            SavedSearchNameRow(playlist: playlist)
+                .id(playlist.persistentModelID)
         }
         .padding(12)
-        // The panel is mounted on expand, so this seeds the draft from whatever is applied then;
-        // `nameRow` keeps it in step from there.
-        .onAppear { nameDraft = playlist.activeSavedSearch?.name ?? "" }
-        // Collapsing the strip takes the field with it — and a click on `Filter` need not resign an
-        // AppKit field editor first — so a typed rename commits here rather than being dropped.
-        .onDisappear { commitRename() }
-    }
-
-    /// Names the filter, and doubles as the saved/ad-hoc indicator: an empty field over `Save` while
-    /// the filter is ad-hoc, the search's name over `Delete saved search` once it has one. There is
-    /// no update button — the lists write through to the search as they are edited, so a rename is
-    /// the only thing left to commit.
-    private var nameRow: some View {
-        HStack(spacing: 8) {
-            TextField("Name this search", text: $nameDraft)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 240)
-                .focused($nameFocused)
-                .onSubmit { commitName() }
-                // Clicking scenery — the file list, the strip around the field — leaves an AppKit
-                // field editor focused, so the caret sits in a field the user has visibly left and
-                // the rename below never fires. Mounted only while focused, so the click that
-                // focuses the field can't be the one that resigns it.
-                .background { if nameFocused { ClickOutsideMonitor { nameFocused = false } } }
-                // A rename lands on leaving the field as well as on [return], so a typed name isn't
-                // lost by clicking away; `renameSavedSearch` is what substitutes a blank one.
-                .onChange(of: nameFocused) { _, focused in if !focused { commitRename() } }
-
-            if let search = playlist.activeSavedSearch {
-                // The role is what the alert below reads; macOS renders it only in menus and
-                // alerts, so a button sitting in a row states it itself.
-                Button("Delete saved search", role: .destructive) {
-                    appState.requestSavedSearchDelete(search)
-                }
-                .foregroundStyle(.red)
-            } else {
-                Button("Save") { commitName() }
-                    .disabled(playlist.currentFilter == nil)
-            }
-            Spacer(minLength: 0)
-        }
-        // Applying another search (or clearing the filter) re-seeds the field from what is applied
-        // now. Saving re-seeds it too — the search's stored name is the trimmed one.
-        .onChange(of: playlist.activeSavedSearch?.persistentModelID) { _, _ in
-            nameDraft = playlist.activeSavedSearch?.name ?? ""
-        }
-    }
-
-    /// The explicit commits — `Save` and `[return]`: a rename of the applied search, or the save
-    /// that creates one. A save refused as a duplicate reports itself through `errorNotice`.
-    private func commitName() {
-        guard playlist.activeSavedSearch == nil else { return commitRename() }
-        appState.saveCurrentSearch(named: nameDraft, on: playlist)
-    }
-
-    /// The implicit commits — leaving the field, collapsing the strip. Only ever a rename: creating
-    /// a search is `Save`'s alone, so a name typed over an ad-hoc filter and abandoned stays a draft.
-    private func commitRename() {
-        guard let search = playlist.activeSavedSearch, nameDraft != search.name else { return }
-        appState.renameSavedSearch(search, to: nameDraft)
     }
 }

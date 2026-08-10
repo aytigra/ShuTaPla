@@ -23,6 +23,18 @@ import Testing
         #expect(m.active.contains(.audioExtended))
     }
 
+    /// The other direction of `audioExtendedClosesVisualOverlay`: the two are exclusive both ways,
+    /// which is what lets a view mounted in each of them assume only one is ever on screen.
+    @Test func visualOverlayClosesExtendedAudio() {
+        let m = OverlayManager()
+        m.expandAudioToExtended()
+        m.audioDidFullyReveal()
+        m.show(.visualOverlay)
+        #expect(!m.active.contains(.audioExtended))
+        #expect(m.active.contains(.visualOverlay))
+        #expect(m.keyContext == .visual)
+    }
+
     @Test func visualOverlayClosesCompactAudioAndBottomControls() {
         let m = OverlayManager()
         m.show(.audioCompact)

@@ -73,11 +73,14 @@ supported lightweight change, so a throwaway column is never needed.
    pre-change shape). Pin the **whole relationship component together** — copying one model drags
    the models it relates to, because their relationships must resolve to same-version types. Models
    with no relationship into the changed component can keep referencing the live types.
-   Pin the **embedded Codable value types** a pinned model stores as well (`LegacyFilter` holds the
-   filter's): a composite attribute's members are part of the entity hash, so a live struct that
-   later gains or loses a field would retroactively reshape a frozen version. The pinned copy needs
-   only the stored members — a historical shape has no behaviour to keep — and it may be renamed or
-   nested freely, because the hash covers the members' names and types but not the type's own name.
+   Pin the **value types** a pinned model stores as well — all of them, in `Legacy`. A composite
+   attribute's members are part of the entity hash, so a live struct that later gains or loses a
+   field retroactively reshapes a frozen version; a raw-value enum contributes only its storage type,
+   so it takes a change of raw type to do the same. The second is far less likely than the first, but
+   pin both: a rule with an exception is one more thing to remember at the moment of a change, and
+   the copy costs a few lines. The pinned copy needs only the stored members — a historical shape has
+   no behaviour to keep — and it may be renamed or nested freely, because the hash covers the
+   members' names and types but not the type's own name.
 2. **Create the new `SchemaV(N+1)`**: a fresh `versionIdentifier`, with `models` referencing the
    **live** types.
 3. **Make the live model change.**

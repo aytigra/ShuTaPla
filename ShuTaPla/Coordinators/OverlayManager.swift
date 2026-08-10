@@ -103,7 +103,11 @@ final class OverlayManager: HotkeyOverlayContext {
             active.remove(.visualOverlay)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
-        case .visualOverlay:                 // hotkey overlay — closes compact audio + hover overlays
+        case .visualOverlay:                 // hotkey overlay — closes audio + hover overlays
+            // Extended audio is dropped here as well as dropping this one when it opens: the two
+            // are exclusive in both directions, so a view mounted in each can rely on only one of
+            // them being on screen rather than on the openers happening to be gated apart.
+            active.remove(.audioExtended)
             active.remove(.audioCompact)
             active.remove(.bottomControls)
         case .audioCompact:

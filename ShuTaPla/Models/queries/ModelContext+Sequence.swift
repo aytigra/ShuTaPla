@@ -200,11 +200,10 @@ extension ModelContext {
             file.playlist?.persistentModelID == pid && !file.isSkipped && file.sortOrder >= minSortOrder
         }
         guard let filter = playlist.currentFilter else { return scope }
-        return filter.filledFields.reduce(scope) { combined, filled in
-            // Deduped and lowercased per field, so a tag typed twice (or in two casings) can never
-            // raise must-have-all's threshold past what any file can reach.
-            let names = Array(Set(filled.tags.map { $0.lowercased() }))
-            return andPredicate(combined, fieldPredicate(filled.field, names: names))
+        let normalized = filter.normalizedFields
+        return TagFilterField.allCases.reduce(scope) { combined, field in
+            guard let names = normalized[field] else { return combined }
+            return andPredicate(combined, fieldPredicate(field, names: Array(names)))
         }
     }
 

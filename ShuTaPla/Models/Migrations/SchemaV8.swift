@@ -6,8 +6,8 @@
 //  the V7→V8 migration — PlaylistFile's `lastModified` column — but before its HDR columns
 //  (`isHDR`/`hdrGamma`/`hdrPrimaries`). Its Playlist/PlaylistFile/Tag are pinned copies frozen
 //  *before* the HDR fields; pinning one model of the relationship component drags the whole
-//  component, so its relationships resolve to same-version types. The filter value types its Playlist
-//  embeds are pinned as `LegacyFilter` copies for the same reason. AppStateModel/GlobalSettings/
+//  component, so its relationships resolve to same-version types. The value types its Playlist stores are
+//  pinned as `Legacy` copies for the same reason. AppStateModel/GlobalSettings/
 //  SchemaMarker carry no reference into it and reuse the live types. This is the `from` side of the
 //  V8→V9 lightweight migration (see `doc/versioning.md`).
 //
@@ -29,21 +29,21 @@ enum SchemaV8: VersionedSchema {
         var name: String = ""
         var folderBookmark: Data = Data()
         var folderPath: String = ""
-        var mediaType: MediaType = MediaType.video
+        var mediaType: Legacy.MediaType = Legacy.MediaType.video
         var sortOrder: Int = 0
         var currentFileID: UUID?
-        var playbackState: PlaybackState = PlaybackState.stopped
+        var playbackState: Legacy.PlaybackState = Legacy.PlaybackState.stopped
         var createdAt: Date = Date()
-        var preferences: PlaylistPreferences = PlaylistPreferences()
-        var filterState: LegacyFilter.State = LegacyFilter.State()
-        var savedSearches: [LegacyFilter.SavedSearch] = []
+        var preferences: Legacy.Preferences = Legacy.Preferences()
+        var filterState: Legacy.FilterState = Legacy.FilterState()
+        var savedSearches: [Legacy.SavedSearch] = []
         var unfilteredResumeSortOrder: Int?
         var tagFrequency: [String: Int] = [:]
 
         @Relationship(deleteRule: .cascade, inverse: \PlaylistFile.playlist)
         var files: [PlaylistFile] = []
 
-        init(name: String, folderBookmark: Data, folderPath: String, mediaType: MediaType, sortOrder: Int = 0) {
+        init(name: String, folderBookmark: Data, folderPath: String, mediaType: Legacy.MediaType, sortOrder: Int = 0) {
             self.id = UUID()
             self.name = name
             self.folderBookmark = folderBookmark

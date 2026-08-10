@@ -69,8 +69,8 @@ struct TagFilterTests {
         #expect(filter.isEmpty)
     }
 
-    /// The one traversal the predicate builder and the saved-search summary line share: the
-    /// non-empty lists only, in `allCases` order whatever order they were filled in.
+    /// What the summary line walks, and what `normalizedFields` is built from: the non-empty lists
+    /// only, as typed, in `allCases` order whatever order they were filled in.
     @Test func filledFieldsAreTheNonEmptyListsInFieldOrder() {
         let filter = TagFilter()
         filter.mustNotHaveAny = ["C"]
@@ -86,6 +86,11 @@ struct TagFilterTests {
         let other = TagFilter()
         other.mustHaveAny = ["SUN", "beach"]
         #expect(one.normalizedFields == other.normalizedFields)
+
+        // Only the filled fields are keys — an empty field is absent, not an empty set, which is
+        // what lets the predicate builder read a missing key as "no subquery for this field".
+        #expect(Set(one.normalizedFields.keys) == [.mustHaveAny])
+        #expect(TagFilter().normalizedFields.isEmpty)
 
         // The same tags in a *different* field are a different combination.
         let moved = TagFilter()
@@ -195,6 +200,27 @@ struct TagFilterTests {
 
         #expect(try counts(in: context) == (filters: 0, searches: 0))
         #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
+    /// The filtering suites re-filter through `applyTagFilter`, so it has to dispose of the outgoing
+    /// row the way the app's own apply does — otherwise the fixtures accumulate rows with neither
+    /// `playlist` nor `savedSearch`, the unreachable state this model says must never exist.
+    @Test func reFilteringThroughTheHelperDisposesOfAReplacedAdHocRowOnly() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let seeded = try seed(in: context)   // applying ["beach"], with a search saved over it
+
+        applyTagFilter(to: seeded.playlist, in: context, mustHaveAny: ["sun"])
+        try context.save()
+        // The outgoing row was the search's own, so it stays reachable through the search.
+        #expect(try counts(in: context) == (filters: 2, searches: 1))
+
+        applyTagFilter(to: seeded.playlist, in: context, mustHaveAny: ["moon"])
+        try context.save()
+        // This one was ad-hoc — nothing reaches it once it stops being applied.
+        #expect(try counts(in: context) == (filters: 2, searches: 1))
+        #expect(seeded.playlist.currentFilter?.mustHaveAny == ["moon"])
+        #expect(seeded.search.filter?.mustHaveAll == ["beach"])
     }
 
     @Test func aSavedSearchsFilterSurvivesThePlaylistApplyingAnother() throws {

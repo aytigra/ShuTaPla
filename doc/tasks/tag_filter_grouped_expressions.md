@@ -22,7 +22,8 @@ Status: all seven steps done (2b+3 landed together, carrying step 4's predicate 
 then pointed the coverage at it). Verified after step 6: 929 tests, the only two failures the standing
 `PlaybackEngineTests` load flakes (both green in isolation, and green here before the change), and the
 navigator holds no warning from this work — only the standing `ThumbnailServiceTests` QoS inversion and
-the project's "recommended settings" notice. Step 7 touched documentation only.
+the project's "recommended settings" notice. Step 7 touched documentation only. The branch has since
+been reviewed as a whole — see **Review of the branch** at the end; two of its seven items are open.
 
 Follow-up, done after step 7: `setTagFilter(_:in:on:)` — the whole-list setter with no production
 caller left — is dropped, and with it the private `editFilter(on:_:)` it shared with
@@ -598,3 +599,229 @@ is the honest state.
    direction (now top-level OR alone), and the cache banner's "notice strip", a surface that no longer
    exists. `doc/versioning.md` needed nothing — it is written against `SchemaVN` placeholders and step
    2b already put its lessons there.
+
+## Review of the branch
+
+Read against this doc rather than the code alone. The build is clean — no navigator issue at
+`warning` or above — and the changed suites run green: 311 tests across `TagFilterTests`,
+`TagFilterPredicateTests`, `FilterStripModeTests`/`FilterStripLayoutTests`, `FlowLayoutPackingTests`,
+`PlaylistResumeTests`, `SchemaVersionHashTests`, `SchemaIndexMigrationTests`, `SequenceStoreTests`,
+`ModelTests`, `AppStateTests`, `HotkeyRouterTests`, `PlaylistSnapshotRefaultTests`,
+`DeletedModelResolutionTests` and `PlaylistPlaybackTests`.
+
+Nothing found blocks the branch. Items 1 and 2 are worth fixing before it lands; the rest are a
+latent fragility, a documentation gap the change itself opened, and three cleanups.
+
+### 1. The strip's view state is not keyed to the playlist
+
+`FilterStrip`'s `@State` (`expanded`, `nameDraft`, `searchesOpen`) survives a scope switch: neither
+mount gives the strip an `.id`, so `PlaylistCenterView` and `LibrarySurface` re-render the same
+instance with a new `playlist`. `expandedPanel.onAppear` seeds `nameDraft` once at expansion, and the
+only re-seed is `onChange(of: playlist.activeSavedSearch?.persistentModelID)` — which does not fire
+when both the outgoing and the incoming playlist are ad-hoc or unfiltered, since the key goes
+`nil → nil`. A name typed over one playlist's filter is then still in the field over the next, and
+`Save` names that playlist's filter with the carried draft.
+
+The same gap makes `onDisappear { commitRename() }` fragile rather than merely stale: it reads
+`playlist` and `nameDraft`, and both can have moved since the draft was typed. The reachable shape is
+a switch to a playlist carrying a service filter over a saved search — the model keeps the two
+independent, so that state is storable — where `mode` drops to `.serviceFiltered`, the panel
+unmounts, and the commit lands on a search the user never opened.
+
+Fix: `.id(playlist.persistentModelID)` on the strip at both mounts, or a second `onChange` re-seeding
+`nameDraft` on the playlist itself.
+
+**Fixed.** Neither, in the end: the name row is its own view (`SavedSearchNameRow`), owning the draft
+and the focus, mounted by `expandedPanel` under `.id(playlist.persistentModelID)`. Scoping the key to
+the row rather than the strip keeps `expanded` and `searchesOpen` per mount, as the header says, and
+leaves no way for a third mount site to get it wrong. It also settles the `onDisappear` half by
+construction rather than by an ordering argument: the outgoing row is a *separate instance* that
+never receives the new playlist, so its pending rename can only land on the playlist it was typed
+over.
+
+### 2. A blank rename leaves the field permanently out of step with the stored name
+
+`renameSavedSearch` substitutes `SavedSearch.defaultName` for a blank name, and nothing writes that
+back into `nameDraft`. Clearing the field and clicking away leaves the search named "Unnamed search",
+the `Searches` button showing it, and the text field showing empty. `commitRename`'s guard is
+`nameDraft != search.name`, which is now permanently true, so every later focus cycle re-fires the
+rename and a full `persistAndRefresh()` — a save, a `sequenceVersion` bump and a sequence
+re-derivation — for a no-op. The model side is covered by
+`renamingASavedSearchFallsBackToThePlaceholderOnABlankName`; the view side has no test. Re-seeding
+`nameDraft` from the stored name after the rename closes both halves.
+
+**Fixed** as suggested — `SavedSearchNameRow.commitRename` re-seeds `draft` from `storedName` once
+the rename has landed. The blank case is the visible one, but the divergence is the whole
+normalization, not the placeholder alone: `"Foo "` stores as `"Foo"` and diverged the same way. Still
+no view-side test — the model side is what `renamingASavedSearchFallsBackToThePlaceholderOnABlankName`
+already pins, and re-seeding a `@State` draft from a stored value has no seam under it.
+
+### 3. `OverlayManager` does not enforce the exclusion the alert host leans on
+
+The delete alert is hosted on the strip on the grounds that only one strip is ever mounted, the
+overlay half of which is "the two overlays that carry a `LibrarySurface` are mutually exclusive
+(`applyShow(.audioExtended)` drops `.visualOverlay`)". That holds in one direction only:
+`applyShow(.visualOverlay)` removes `.audioCompact` and `.bottomControls` but not `.audioExtended`.
+
+It is unreachable today — the two openers are both gated, `routeVisual` running only when
+`keyContext != .audio` and `bottomControls` being suppressed under extended audio — so this is latent
+rather than live. But the strip now depends on it, and the dependency is discharged by a two-step
+argument through the hotkey router instead of by the exclusivity rules themselves. A symmetric
+`active.remove(.audioExtended)` in the `.visualOverlay` arm would make the comment true by
+construction.
+
+**Fixed** as suggested, and covered: `visualOverlayClosesExtendedAudio` is the mirror of the existing
+`audioExtendedClosesVisualOverlay`. Run against the unchanged code it failed on both halves — `active`
+held the two overlays together, and `keyContext` stayed `.audio` — so the gap was live in the state
+machine even though no opener reaches it. The key-context half comes free: `applyShow` already ends in
+`syncAudioKeyContext()`, which drops the reveal flags once the last audio overlay leaves. Neither
+`doc/features/playback-controls.md` nor `doc/architecture.md` needed a word — both already describe
+Expanded audio as *exclusive with all other overlays*, which is the symmetric reading the code now has.
+
+### 4. `LegacyFilter.State` still names the live `ServiceFilter`
+
+Step 2a wrote the rule into `doc/versioning.md` — pin the embedded Codable value types a pinned model
+stores, because a composite attribute's members are part of the entity hash — and left one member
+unpinned. The risk is small (a `String`-raw enum contributes its storage type, not its cases) and
+`SchemaVersionHashTests` would now catch a shift, so it is guarded rather than broken. Either pin it
+alongside the rest or state in `LegacyFilter` why it is the exception, so the file doesn't read as an
+oversight against the rule beside it.
+
+**Fixed** by pinning it — `Legacy.ServiceFilter`, the same two cases with no behaviour. Both
+halves of the risk assessment were measured rather than assumed, by perturbing the live types and
+watching `SchemaVersionHashTests`:
+
+- adding a case to the live `ServiceFilter` → **all six versions still green**, so a raw-`String`
+  enum really does contribute only its storage type. The finding's "risk is small" is now a number:
+  the only live change that could reach a frozen version through it is a change of the *raw type*,
+  which is what the pinned copy now absorbs.
+- the pinning itself → all six still green, since the hash covers members' names and types and not
+  the type's own name. `SchemaIndexMigrationTests` green too (5 stages), so nothing that reads a
+  legacy store moved.
+
+Two accuracy fixes came with it, both in the same concept: `LegacyFilter`'s header said V5–V8 when
+V9 embeds `State` as well, and the live `ServiceFilter` said it is persisted on `filterState`, a
+property the live `Playlist` no longer has — it is `serviceFilterRaw`.
+
+### 8. `PlaylistPreferences` is the unpinned embed that actually bites
+
+Found while measuring finding 4, and the same rule with real teeth. All five pinned versions embed
+the **live** `PlaylistPreferences` (`SchemaV5`–`SchemaV9`, `Playlist.preferences`), and unlike a
+raw-value enum a Codable struct contributes its members: adding one field to it moved the `Playlist`
+hash of **every** version at once — V5–V9, the frozen ones, alongside V10:
+
+```
+Playlist  +Syyi8SuizZHGlmqVv3pWQQx5bYagRJG9LBkYKqgPfk=  →  cmkYIkMVWA1BkF6N9T+J36FFq5UXpcacZM0Oje5vF40=
+```
+
+That is the failure `doc/versioning.md` describes — stores in the field stop matching any registered
+version and the plan can no longer place them — reachable by an ordinary feature change (one more
+per-playlist preference) with nothing but the hash test standing in front of it. The hash test does
+stand there, so this is guarded, not broken; but it is guarded by a tripwire that reports the damage
+after the fact, where pinning would make the change impossible. Pinning is hash-neutral and
+mechanical: a copy of the seven stored members, referenced by the five pinned `Playlist` copies.
+
+**Fixed, and the whole class closed with it.** Pinning `Preferences` forces its own embeds
+(`ImageFitMode`, `ViewMode`) — leaving those live would reproduce finding 4 one level down — and
+once three enums are pinned there is no longer a defensible line under `MediaType`/`PlaybackState`,
+the last two live types the pinned `Playlist` stored. So all of it moved into one `Legacy` namespace
+(`Legacy.swift`, replacing `LegacyFilter`): four value types the filter needs, the preferences
+composite, and the four enums. **No pinned model now stores a live type**, which is a rule that
+holds by inspection rather than by remembering which member was judged inert.
+
+The property this buys was measured, not assumed — the same perturbation as above, re-run against
+the fixed code:
+
+| | V5–V9 | V10 |
+|---|---|---|
+| before | hash shifts | hash shifts |
+| after | **holds** | shifts |
+
+V10 shifting is correct: it is the live version, and the one that is still allowed to move. The
+pinning itself is hash-neutral (36 tests green across the two schema suites and `ModelTests`), since
+the hash covers members' names and types and not the type's own name — which is also what makes the
+rename and re-nesting free.
+
+`doc/versioning.md` step 1 now states the rule as *all* the value types a pinned model stores, with
+why the inert half is pinned anyway: a rule with an exception is one more thing to remember at the
+moment of a change, and the copy costs a few lines.
+
+### 5. `SavedSearchesDropdown.searches` re-sorts on every access
+
+It is a computed property over `playlist.sortedSavedSearches`, and `list` reads it three times plus
+once per row (`search !== searches.last`), while `move` reads it twice per button — an O(n) sort
+inside a `ForEach` body. Negligible at real sizes, but there is no reason for it: hoist it to a `let`
+in `body` and pass it into `list` and `move`.
+
+**Fixed.** `body` sorts once into a `let` and hands the array to `list`, which enumerates it — so the
+index comes with each row and the two O(n) scans that only existed for want of one go with the sort:
+`search !== searches.last` becomes `if index > 0 { Divider() }` (drawn before each row but the first
+rather than after each but the last, which needs no count), and `move`'s
+`searches.firstIndex { $0 === search }` becomes the index it is handed. `move` also lost two
+parameters: `offset` is direction enough to pick the arrow and the help text, so the two call sites
+no longer spell out per-side what the sign already says.
+
+The behaviour that had to survive — the dropdown's order, and a move off either end doing nothing —
+is `sortedSavedSearches` and `moveSavedSearch`, both covered by
+`movingASavedSearchRewritesTheListOrder`; run green before the change and green after. The `.disabled`
+rule is that guard's mirror, so the button is dead exactly where the action is a no-op.
+
+### 6. The normalization rule is spelled twice
+
+`TagFilter.normalizedFields` and `sequencePredicate`'s `Array(Set(filled.tags.map { $0.lowercased() }))`
+each state independently that lowercasing is the normalization. A single `normalizedFilledFields` on
+`TagFilter` would leave the duplicate-save check and the predicate builder sharing one rule, which is
+what `filledFields` already does for the traversal.
+
+**Fixed.** `normalizedFields` is now derived from `filledFields` — `Set($1.tags.map { $0.lowercased() })`
+per filled field — and `sequencePredicate` reads it instead of lowercasing again, folding over
+`TagFilterField.allCases` so the AND order stays the declaration order and a field absent from the
+dictionary contributes no subquery. That absence is the one new contract: the dictionary used to carry
+all four keys with empty sets for the empty fields, and now carries only the filled ones. Equality is
+unaffected either way (an empty field is missing from both sides, or empty on both), so the duplicate
+check is untouched; the predicate builder is what now reads a missing key as "empty field".
+`filledFields` keeps the tags as typed, which is what the summary line shows.
+
+Covered by `normalizedFieldsIgnoreOrderAndCase` (equality across order and casing), the whole of
+`TagFilterPredicateTests` — `thresholdsCountDedupedNames` is the dedupe rule the predicate depends on,
+`anEmptyFilterRowMatchesEverythingNotSkipped` the all-empty case — and
+`savingNamesTheAppliedRowAndRefusesADuplicateCombination`; all green before the change and after
+(21 tests). `normalizedFieldsIgnoreOrderAndCase` gained the keys-are-only-the-filled-fields assertion
+for the new contract, which the old shape would have failed.
+
+### 7. The test helper violates the invariant the tests are written around
+
+`applyTagFilter` assigns `playlist.currentFilter` directly without disposing of the outgoing row, so
+the suites that re-filter through it — `eachFilterFieldNarrowsTheManagerList` and
+`TagFilterPredicateTests.applyFilter` — leave `TagFilter` rows with neither `playlist` nor
+`savedSearch`: exactly the unreachable state the model says must never exist. Harmless now, since
+nothing queries `TagFilter` globally, but it would mislead any later test asserting on
+`fetchCount(FetchDescriptor<TagFilter>())` after a re-filter. Routing the helper through a delete of
+the outgoing ad-hoc row keeps the fixtures honest to the rule they are exercising.
+
+**Fixed.** `applyTagFilter` now mirrors `AppState.apply(_:to:)`: it captures the outgoing row before
+repointing `currentFilter` and deletes it when `savedSearch == nil`, so an ad-hoc row goes with the
+filter it replaced while a search's own row stays reachable through the search.
+
+Covered by `TagFilterTests.reFilteringThroughTheHelperDisposesOfAReplacedAdHocRowOnly`, which
+re-filters twice over the seeded playlist — first over the search's filter, then over the ad-hoc row
+that replaced it — and asserts `(filters: 2, searches: 1)` both times. Run against the unchanged
+helper it failed on the second phase only (three filter rows, the replaced ad-hoc one orphaned) and
+passed the saved-search phase, which is the finding exactly. Green after the change, together with
+every suite that re-filters through the helper: `TagFilterTests`, `TagFilterPredicateTests`,
+`SequenceStoreTests`, `PlaylistPlaybackTests` (36) and `AppStateTests` + `PlaybackCoordinatorTests`
+(199).
+
+### What the review confirmed rather than questioned
+
+- The predicate composition carries its own rationale at the code — the type-checker ceiling, the
+  pairwise fold and the trap-6 shape are all readable from `ModelContext+Sequence.swift` without this
+  doc, and the cost test's expected count comes from an independent pass, so a wrong translation
+  fails instead of being timed as correct.
+- The pinning is guarded by the right thing. `SchemaVersionHashTests` freezing `Z_METADATA` is the
+  guard the migration tests structurally cannot be, and V5–V9 still produce their goldens with V9
+  pinned.
+- The precedence is out of the view and swept over every combination the model can store, which is
+  the part that would otherwise have rotted silently.
+- No `@Query` was introduced, no `files` relationship is faulted on a new path, and the four fields'
+  subqueries stay sibling-flat.

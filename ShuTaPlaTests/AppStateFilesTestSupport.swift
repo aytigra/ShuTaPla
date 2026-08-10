@@ -57,8 +57,12 @@ func insertFile(
 }
 
 /// Applies a tag filter to `playlist`: builds the row, inserts it, and points `currentFilter` at
-/// it. Like `insertFile` it does **not** save — the store-side derivations ignore pending changes,
-/// so a caller that then derives a sequence must save first.
+/// it, disposing of the outgoing row as `AppState.apply(_:to:)` does — an ad-hoc filter is
+/// unreachable the moment it stops being applied, while one a search was saved over stays reachable
+/// through the search. Suites re-filter through this repeatedly, and without the delete the fixtures
+/// would fill with `TagFilter` rows the model says must never exist. Like `insertFile` it does
+/// **not** save — the store-side derivations ignore pending changes, so a caller that then derives
+/// a sequence must save first.
 @MainActor
 @discardableResult
 func applyTagFilter(
@@ -74,8 +78,10 @@ func applyTagFilter(
     filter.mustHaveAny = mustHaveAny
     filter.mustNotHaveAll = mustNotHaveAll
     filter.mustNotHaveAny = mustNotHaveAny
+    let outgoing = playlist.currentFilter
     context.insert(filter)
     playlist.currentFilter = filter
+    if let outgoing, outgoing.savedSearch == nil { context.delete(outgoing) }
     return filter
 }
 

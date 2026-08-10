@@ -325,13 +325,13 @@ struct SchemaIndexMigrationTests {
             let context = container.mainContext
             let playlist = SchemaV9.Playlist(
                 name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
-            var filter = LegacyFilter.State()
+            var filter = Legacy.FilterState()
             filter.selectedTags = ["beach", "sun"]
             filter.filterMode = .or
             playlist.filterState = filter
             playlist.savedSearches = [
-                LegacyFilter.SavedSearch(id: UUID(), tags: ["beach"], mode: .and, resumeSortOrder: 1),
-                LegacyFilter.SavedSearch(id: UUID(), tags: ["sun"], mode: .or, resumeSortOrder: nil),
+                Legacy.SavedSearch(id: UUID(), tags: ["beach"], mode: .and, resumeSortOrder: 1),
+                Legacy.SavedSearch(id: UUID(), tags: ["sun"], mode: .or, resumeSortOrder: nil),
             ]
             playlist.unfilteredResumeSortOrder = 4
             context.insert(playlist)

@@ -101,8 +101,8 @@ final class TagFilter {
         TagFilterField.allCases.allSatisfy { self[$0].isEmpty }
     }
 
-    /// The filled fields in `allCases` order with their lists — the one traversal the predicate
-    /// builder and the saved-search summary line share.
+    /// The filled fields in `allCases` order with their lists, as typed — the traversal behind the
+    /// saved-search summary line, which shows the tags the way they were entered.
     var filledFields: [(field: TagFilterField, tags: [String])] {
         TagFilterField.allCases.compactMap { field in
             let tags = self[field]
@@ -110,13 +110,14 @@ final class TagFilter {
         }
     }
 
-    /// Each field's lowercased tag set — two filters are the same combination when these are equal,
-    /// which is the comparison a duplicate saved search is refused on. Lowercasing is the same
-    /// normalization `Tag.normalizedName` and the query layer's thresholds use.
+    /// The filled fields' tags deduped and lowercased — the one place normalization is stated, so
+    /// the duplicate saved-search check and the predicate builder cannot drift apart on what counts
+    /// as the same tag. Two filters are the same combination when these are equal, which is what a
+    /// duplicate save is refused on; and the predicate's thresholds count these names, so a tag
+    /// typed twice — or in two casings — can never raise must-have-all past what any file can reach.
+    /// Lowercasing is the same normalization `Tag.normalizedName` and the query layer use.
     var normalizedFields: [TagFilterField: Set<String>] {
-        TagFilterField.allCases.reduce(into: [:]) { result, field in
-            result[field] = Set(self[field].map { $0.lowercased() })
-        }
+        filledFields.reduce(into: [:]) { $0[$1.field] = Set($1.tags.map { $0.lowercased() }) }
     }
 
     /// Maps every tag of every list through `transform`, deduping each list — the playlist-wide tag
