@@ -39,7 +39,7 @@ extension AppState {
     }
 
     /// Enters the skipped-review mode of the Manager center for `playlist` (already the managed
-    /// playlist — the center notice bar's "N skipped").
+    /// playlist — the Filter Strip's "N skipped" counter).
     func reviewSkipped(in playlist: Playlist) {
         if managedPlaylist !== playlist { setManaged(playlist) }
         setSkippedReview(true)

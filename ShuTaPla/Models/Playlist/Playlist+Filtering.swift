@@ -44,11 +44,16 @@ extension Playlist {
     /// Drops `tag` from every owned filter after a playlist-wide removal. A filter left with all
     /// four lists empty is deleted, taking any search saved over it — the same rule as emptying the
     /// lists by hand, since a search over no lists matches everything and names a combination that
-    /// no longer exists.
-    func dropFilterTag(_ tag: String) {
-        for filter in ownedFilters {
+    /// no longer exists. Returns those cascaded-away searches, so a caller still holding one can let
+    /// go of it: each is read off its filter before the delete, when the relationship is still live.
+    @discardableResult
+    func dropFilterTag(_ tag: String) -> [SavedSearch] {
+        ownedFilters.compactMap { filter in
             filter.dropTag(tag)
-            if filter.isEmpty { modelContext?.delete(filter) }
+            guard filter.isEmpty else { return nil }
+            let search = filter.savedSearch
+            modelContext?.delete(filter)
+            return search
         }
     }
 }

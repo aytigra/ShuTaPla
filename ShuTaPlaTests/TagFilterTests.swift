@@ -223,6 +223,29 @@ struct TagFilterTests {
         #expect(seeded.search.filter?.mustHaveAll == ["beach"])
     }
 
+    /// The counterpart rule, for the suites that stop filtering mid-body: clearing has to dispose of
+    /// the outgoing row on the same terms applying does, or the fixture is left holding a `TagFilter`
+    /// reachable from neither end.
+    @Test func clearingThroughTheHelperDisposesOfAnAdHocRowOnly() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let seeded = try seed(in: context)   // applying the search's own row
+
+        clearTagFilter(on: seeded.playlist, in: context)
+        try context.save()
+        // A row a search was saved over stays reachable through the search.
+        #expect(try counts(in: context) == (filters: 1, searches: 1))
+        #expect(seeded.search.filter?.mustHaveAll == ["beach"])
+
+        applyTagFilter(to: seeded.playlist, in: context, mustHaveAny: ["sun"])
+        try context.save()
+        clearTagFilter(on: seeded.playlist, in: context)
+        try context.save()
+        // This one was ad-hoc — nothing reaches it once it stops being applied.
+        #expect(try counts(in: context) == (filters: 1, searches: 1))
+        #expect(seeded.playlist.currentFilter == nil)
+    }
+
     @Test func aSavedSearchsFilterSurvivesThePlaylistApplyingAnother() throws {
         let container = try makeContainer()
         let context = container.mainContext

@@ -59,7 +59,7 @@ extension AppState {
             playlist.modelContext?.delete(filter)
         } else if playlist.currentFilter !== filter {
             playlist.modelContext?.insert(filter)
-            playlist.currentFilter = filter
+            apply(filter, to: playlist)
         }
         playlist.serviceFilter = nil
         filterChanged(on: playlist)

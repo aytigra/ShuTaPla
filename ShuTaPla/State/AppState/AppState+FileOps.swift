@@ -28,6 +28,17 @@ extension AppState {
         } ?? nil
     }
 
+    /// Renames a file from the Manager file list, reporting a failure through the app-wide notice.
+    /// The report belongs here rather than in the panel: the `HotkeyRouter` can only hold the
+    /// keyboard for a modal it can see on `AppState`, so a view-local alert would leave `[esc]`
+    /// swallowed by the Manager's idle chain and every other bare key reaching the list behind it.
+    /// The overlay renames keep their own channels — each of those alerts belongs to its own window.
+    func renameManagerFile(_ file: PlaylistFile, to newName: String) async {
+        if let error = await renameFile(file, to: newName) {
+            errorNotice = ErrorNotice(title: "Couldn't rename", message: error)
+        }
+    }
+
     /// Renames one file on disk and mirrors the result onto the model, with the
     /// playlist folder's scoped access already open. Returns a message on failure.
     /// Callers apply the resulting tag-frequency delta per file (the rename re-parses `tags`).
@@ -246,7 +257,14 @@ extension AppState {
     @discardableResult
     func removeTagAcrossPlaylist(_ playlist: Playlist, tag: String) async -> String? {
         let error = await editTags(playlist.files) { TagParser.removeTag(tag, from: $0) }
-        playlist.dropFilterTag(tag)
+        // Nothing is modal while the renames above run, so the live strip can have raised a delete
+        // for one of the searches this drop cascades away — and the confirmation's own strong
+        // reference is then all that points at the row. Let go of it, the way a re-scan prunes a
+        // confirmation whose files it removed: what a deleted-and-saved instance surrenders on a
+        // read is not something to build an alert on. The drop is its own statement because it runs
+        // whether or not something is pending, where the prune is optional-chained on the pending one.
+        let destroyed = playlist.dropFilterTag(tag)
+        pendingConfirmation = pendingConfirmation?.pruning(destroyedSearches: destroyed)
         persistAndRefresh()   // the filter rewrite changes the effective filter
         return error
     }

@@ -248,7 +248,7 @@ struct TagFilterPredicateTests {
 
         // An all-empty filter row composes down to the scalar predicate, so it should cost what
         // carrying no filter row at all costs.
-        playlist.currentFilter = nil
+        clearTagFilter(on: playlist, in: context)
         try context.save()
         _ = timeSequence(expecting: 2000)
         let unfilteredSeconds = timeSequence(expecting: 2000)

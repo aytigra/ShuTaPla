@@ -37,7 +37,6 @@ struct FileCollectionView: View {
     let playlist: Playlist
     let layout: FileCollectionLayout
     let confirmDelete: ([PlaylistFile]) -> Void
-    let reportError: (String) -> Void
 
     @Environment(AppState.self) private var appState
 
@@ -240,10 +239,6 @@ struct FileCollectionView: View {
     private func commitRename(_ file: PlaylistFile) {
         let name = draftName
         renamingID = nil
-        Task {
-            if let error = await appState.renameFile(file, to: name) {
-                reportError(error)
-            }
-        }
+        Task { await appState.renameManagerFile(file, to: name) }
     }
 }

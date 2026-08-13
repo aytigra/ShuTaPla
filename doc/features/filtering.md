@@ -2,7 +2,7 @@
 
 # Filtering and search
 
-The Filter Strip sits at the top of the file list on all three surfaces (the Manager center, the Visual Overlay, and the Audio Overlay), each pointing at one playlist's persisted filter; editing it from any surface edits the one stored filter, and every view that shows that playlist re-derives. It is the single home for everything that narrows a playlist — the tag filter, the saved searches over it, and the Service Filters.
+The Filter Strip sits at the top of the file list on all three surfaces (the Manager center, the Visual Overlay, and the Audio Overlay), each pointing at one playlist's persisted filter; editing it from any surface edits the one stored filter, and every view that shows that playlist re-derives. It is the single home for everything that narrows a playlist — the tag filter, the saved searches over it, the Service Filters, and the triage counters that set them.
 
 ## Current scope
 
@@ -33,13 +33,14 @@ Tags are picked with the same multiselect-autocomplete control as the Tag Editor
 
 ## Service Filters
 
-Separate from the tag filter, the playlist carries one of three **Service Filters**: **Untagged**, **Invalid tagging**, and **Skipped**. Untagged and Invalid tagging surface as counters in the Manager's Filter Strip (shown only when the count is non-zero); clicking one activates the corresponding Service Filter. Skipped is a review list rather than a filter to play through, so its counter enters the skipped review instead.
+Separate from the tag filter, the playlist carries one of two **Service Filters**:
 
 - **Untagged** — files without any bracket group.
 - **Invalid tagging** — files with invalid tagging (see [Invalid tagging](tags.md#invalid-tagging)), for stepping through and fixing them.
-- **Skipped** — files found in the folder but excluded from the playlist as unsupported or of another media type; listed for inspection only (Show in Finder, move to Trash) and never play.
 
-Like the tag filter, an active Untagged or Invalid tagging Service Filter affects playback — only matching files play; Skipped files never play, so the playable sequence under the Skipped filter is empty (looping it would have nothing to show). Because of that, while a playlist's active filter is Skipped the Manager Play button is hidden and the Audio Inlet's Play is a no-op.
+Each surfaces as a counter in the Manager's Filter Strip, shown only when its count is non-zero; clicking one activates the matching Service Filter. Like the tag filter, an active Service Filter affects playback — only matching files play.
+
+The Filter Strip carries a third counter, **skipped**, which sets no filter. Skipped files — found in the folder but excluded from the playlist as unsupported or of another media type — never play, so they are reviewed as a list rather than filtered into playback: clicking the counter enters the **skipped review**, one of the two transient Manager review modes (the other being [find duplicates](manager-mode.md#find-duplicates)). The center then lists the skipped files for inspection only — Show in Finder, move to Trash — and because that list is not a playback sequence, every play affordance is unavailable while a review mode is up: the Manager `Play` button is disabled, and a double-click or `[enter]` on a row does nothing. The banner's `Done` leaves the review, as does any filter edit, a playlist switch, or a Scope switch.
 
 The Service Filter is persisted on the playlist, alongside the tag filter, and applied uniformly — Manager, the overlays, and playback all honor it — so triaging the untagged or invalid-tagged set resumes across launches.
 
@@ -52,7 +53,7 @@ The Service Filter is persisted on the playlist, alongside the tag filter, and a
 
 A tag filter parked under case 2 is hidden, not lost: the Service Filter always carries its way out, and clearing it drops straight to case 3 with the tag filter intact. The Manage Tags panel sits outside this ordering — its row tap sets a one-tag filter and is reachable under any case, so that path clears the Service Filter, without which the tap would land on a filter case 2 is hiding and look like nothing happened.
 
-Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the current file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file. When nothing remains to advance to — a filter change (or deletions) empties the playable sequence — the two channels diverge: the Visual Channel stays in Player mode showing the "No files match the filter" placeholder, so the filter can be lifted from there; the Audio Channel, which has no such placeholder surface, instead returns its Audio Channel Playlist to **Stopped** (easy to restart from the Audio Inlet or Overlay).
+Filtering affects playback: files that don't match are silently skipped during play (in addition to being hidden from the file list). Whenever the current file becomes unavailable for any reason — it is deleted, goes missing on disk, or is excluded by the current filter — playback advances to the next available file. When nothing remains to advance to — a filter change (or deletions) empties the playable sequence — the two channels diverge: the Visual Channel stays in Player mode showing the "No files match the filter" placeholder, so the filter can be lifted from there; the Audio Channel, which has no such placeholder surface, instead returns its Audio Channel Playlist to **Stopped**. While nothing matches, the Audio Transport's `Play` is disabled — widening or clearing the filter from the strip (in Manager or the Audio Overlay) is what makes it available again.
 
 ## Filter persistence and history
 

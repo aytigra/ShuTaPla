@@ -4,8 +4,9 @@
 //
 //  What a saved search holds, under its name: each filled field's short lead-in followed by that
 //  field's tags as chips. The tags are the part that tells two searches apart, and set as words in a
-//  sentence they read as no different from the labels introducing them — so they are the same pills
-//  the fields above show, and a row reads as the grid it fills.
+//  sentence they read as no different from the labels introducing them — so they are drawn as pills
+//  matching the fields above, sharing the fill (`tagChipFill`) but nothing else: these are text in a
+//  line, not the editable chips, and are sized by their own padding.
 //
 
 import SwiftUI
@@ -45,6 +46,6 @@ struct FilterSummaryLine: View {
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .background((excluded ? Color.red : Color.accentColor).opacity(0.18), in: Capsule())
+            .background((excluded ? Color.red : Color.accentColor).tagChipFill(), in: Capsule())
     }
 }

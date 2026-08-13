@@ -112,4 +112,21 @@ struct SchemaVersionHashTests {
         let recorded = try recordedVersionHashes(for: Schema(versionedSchema: frozen.schema))
         #expect(recorded == frozen.expected)
     }
+
+    /// The one thing a pinned model needs that is not a type: `PlaylistFile.taggingStatusCode`'s
+    /// default, the code every V5–V9 copy seeds an untagged row with. A default value is not part of
+    /// the entity hash, so the goldens above cannot see it — it is stated here against the literal the
+    /// released versions wrote, which is what makes freezing it in `Legacy` rather than reading a live
+    /// constant checkable. Construction only: with every pinned `PlaylistFile` in the process, a fetch
+    /// would trip the entity-name→type cast (see CLAUDE.md).
+    @Test func pinnedFilesSeedTheReleasedUntaggedCode() {
+        let seeded = [
+            SchemaV5.PlaylistFile(relativePath: "a", fileName: "a").taggingStatusCode,
+            SchemaV6.PlaylistFile(relativePath: "a", fileName: "a").taggingStatusCode,
+            SchemaV7.PlaylistFile(relativePath: "a", fileName: "a").taggingStatusCode,
+            SchemaV8.PlaylistFile(relativePath: "a", fileName: "a").taggingStatusCode,
+            SchemaV9.PlaylistFile(relativePath: "a", fileName: "a").taggingStatusCode,
+        ]
+        #expect(seeded == [1, 1, 1, 1, 1])
+    }
 }

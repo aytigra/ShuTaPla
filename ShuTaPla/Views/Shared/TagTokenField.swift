@@ -14,11 +14,12 @@
 //  and the per-chip menu.
 //
 //  The text input is a thin `NSTextField` wrapper so focus and the caret-edge key
-//  commands come straight from AppKit: it reports begin/end editing, routes
-//  `delete`/arrows/`return`/`esc` only at the caret edges, and — while focused —
-//  watches for a mouse-down outside the control (the field, its chips, or the open
-//  dropdown) to give up focus, so clicking any other control or a playlist closes it
-//  without swallowing that click.
+//  commands come straight from AppKit: it reports begin/end editing and routes
+//  `delete`/arrows/`return`/`esc` only at the caret edges. Dismissal is the shared
+//  `ClickOutsideMonitor`, backing the field while it edits and told how far the open
+//  dropdown reaches below it — so a mouse-down on any other control or a playlist ends
+//  editing without swallowing that click, and dropping the input is what gives up focus
+//  (AppKit hands the first responder back to the window when it leaves the hierarchy).
 //
 
 import SwiftUI
@@ -65,12 +66,15 @@ struct TagTokenField<ChipMenu: View>: View {
     @State private var highlighted = 0
     @State private var selectedChip: Int?
     @State private var editing = false
-    @State private var controlFrame: CGRect = .zero
-    @State private var inputFrame: CGRect = .zero
+    @State private var controlHeight: CGFloat = 0
     @State private var lastLeft: Date?
     @State private var lastRight: Date?
 
-    private let rowHeight: CGFloat = 30
+    // Computed rather than stored: a generic type takes no static storage.
+    private static var rowHeight: CGFloat { 30 }
+
+    /// The gap between the field and the dropdown hanging below it.
+    private static var dropdownGap: CGFloat { 4 }
 
     /// The height of every line of the field, chips included. An empty field shows only its
     /// placeholder and an editing one only the text input, each a different height again, so
@@ -79,16 +83,26 @@ struct TagTokenField<ChipMenu: View>: View {
     private let chipHeight: CGFloat = 20
 
     var body: some View {
+        // Ranked once per evaluation and handed down: read as a computed property it re-ranks on
+        // every access, and the dropdown, its height, and the monitor's reach all ask for it.
+        let suggestions = options
+        // How far the open dropdown reaches below the field — its rows plus the gap it hangs at,
+        // and nothing at all when there is nothing to suggest.
+        let reach = suggestions.isEmpty
+            ? 0 : Self.dropdownHeight(optionCount: suggestions.count) + Self.dropdownGap
         field
             .onAppear { if autoFocus { beginEditing() } }
-            // Integer bounds so successive sub-pixel measurements settle rather than
+            // Integer height so successive sub-pixel measurements settle rather than
             // cycling (which SwiftUI faults on).
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global).integral } action: { controlFrame = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { controlHeight = $0 }
             .overlay(alignment: .topLeading) {
-                if editing, options.isNotEmpty {
-                    dropdown.offset(y: controlFrame.height + 4)
+                if editing, reach > 0 {
+                    dropdown(suggestions).offset(y: controlHeight + Self.dropdownGap)
                 }
             }
+            // The dropdown is drawn as an overlay, so it lies outside the field's own bounds —
+            // the monitor is told that much below itself is still the field's to be clicked.
+            .background { if editing { ClickOutsideMonitor(below: reach, onOutside: endEditing) } }
             // While the dropdown is open the field floats above the controls below it.
             .zIndex(editing ? 1 : 0)
     }
@@ -121,8 +135,6 @@ struct TagTokenField<ChipMenu: View>: View {
         if editing {
             TokenTextField(
                 text: $input,
-                insideRects: [controlFrame, dropdownRect],
-                selfFrame: inputFrame,
                 onLeft: moveCaretLeft,
                 onRight: moveCaretRight,
                 onUp: moveHighlightUp,
@@ -133,7 +145,6 @@ struct TagTokenField<ChipMenu: View>: View {
             )
             .frame(minWidth: 90)
             .frame(height: 18)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global).integral } action: { inputFrame = $0 }
         } else if tokens.isEmpty {
             Text(placeholder)
                 .foregroundStyle(.tertiary)
@@ -158,10 +169,7 @@ struct TagTokenField<ChipMenu: View>: View {
         .padding(.horizontal, 8)
         // Sized rather than padded, so the chip and the field's other lines are one figure.
         .frame(height: chipHeight)
-        .background(
-            Color.accentColor.opacity(selectedChip == index ? 0.4 : 0.18),
-            in: Capsule()
-        )
+        .background(Color.accentColor.tagChipFill(selected: selectedChip == index), in: Capsule())
         .overlay {
             if selectedChip == index {
                 Capsule().strokeBorder(Color.accentColor, lineWidth: 1)
@@ -174,17 +182,13 @@ struct TagTokenField<ChipMenu: View>: View {
 
     // MARK: - Dropdown
 
-    /// The dropdown's on-screen rect, derived from the field's frame and the render
-    /// offset below it. (Computed rather than measured: `.offset` shifts the rendering
-    /// but not the layout frame, so a measured `.global` frame would point at the
-    /// field, not where the dropdown actually appears.)
-    private var dropdownRect: CGRect {
-        guard editing, options.isNotEmpty, !controlFrame.isEmpty else { return .zero }
-        let height = CGFloat(min(options.count, 6)) * rowHeight
-        return CGRect(x: controlFrame.minX, y: controlFrame.maxY + 4, width: controlFrame.width, height: height)
+    /// The panel's height for `optionCount` rows, capped at six — past that it runs down over the
+    /// content it floats above. Zero rows is no panel, and so nothing for a click to land on.
+    static func dropdownHeight(optionCount: Int) -> CGFloat {
+        CGFloat(min(optionCount, 6)) * rowHeight
     }
 
-    private var dropdown: some View {
+    private func dropdown(_ options: [TagOption]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -203,7 +207,7 @@ struct TagTokenField<ChipMenu: View>: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: CGFloat(min(options.count, 6)) * rowHeight)
+        .frame(height: Self.dropdownHeight(optionCount: options.count))
         .floatingPanel(.regularMaterial)
     }
 
@@ -222,7 +226,7 @@ struct TagTokenField<ChipMenu: View>: View {
                 }
             }
             .padding(.horizontal, 10)
-            .frame(height: rowHeight)
+            .frame(height: Self.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(index == highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
             .contentShape(Rectangle())
@@ -239,7 +243,10 @@ struct TagTokenField<ChipMenu: View>: View {
         onEditingChanged(true)
     }
 
+    /// Idempotent: dropping the input is what ends AppKit's editing session, and that session's own
+    /// end-editing report arrives back here — after `editing` is already false.
     private func endEditing() {
+        guard editing else { return }
         editing = false
         input = ""
         selectedChip = nil
@@ -410,14 +417,9 @@ extension TagTokenField where ChipMenu == EmptyView {
 
 /// The borderless `NSTextField` behind `TagTokenField`. It focuses itself when it
 /// appears (so a click into the field starts editing), reports begin/end editing, and
-/// hands the host the key commands SwiftUI fumbles on an empty field. While focused it
-/// also runs a local mouse-down monitor: a click outside `insideRects` (the control
-/// and its open dropdown, in SwiftUI global coordinates) resigns focus without
-/// consuming the click, so a single click elsewhere both closes the field and lands.
+/// hands the host the key commands SwiftUI fumbles on an empty field.
 private struct TokenTextField: NSViewRepresentable {
     @Binding var text: String
-    var insideRects: [CGRect]
-    var selfFrame: CGRect
     var onLeft: () -> Void
     var onRight: () -> Void
     var onUp: () -> Void
@@ -439,7 +441,6 @@ private struct TokenTextField: NSViewRepresentable {
         field.cell?.isScrollable = true
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
-        context.coordinator.startOutsideMonitor(for: field)
         return field
     }
 
@@ -448,15 +449,10 @@ private struct TokenTextField: NSViewRepresentable {
         if field.stringValue != text { field.stringValue = text }
     }
 
-    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
-        coordinator.stopOutsideMonitor()
-    }
-
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: TokenTextField
-        private var monitor: Any?
 
         init(_ parent: TokenTextField) { self.parent = parent }
 
@@ -500,42 +496,6 @@ private struct TokenTextField: NSViewRepresentable {
             default:
                 return false
             }
-        }
-
-        // MARK: Outside-click monitor
-
-        func startOutsideMonitor(for field: NSTextField) {
-            // Both buttons: a left-click elsewhere, and a right-click that raises a
-            // context menu on a file row or any other outside target, give up focus.
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak field] event in
-                guard let self, let field, let window = field.window, event.window === window else { return event }
-                if !self.clickIsInsideControl(event, field: field) {
-                    window.makeFirstResponder(nil)
-                }
-                return event
-            }
-        }
-
-        func stopOutsideMonitor() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-        }
-
-        /// Maps the click into SwiftUI global coordinates via the input's own two
-        /// frames (its AppKit window rect and its measured global rect give the
-        /// translation + y-flip between the spaces), then tests it against the control
-        /// and dropdown rects.
-        private func clickIsInsideControl(_ event: NSEvent, field: NSTextField) -> Bool {
-            let appKit = field.convert(field.bounds, to: nil)   // window coords, y-up
-            let swiftUI = parent.selfFrame                       // global coords, y-down
-            guard appKit.height > 0, swiftUI.height > 0 else { return true }
-
-            let click = event.locationInWindow
-            let global = CGPoint(
-                x: swiftUI.minX + (click.x - appKit.minX),
-                y: swiftUI.minY + (appKit.maxY - click.y)
-            )
-            return parent.insideRects.contains { !$0.isEmpty && $0.contains(global) }
         }
 
         private func caretAtStart(_ textView: NSTextView) -> Bool {

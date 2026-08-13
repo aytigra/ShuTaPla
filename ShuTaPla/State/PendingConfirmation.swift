@@ -93,6 +93,16 @@ extension PendingConfirmation {
             return self
         }
     }
+
+    /// This confirmation unless it names one of `searches`, in which case `nil` — the saved-search
+    /// counterpart to the file pruning above, for the other way a target is destroyed under a
+    /// confirmation that is already on screen: a playlist-wide tag removal empties a search's filter
+    /// and the cascade takes the search. Compares by identity, so nothing is read off the gone rows.
+    func pruning(destroyedSearches searches: [SavedSearch]) -> PendingConfirmation? {
+        guard let search = savedSearchToDelete,
+              searches.contains(where: { $0 === search }) else { return self }
+        return nil
+    }
 }
 
 /// An operation failed or was refused, in the words of the site that knows why. One channel for

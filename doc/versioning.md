@@ -80,7 +80,11 @@ supported lightweight change, so a throwaway column is never needed.
    pin both: a rule with an exception is one more thing to remember at the moment of a change, and
    the copy costs a few lines. The pinned copy needs only the stored members — a historical shape has
    no behaviour to keep — and it may be renamed or nested freely, because the hash covers the
-   members' names and types but not the type's own name.
+   members' names and types but not the type's own name. Freeze in `Legacy` any live **constant** a
+   pinned model reaches for as a stored property's default (`taggingStatusCode`'s untagged code), for
+   the same reason under a weaker guard: a default value is outside the entity hash, so renumbering
+   the live constant shifts nothing and only changes what the pinned copies seed — which is why the
+   frozen value is pinned directly in `SchemaVersionHashTests`.
 2. **Create the new `SchemaV(N+1)`**: a fresh `versionIdentifier`, with `models` referencing the
    **live** types.
 3. **Make the live model change.**

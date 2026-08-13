@@ -57,7 +57,7 @@ enum SchemaV5: VersionedSchema {
         var relativePath: String = ""
         var fileName: String = ""
         @Relationship(inverse: \Tag.files) var tags: [Tag] = []
-        var taggingStatusCode: Int = TaggingStatus.untagged.code
+        var taggingStatusCode: Int = Legacy.untaggedStatusCode
         var isSkipped: Bool = false
         var lastPosition: TimeInterval?
         var duration: TimeInterval?

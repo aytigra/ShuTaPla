@@ -9,12 +9,16 @@
 //  contributes its storage type, so a live type that gains a member or changes its raw type would
 //  retroactively reshape a version that is no longer allowed to move.
 //
-//  Every value type a pinned model stores is here, with no exception to remember: an inert one (a
+//  Every value a pinned model needs is here, with no exception to remember: an inert type (a
 //  raw-value enum, which only a change of raw type could shift) sits beside a live one (a composite,
-//  which any added field shifts) rather than being left to name the type it froze away from.
+//  which any added field shifts) rather than being left to name the type it froze away from — and
+//  beside both, the one value that is a constant rather than a type, `untaggedStatusCode`. A default
+//  value is outside the entity hash, so reaching a live constant for one shifts no hash and trips no
+//  guard; what it silently changes is the code the pinned copies seed rows with in the migration
+//  tests.
 //
 //  One set rather than one per version: the shape never moved across V5–V9, and a version that does
-//  move it declares its own. Only stored members are here — behaviour belongs to the live types, and
+//  move it declares its own. Only what a pinned model stores is here — behaviour belongs to the live types, and
 //  a historical shape has no behaviour to keep. Naming and nesting are free, since the hash covers
 //  the members' names and types but never the type's own name.
 //
@@ -22,6 +26,10 @@
 import Foundation
 
 nonisolated enum Legacy {
+
+    /// `TaggingStatus.untagged.code` as the shipped versions wrote it — the default every pinned
+    /// `PlaylistFile` seeds an untagged row with, and what a V5–V9 store on disk holds.
+    static let untaggedStatusCode = 1
 
     struct FilterState: Codable, Sendable {
         var selectedTags: [String] = []

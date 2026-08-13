@@ -56,13 +56,21 @@ func insertFile(
     return file
 }
 
-/// Applies a tag filter to `playlist`: builds the row, inserts it, and points `currentFilter` at
-/// it, disposing of the outgoing row as `AppState.apply(_:to:)` does — an ad-hoc filter is
-/// unreachable the moment it stops being applied, while one a search was saved over stays reachable
-/// through the search. Suites re-filter through this repeatedly, and without the delete the fixtures
-/// would fill with `TagFilter` rows the model says must never exist. Like `insertFile` it does
-/// **not** save — the store-side derivations ignore pending changes, so a caller that then derives
-/// a sequence must save first.
+/// Leaves `playlist` unfiltered as `AppState.apply(nil, to:)` does — an ad-hoc filter is
+/// unreachable the moment it stops being applied and goes with the clear, while one a search was
+/// saved over stays reachable through the search. Suites filter and re-filter through these
+/// repeatedly, and without the delete the fixtures would fill with `TagFilter` rows the model says
+/// must never exist.
+@MainActor
+func clearTagFilter(on playlist: Playlist, in context: ModelContext) {
+    let outgoing = playlist.currentFilter
+    playlist.currentFilter = nil
+    if let outgoing, outgoing.savedSearch == nil { context.delete(outgoing) }
+}
+
+/// Applies a tag filter to `playlist`: builds the row, inserts it, and points `currentFilter` at it,
+/// clearing the outgoing one first. Like `insertFile` it does **not** save — the store-side
+/// derivations ignore pending changes, so a caller that then derives a sequence must save first.
 @MainActor
 @discardableResult
 func applyTagFilter(
@@ -78,10 +86,9 @@ func applyTagFilter(
     filter.mustHaveAny = mustHaveAny
     filter.mustNotHaveAll = mustNotHaveAll
     filter.mustNotHaveAny = mustNotHaveAny
-    let outgoing = playlist.currentFilter
+    clearTagFilter(on: playlist, in: context)
     context.insert(filter)
     playlist.currentFilter = filter
-    if let outgoing, outgoing.savedSearch == nil { context.delete(outgoing) }
     return filter
 }
 

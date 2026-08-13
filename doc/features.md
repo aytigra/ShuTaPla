@@ -34,11 +34,11 @@ Capitalized terms below are used precisely throughout this document.
 - **Audio Transport** — the shared, state-dependent transport control rendered by both the Audio Inlet and the Audio Overlay.
 - **Pause Overlay** — the opaque Player-mode overlay (Unpause / Stop) shown while Suppression is active.
 - **Scope** — the sidebar's playlist-type filter in Manager mode (Image / Video / Audio), chosen via the **Scope Tabs**; it selects which playlists can become the Managed Playlist and nothing more.
-- **Service Filter** — a playlist's optional non-tag filter (Untagged / Invalid tagging / Skipped), separate from the tag filter.
+- **Service Filter** — a playlist's optional non-tag filter (Untagged / Invalid tagging), separate from the tag filter.
 - **Suppression** — the single transient layer that halts all playback over the per-playlist states (`playback = playing && !suppression`).
 - **Key Context** — the routing target (Visual Channel or Audio Overlay) that currently receives arrow / `[space]` / `[l]` / seek keys.
 - **Tag Editor** — the multi-select tag-input control used identically in the Manager inspector, the Visual Overlay, and the Audio Overlay.
-- **Filter Strip** — the row at the top of the file list on those same three surfaces, holding everything that narrows a playlist: the four-field tag filter (collapsed behind a caret), the saved searches over it, and the Service Filter counters.
+- **Filter Strip** — the row at the top of the file list on those same three surfaces, holding everything that narrows a playlist: the four-field tag filter (collapsed behind a caret), the saved searches over it, and the triage counters (untagged / invalid tagging / skipped).
 
 ## Platform and window
 
@@ -54,6 +54,6 @@ Capitalized terms below are used precisely throughout this document.
 | [Playlists, creation, and switching](features/playlists.md) | First launch; creating playlists (folder classification, dominance, Mixed prompt); what a playlist stores; global settings; Reshuffle vs. Update; playback order/wrap-around; the Stopped/Playing/Paused state machine and transitions; concurrent playlists; Player-mode quick switching. |
 | [Manager mode](features/manager-mode.md) | The Stopped-state windowed view: Scopes, toolbar/panel layout, list/gallery view modes, the find-duplicates tool, the thumbnail-cache-pressure banner, file interactions (select, play, multi-select, rename, Remove Audio), and playlist-wide tag operations. |
 | [Tag system](features/tags.md) | Tag syntax in filenames; invalid tagging; the known-tags cache; the Tag Editor UI; tag-input hotkeys; on-disk rename semantics and graceful failure. |
-| [Filtering and search](features/filtering.md) | The Filter Strip; the per-playlist four-field tag filter; the three Service Filters and how they take precedence; how filtering affects playback; filter persistence and saved searches. |
+| [Filtering and search](features/filtering.md) | The Filter Strip; the per-playlist four-field tag filter; the two Service Filters, the skipped review beside them, and how they take precedence; how filtering affects playback; filter persistence and saved searches. |
 | [Playback controls](features/playback-controls.md) | `[esc]` priority chain; Player- and Manager-mode hotkey tables and Key Context; overlay exclusivity/dismissal rules; the Pause Overlay; Suppression vs. per-playlist pause. |
 | [Players (video, image, audio)](features/players.md) | The video, image, and audio players: hover zones, the Visual Overlay, image fit modes and slideshow, the Audio Inlet and Audio Overlay, audio controls, and parallel audio mixing. |

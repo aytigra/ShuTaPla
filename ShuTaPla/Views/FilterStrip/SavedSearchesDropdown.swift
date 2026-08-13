@@ -49,7 +49,7 @@ struct SavedSearchesDropdown: View {
         // radius would be carved out of the top and bottom row's highlight rather than read as the
         // panel's own shape.
         .floatingPanel(Color(nsColor: .controlBackgroundColor), cornerRadius: 0)
-        .background(ClickOutsideMonitor(anchorHeight: anchorHeight, onOutside: onPick))
+        .background(ClickOutsideMonitor(above: anchorHeight, onOutside: onPick))
     }
 
     private func list(_ searches: [SavedSearch]) -> some View {

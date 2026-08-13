@@ -1093,6 +1093,34 @@ struct AppStateTests {
         #expect(message == expected)
     }
 
+    /// A Manager rename that fails has to raise the app-wide notice, not a message the panel keeps
+    /// to itself: `HotkeyRouter` can only hold the keyboard for a modal it can see on `AppState`
+    /// (`errorAlertHoldsKeyboardContext` pins that end), so a view-local alert leaves `[esc]`
+    /// swallowed by the Manager's idle chain and every other bare key reaching the file list behind
+    /// it. The overlay renames keep their own channels — their alerts belong to their own windows —
+    /// so this is the Manager entry point's own job, which is why it is a separate call.
+    @Test func aFailedManagerRenameRaisesTheAppWideNotice() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let file = PlaylistFile(relativePath: "old.mp4", fileName: "old.mp4", sortOrder: 0)
+        file.playlist = playlist
+        context.insert(file)
+        var stub = StubFileSystem(result: emptyResult)
+        stub.renameError = .nameCollision
+        let appState = AppState(modelContext: context, fileSystem: stub)
+
+        await appState.renameManagerFile(file, to: "taken.mp4")
+
+        #expect(appState.errorNotice?.title == "Couldn't rename")
+        #expect(appState.errorNotice?.message == "A file with that name already exists.")
+        #expect(file.fileName == "old.mp4")
+    }
+
     @Test func deleteFilesRemovesTrashedFromPlaylist() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -2078,6 +2106,48 @@ struct AppStateTests {
         await appState.updateTask?.value
     }
 
+    /// A tag removal can destroy the very saved search a pending confirmation names: nothing is
+    /// modal while the removal's renames run — `confirmConfirmation` clears the pending state before
+    /// starting the task — so the live strip can raise a saved-search delete in that window, and the
+    /// removal then empties that search's only list and the cascade takes the search with it. The
+    /// confirmation's own strong reference is all that still points at the row, so unless the
+    /// removal prunes it the alert stays up over a search the store no longer has.
+    @Test func aTagRemovalThatDestroysASavedSearchClearsItsPendingDelete() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+
+        appState.requestSavedSearchDelete(search)
+        await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
+
+        #expect(try context.fetchCount(FetchDescriptor<SavedSearch>()) == 0)
+        #expect(appState.pendingConfirmation?.savedSearchToDelete == nil)
+    }
+
+    /// The prune is keyed on the search the drop actually destroyed, so a removal that leaves the
+    /// pending search standing — its filter still carries another tag — must not dismiss its alert.
+    @Test func aTagRemovalThatSparesTheSavedSearchLeavesItsPendingDeleteUp() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach at dusk", tags: ["beach", "dusk"], to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+
+        appState.requestSavedSearchDelete(search)
+        await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
+
+        #expect(search.filter?.mustHaveAll == ["dusk"])
+        #expect(appState.pendingConfirmation?.savedSearchToDelete === search)
+    }
+
     @Test func confirmPlayerDeleteSurfacesFailureAndKeepsFile() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -2188,6 +2258,29 @@ struct AppStateTests {
         appState.toggleFilterTag("sun", in: field, on: playlist)     // the last one leaves
         #expect(playlist.currentFilter == nil)
         #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
+    }
+
+    /// A toggle onto an already-filtered playlist edits the applied row in place. Nothing may be
+    /// left behind: a second row pointed at by nobody is the unreachable state the model forbids,
+    /// so the row identity and the store count are both pinned — the guarantee that has to survive
+    /// `toggleFilterTag` routing its assignment through `apply(_:to:)`.
+    @Test func togglingASecondTagEditsTheAppliedRowRatherThanOrphaningIt() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.toggleFilterTag("beach", in: .mustHaveAll, on: playlist)
+        let row = playlist.currentFilter
+
+        appState.toggleFilterTag("dusk", in: .mustNotHaveAll, on: playlist)
+
+        #expect(playlist.currentFilter === row)
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])
+        #expect(playlist.currentFilter?.mustNotHaveAll == ["dusk"])
+        #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 1)
     }
 
     /// Fields are independent: emptying one leaves the others standing, and only the last token to

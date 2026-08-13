@@ -4,7 +4,8 @@
 //
 //  The Manager center panel for the active scope: the cache banner, the filter strip, and the file
 //  list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the Manager toolbar.
-//  Owns the shared delete, remove-audio, and error confirmations used by the list's interactions.
+//  Owns the delete and remove-audio confirmations the list's interactions raise; a failed
+//  operation reports itself through the app-wide `errorNotice`.
 //
 
 import SwiftUI
@@ -12,8 +13,6 @@ import SwiftData
 
 struct PlaylistCenterView: View {
     @Environment(AppState.self) private var appState
-
-    @State private var errorMessage: String?
 
     /// Set by the playlist scan when the on-disk thumbnail cache exceeds the caution threshold;
     /// drives the notice-strip cache-pressure banner.
@@ -53,14 +52,6 @@ struct PlaylistCenterView: View {
         } message: {
             Text("The original is moved to the Trash.")
         }
-        .alert(
-            "Something went wrong",
-            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
     }
 
     private var deleteTitle: String {
@@ -99,8 +90,7 @@ struct PlaylistCenterView: View {
             FileCollectionView(
                 playlist: playlist,
                 layout: playlist.mediaType != .audio && playlist.preferences.viewMode == .gallery ? .gallery : .list,
-                confirmDelete: { appState.requestManagerDelete($0) },
-                reportError: { errorMessage = $0 }
+                confirmDelete: { appState.requestManagerDelete($0) }
             )
         }
     }

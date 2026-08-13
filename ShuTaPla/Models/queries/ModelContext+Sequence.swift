@@ -120,8 +120,8 @@ extension ModelContext {
         return (try? fetch(descriptor)) ?? []
     }
 
-    /// The three triage counts — untagged / invalid-tagging / skipped — for the center's notice
-    /// bar, each a `fetchCount` over the scalar columns.
+    /// The three triage counts — untagged / invalid-tagging / skipped — for the Filter Strip's
+    /// counters, each a `fetchCount` over the scalar columns.
     func serviceFilterCounts(for playlist: Playlist) -> (untagged: Int, invalidTagging: Int, skipped: Int) {
         let pid = playlist.persistentModelID
         let untagged = count(triagePredicate(pid: pid, code: TaggingStatus.untagged.code))

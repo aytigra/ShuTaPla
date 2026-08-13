@@ -44,7 +44,7 @@ extension Playlist {
         modelContext?.fileCount(in: self) ?? files.count
     }
 
-    /// The three triage counts — untagged / invalid-tagging / skipped — for the notice bar.
+    /// The three triage counts — untagged / invalid-tagging / skipped — for the Filter Strip.
     var serviceFilterCounts: (untagged: Int, invalidTagging: Int, skipped: Int) {
         modelContext?.serviceFilterCounts(for: self) ?? (0, 0, 0)
     }

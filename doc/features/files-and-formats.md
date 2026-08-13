@@ -8,7 +8,7 @@ The goal is good support for common formats, not exhaustive coverage.
 - **Image**: jpeg, png, jpeg xl, gif, and other common formats. HDR supported where available.
 - **Audio**: mp3 primarily, plus other common formats.
 
-Unsupported files in a selected folder are ignored silently. A small, non-intrusive notice in the playlist info area surfaces the count of skipped files so the user knows they exist without cluttering the main UI. Clicking the notice activates the Skipped Service Filter (see [Filtering and search](filtering.md)), which lists the skipped files for inspection — they can be shown in Finder or trashed, but never play.
+Unsupported files in a selected folder are ignored silently. A small counter in the Manager's Filter Strip surfaces the number of skipped files so the user knows they exist without cluttering the main UI. Clicking it enters the skipped review (see [Filtering and search](filtering.md#service-filters)), which lists them for inspection — they can be shown in Finder or trashed, but never play.
 
 ## Cloud / offline files
 

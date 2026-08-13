@@ -8,9 +8,14 @@
 //  prefix, then substring) ahead of frequency, and — only when create is allowed —
 //  trails a `.create` row for a valid, unused, typed tag.
 //
+//  Plus the two things its dismissal rests on: the panel height the field hands the
+//  click monitor as its reach below itself, and AppKit's own handling of a text field
+//  that leaves the view hierarchy mid-edit.
+//
 
 import Testing
 import SwiftUI
+import AppKit
 @testable import ShuTaPla
 
 @MainActor
@@ -87,5 +92,40 @@ struct TagTokenFieldTests {
             query: "city", knownTags: known, selected: ["city"], allowsCreate: true
         )
         #expect(options.isEmpty)
+    }
+
+    // MARK: - Dismissal
+
+    @Test func theDropdownGrowsByTheRowAndStopsAtSix() {
+        #expect(TagTokenField<EmptyView>.dropdownHeight(optionCount: 1) == 30)
+        #expect(TagTokenField<EmptyView>.dropdownHeight(optionCount: 6) == 180)
+        // Past six it scrolls instead of growing, so the monitor's reach stops growing too.
+        #expect(TagTokenField<EmptyView>.dropdownHeight(optionCount: 40) == 180)
+    }
+
+    @Test func noOptionsIsNoPanelToClick() {
+        #expect(TagTokenField<EmptyView>.dropdownHeight(optionCount: 0) == 0)
+    }
+
+    @Test func droppingTheEditingFieldHandsFocusBackToTheWindow() {
+        // The field gives up focus by ceasing to exist: a click away ends editing, which takes the
+        // input out of the hierarchy. Pinned against AppKit itself, since it is AppKit's half of the
+        // contract — were a removed field to stay first responder, keys would go on reaching it.
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 300, height: 120),
+            styleMask: [.titled, .closable], backing: .buffered, defer: true
+        )
+        let host = NSView(frame: window.contentView!.bounds)
+        window.contentView!.addSubview(host)
+        let field = NSTextField(frame: CGRect(x: 10, y: 10, width: 200, height: 22))
+        host.addSubview(field)
+
+        #expect(window.makeFirstResponder(field))
+        #expect(field.currentEditor() != nil, "the field editor is engaged while editing")
+
+        host.removeFromSuperview()
+
+        #expect(window.firstResponder === window)
+        #expect(field.currentEditor() == nil)
     }
 }

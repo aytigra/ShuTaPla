@@ -16,10 +16,14 @@ import SwiftUI
 import AppKit
 
 struct ClickOutsideMonitor: NSViewRepresentable {
-    /// How far above the panel still counts as inside — the height of the control it hangs from.
-    /// Without it the monitor closes the panel on the mouse-down that the control's own action then
-    /// toggles back open, and the control stops working.
-    var anchorHeight: CGFloat = 0
+    /// How far above the backing view still counts as inside — the control it hangs from. Without
+    /// it the monitor dismisses on the mouse-down that the control's own action then toggles back
+    /// open, and the control stops working.
+    var above: CGFloat = 0
+    /// How far below the backing view still counts as inside — the panel it floats over. The
+    /// counterpart to `above` for a control that opens *downwards*, whose panel is drawn as an
+    /// overlay and so is nowhere in the backing view's own bounds.
+    var below: CGFloat = 0
     let onOutside: () -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -59,17 +63,22 @@ struct ClickOutsideMonitor: NSViewRepresentable {
             monitor = nil
         }
 
-        /// The panel's own bounds grown upwards over its anchor — AppKit's y runs up, so a taller
-        /// rect from the same origin is exactly that.
         private func isInside(_ event: NSEvent, of view: NSView) -> Bool {
-            let bounds = view.bounds
-            let inside = CGRect(
-                x: bounds.minX,
-                y: bounds.minY,
-                width: bounds.width,
-                height: bounds.height + parent.anchorHeight
-            )
-            return inside.contains(view.convert(event.locationInWindow, from: nil))
+            ClickOutsideMonitor.insideRect(view.bounds, above: parent.above, below: parent.below)
+                .contains(view.convert(event.locationInWindow, from: nil))
         }
+    }
+
+    /// The view's own bounds grown over the regions that belong to it but lie outside its layout.
+    /// AppKit's y runs up, so `above` is height added at the top and `below` is a lowered origin.
+    ///
+    /// Geometry only, off the actor the representable is bound to, so it can be exercised directly.
+    nonisolated static func insideRect(_ bounds: CGRect, above: CGFloat, below: CGFloat) -> CGRect {
+        CGRect(
+            x: bounds.minX,
+            y: bounds.minY - below,
+            width: bounds.width,
+            height: bounds.height + above + below
+        )
     }
 }
