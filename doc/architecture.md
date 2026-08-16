@@ -1,6 +1,6 @@
 # Architecture
 
-IMPORTANT!!!: This document covers system design — structure, non-obvious decisions, and rationale. It does not restate behavior (see `features.md`) or mirror the code (see the source). KEEP IT THIS WAY!!! Features described in the main docs but not yet built are tracked in `doc/tasks/feature_roadmap.md`; this document describes the design they slot into, not their implementation plans.
+IMPORTANT!!!: This document covers system design — structure, non-obvious decisions, and rationale. It does not restate behavior (see `features.md`) or mirror the code (see the source). KEEP IT THIS WAY!!!
 
 ## 1. Overview
 
@@ -276,12 +276,6 @@ The unifying rules (behavior detailed in `features.md`):
 - **File mutations never lose data.** A failed rename/delete/trash (collision, permission, read-only/offline volume, disk full) leaves the file and model untouched and surfaces a non-blocking notification — no partial model change.
 - **Missing/unplayable files degrade gracefully.** A file that vanishes or won't decode is skipped, pruned from the playlist on the next scan, and playback advances to the next available file. An emptied playable sequence shows the "no files match" state (visual) or returns the channel to Stopped (audio).
 - **Lost folder access re-prompts.** A stale bookmark triggers the relocate-and-refresh flow on the next mutation; persistent inaccessibility surfaces an inline error on the playlist.
-
----
-
-## 13. Accessibility
-
-VoiceOver and macOS accessibility support (semantic fonts/colors, `Button` over `onTapGesture`, accessibility labels/values on rows, chips, panels, sliders, `@ScaledMetric` spacing) is Task 20 in `tasks/feature_roadmap.md`.
 
 ---
 

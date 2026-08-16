@@ -38,6 +38,10 @@ struct ShuTaPlaApp: App {
             self._appState = State(initialValue: nil)
             return
         }
+        // Before the window exists, so it opens in the chosen appearance rather than flashing
+        // the system one first.
+        AppearanceMode.stored().apply()
+
         let schema = Schema(versionedSchema: SchemaV10.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let container: ModelContainer

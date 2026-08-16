@@ -2,10 +2,12 @@
 //  SettingsView.swift
 //  ShuTaPla
 //
-//  Global defaults, opened with Cmd+, via the `Settings` scene. Edits write straight to the
-//  shared `GlobalSettings` singleton, so a change takes effect immediately — the coordinator
-//  reads it live, and new playlists (whose per-playlist overrides are unset) inherit it.
-//  Each playlist can override any of these in its own settings popover (`PlaylistSettingsView`).
+//  Global defaults, opened with Cmd+, via the `Settings` scene. Playback and image edits write
+//  straight to the shared `GlobalSettings` singleton, so a change takes effect immediately — the
+//  coordinator reads it live, and new playlists (whose per-playlist overrides are unset) inherit
+//  it. Each playlist can override those in its own settings popover (`PlaylistSettingsView`).
+//  Appearance has no per-playlist counterpart and is view chrome rather than a playback default,
+//  so it lives in `UserDefaults` under `AppearanceMode.defaultsKey`.
 //
 
 import SwiftUI
@@ -22,10 +24,29 @@ struct SettingsView: View {
     /// Guards the buttons while an operation runs, so a slow sweep can't be re-fired.
     @State private var isWorking = false
 
+    /// The app-wide appearance. The only writer of the setting, which is why applying it needs no
+    /// observer of its own — the `onChange` below is the whole of "apply on change", the launch
+    /// read in `ShuTaPlaApp.init` being the other half.
+    @AppStorage(AppearanceMode.defaultsKey) private var appearance: AppearanceMode = .system
+
     var body: some View {
         @Bindable var settings = appState.globalSettings
 
         Form {
+            Section {
+                Picker("Mode", selection: $appearance) {
+                    ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: appearance) { _, mode in mode.apply() }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("The player stays dark whichever appearance you choose.")
+            }
+
             Section {
                 Picker("Slideshow interval", selection: $settings.defaultSlideshowInterval) {
                     ForEach(AppConstants.slideshowIntervals, id: \.self) { seconds in

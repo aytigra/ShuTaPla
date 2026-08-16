@@ -39,6 +39,7 @@ Each playlist stores:
 
 ### Global settings
 
+- **Appearance** — System / Light / Dark. System (the initial value) follows the Mac's own setting; the other two override it for the app alone. It governs Manager mode, the Welcome screen, and the Settings window; the fullscreen player is always dark, whichever appearance is chosen. Unlike the settings below it, appearance has no per-playlist counterpart.
 - Default slideshow interval (initially 10 s).
 - Default file-position persistence — the fallback for the per-playlist setting when a playlist hasn't overridden it (initially off). See [File-position persistence](#file-position-persistence).
 - Default image fit mode (initially Fit).
