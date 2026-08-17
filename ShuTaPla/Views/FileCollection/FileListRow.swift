@@ -5,12 +5,12 @@
 //  One file row keyed by a file's `PersistentIdentifier`, the row `FileListSurface` builds for both the
 //  Manager file list and the overlay file lists. A single *concrete* (non-generic) view: it resolves
 //  the model inside its own body, draws `FileRowView` + its `Divider`, and applies the tap / context
-//  menu itself. Resolving here rather than in the caller keeps each `PagedList` row a
-//  single view and lets the row observe the model it draws.
+//  menu itself (`.fileActions`). Resolving here rather than in the caller keeps each `PagedList` row
+//  a single view and lets the row observe the model it draws.
 //
 //  The two surfaces differ only in data: `role` picks the selection semantics (Manager's independent
-//  multi-selection vs. the overlay's single current track), and the actions arrive as plain
-//  `(PlaylistFile) -> Void` closures — no generic content parameter.
+//  multi-selection vs. the overlay's single current track), and the surface's `FileActions` arrive as
+//  one value — no generic content parameter.
 //
 
 import SwiftUI
@@ -31,13 +31,9 @@ struct FileListRow: View {
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
     @Binding var draftName: String
-    let onTap: (PlaylistFile) -> Void
     let onCommitRename: (PlaylistFile) -> Void
     let onCancelRename: () -> Void
-    let onRename: (PlaylistFile) -> Void
-    let onRemoveAudio: (PlaylistFile) -> Void
-    let onDownload: (PlaylistFile) -> Void
-    let onDelete: (PlaylistFile) -> Void
+    let actions: FileActions
 
     @Environment(AppState.self) private var appState
 
@@ -58,20 +54,7 @@ struct FileListRow: View {
                 )
                 Divider()
             }
-            // A single tap gesture branching on the event's click count lives in `onTap`;
-            // stacking a `count: 2` gesture would delay the single click by the double-click
-            // interval and make selection feel laggy.
-            .onTapGesture { onTap(file) }
-            .contextMenu {
-                FileContextMenu(
-                    file: file,
-                    playlist: playlist,
-                    onRename: { onRename(file) },
-                    onRemoveAudio: { onRemoveAudio(file) },
-                    onDownload: { onDownload(file) },
-                    onDelete: { onDelete(file) }
-                )
-            }
+            .fileActions(actions, for: file, in: playlist)
         }
     }
 

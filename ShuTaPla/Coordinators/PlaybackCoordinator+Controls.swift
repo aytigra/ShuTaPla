@@ -72,12 +72,18 @@ extension PlaybackCoordinator {
         return min(max(audioCurrentTime / audioDuration, 0), 1)
     }
 
-    /// Seeks the audio channel to `fraction` (0…1, clamped) of its duration. The one place the
-    /// fraction→seconds mapping lives, shared by the inlet and overlay seek bars.
-    func seekAudio(toFraction fraction: Double) {
+    /// Seeks the audio channel to an absolute position. The channel supplies its own playlist —
+    /// the seek bars address the channel, not a playlist — and a seek with nothing loaded is
+    /// dropped rather than reaching the visual channel.
+    func seekAudio(to seconds: TimeInterval) {
         guard let liveAudioPlaylist else { return }
-        let clamped = min(max(fraction, 0), 1)
-        seek(liveAudioPlaylist, to: clamped * audioDuration)
+        seek(liveAudioPlaylist, to: seconds)
+    }
+
+    /// Seeks the audio channel to `fraction` (0…1, clamped) of its duration. The one place the
+    /// fraction→seconds mapping lives, for the inlet's drag-anywhere seek strip.
+    func seekAudio(toFraction fraction: Double) {
+        seekAudio(to: min(max(fraction, 0), 1) * audioDuration)
     }
 
     // MARK: - Volume

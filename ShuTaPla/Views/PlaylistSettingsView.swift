@@ -107,8 +107,7 @@ struct PlaylistSettingsView: View {
                     step: 20
                 )
                 Text("\(Int(width)) px")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .metadataCaption()
             }
         }
     }

@@ -4,9 +4,10 @@
 //
 //  One gallery tile keyed by a file's `PersistentIdentifier`, the cell `GalleryPagedList` builds for
 //  the Manager gallery. The self-resolving twin of `FileListRow`: it resolves the model inside its
-//  own body, draws `GalleryCell`, and applies the tap / context menu itself — so both surfaces are
-//  symmetric "give me an `id` plus action closures" cells. The gallery is Manager-only, so selection
-//  is the Manager's multi-selection and the playback cursor its `currentFileID`.
+//  own body, draws `GalleryCell`, and applies the tap / context menu itself (`.fileActions`) — so
+//  both surfaces take the same thing: an `id` plus a `FileActions`, nothing generic. The gallery is
+//  Manager-only, so selection is the Manager's multi-selection and the playback cursor its
+//  `currentFileID`.
 //
 
 import SwiftUI
@@ -18,13 +19,9 @@ struct FileGalleryCell: View {
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
     @Binding var draftName: String
-    let onTap: (PlaylistFile) -> Void
     let onCommitRename: (PlaylistFile) -> Void
     let onCancelRename: () -> Void
-    let onRename: (PlaylistFile) -> Void
-    let onRemoveAudio: (PlaylistFile) -> Void
-    let onDownload: (PlaylistFile) -> Void
-    let onDelete: (PlaylistFile) -> Void
+    let actions: FileActions
 
     @Environment(AppState.self) private var appState
 
@@ -42,20 +39,7 @@ struct FileGalleryCell: View {
                 onCommitRename: { onCommitRename(file) },
                 onCancelRename: onCancelRename
             )
-            // A single tap gesture branching on the event's click count lives in `onTap`;
-            // stacking a `count: 2` gesture would delay the single click by the double-click
-            // interval and make selection feel laggy.
-            .onTapGesture { onTap(file) }
-            .contextMenu {
-                FileContextMenu(
-                    file: file,
-                    playlist: playlist,
-                    onRename: { onRename(file) },
-                    onRemoveAudio: { onRemoveAudio(file) },
-                    onDownload: { onDownload(file) },
-                    onDelete: { onDelete(file) }
-                )
-            }
+            .fileActions(actions, for: file, in: playlist)
         }
     }
 }

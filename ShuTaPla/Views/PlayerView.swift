@@ -45,7 +45,11 @@ struct PlayerView: View {
             }
 
             if visualHasNoFiles {
-                noFilesPlaceholder
+                // Shown when the active filter excludes every file: the player stays in Player
+                // mode on a placeholder rather than dropping back to Manager.
+                StagePlaceholder("No files match the filter", systemImage: "line.3.horizontal.decrease.circle")
+                    .ignoresSafeArea()
+                    .transition(.opacity)
             }
 
             if let pending = coordinator.visualCloudPendingFile {
@@ -85,52 +89,6 @@ struct PlayerView: View {
         .onChange(of: overlays.isVisualOverlayOpen) { _, open in
             open ? coordinator.haltVisualForOverlay() : coordinator.resumeVisualForOverlay()
         }
-        .alert(
-            "Move to Trash?",
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.playerDeleteFile != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            ),
-            presenting: appState.pendingConfirmation?.playerDeleteFile
-        ) { file in
-            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: { file in
-            Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
-        }
-        .alert(
-            "Remove Audio?",
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.audioStripFiles != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            )
-        ) {
-            Button("Remove Audio", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: {
-            Text("The original is moved to the Trash; playback resumes where it left off.")
-        }
-    }
-
-    /// Shown when the active filter excludes every file: the player stays in Player
-    /// mode on a placeholder rather than dropping back to Manager.
-    private var noFilesPlaceholder: some View {
-        ZStack {
-            Color.black
-            VStack(spacing: 12) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.system(size: 48))
-                Text("No files match the filter")
-                    .font(.headline)
-            }
-            .foregroundStyle(.white.opacity(0.75))
-        }
-        .ignoresSafeArea()
-        .transition(.opacity)
     }
 
     /// Whether the visual playlist's filtered playback sequence is empty. Reading the memoized

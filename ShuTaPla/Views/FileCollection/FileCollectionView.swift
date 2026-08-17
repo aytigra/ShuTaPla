@@ -111,13 +111,9 @@ struct FileCollectionView: View {
             command: scrollCommand,
             renamingID: renamingID,
             draftName: $draftName,
-            onTap: { handleTap($0) },
             onCommitRename: { commitRename($0) },
             onCancelRename: { renamingID = nil },
-            onRename: { beginRename($0) },
-            onRemoveAudio: { appState.requestAudioStrip(targets(for: $0)) },
-            onDownload: { appState.downloadFiles(targets(for: $0)) },
-            onDelete: { confirmDelete(targets(for: $0)) }
+            actions: actions
         )
     }
 
@@ -151,13 +147,9 @@ struct FileCollectionView: View {
                     playlist: playlist,
                     renamingID: renamingID,
                     draftName: $draftName,
-                    onTap: { handleTap($0) },
                     onCommitRename: { commitRename($0) },
                     onCancelRename: { renamingID = nil },
-                    onRename: { beginRename($0) },
-                    onRemoveAudio: { appState.requestAudioStrip(targets(for: $0)) },
-                    onDownload: { appState.downloadFiles(targets(for: $0)) },
-                    onDelete: { confirmDelete(targets(for: $0)) }
+                    actions: actions
                 )
             }
             .id([AnyHashable(playlist.persistentModelID), AnyHashable(grid.columns)])
@@ -187,6 +179,19 @@ struct FileCollectionView: View {
     }
 
     // MARK: - Data
+
+    /// The Manager's per-file interactions, worn by whichever presentation is drawn: a click that
+    /// selects or plays, and menu actions that operate on the clicked file's `targets` — the whole
+    /// selection when the click lands inside it.
+    private var actions: FileActions {
+        FileActions(
+            onTap: { handleTap($0) },
+            onRename: { beginRename($0) },
+            onRemoveAudio: { appState.requestAudioStrip(targets(for: $0)) },
+            onDownload: { appState.downloadFiles(targets(for: $0)) },
+            onDelete: { confirmDelete(targets(for: $0)) }
+        )
+    }
 
     /// The active scope's filtered, sorted file identifiers, derived store-side and resolved
     /// row-by-row by the lazy containers above.
@@ -239,6 +244,6 @@ struct FileCollectionView: View {
     private func commitRename(_ file: PlaylistFile) {
         let name = draftName
         renamingID = nil
-        Task { await appState.renameManagerFile(file, to: name) }
+        Task { await appState.renameFileReportingFailure(file, to: name) }
     }
 }

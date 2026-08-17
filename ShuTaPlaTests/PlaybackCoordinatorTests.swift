@@ -470,6 +470,60 @@ import SwiftData
         #expect(image.preferences.volume == 0.0)
     }
 
+    /// The state behind the player bar's loop toggle: it tints itself from `isVisualLooping`,
+    /// and an image playlist has no timeline to loop, so the control never appears for one.
+    @Test func loopTogglesOnTheVisualVideoChannel() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4", "i.jpg"])
+        let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(video)
+        #expect(!coordinator.isVisualLooping)
+        coordinator.toggleLoop(video)
+        #expect(coordinator.isVisualLooping)
+        coordinator.toggleLoop(video)
+        #expect(!coordinator.isVisualLooping)
+
+        coordinator.play(image)
+        coordinator.toggleLoop(image)
+        #expect(!coordinator.isVisualLooping)
+    }
+
+    /// The audio scrub bars address the *channel*, not a playlist, so the coordinator supplies the
+    /// target itself: with nothing loaded the seek is dropped rather than reaching the other
+    /// channel's engine, and once a track is live it forwards exactly one position.
+    @Test func audioSeekReachesTheLiveChannelOnly() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["a.mp3"])
+        let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
+
+        let recorder = try RecordingSeekEngine()
+        let coordinator = PlaybackCoordinator(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            sequences: PlaybackSequences(modelContext: context),
+            makeVideoEngine: { try AudioPlaybackEngine() },
+            makeAudioEngine: { recorder }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.seekAudio(toFraction: 0.5)
+        #expect(recorder.seekToPositions.isEmpty)
+
+        coordinator.seekAudio(to: 12)
+        #expect(recorder.seekToPositions.isEmpty)
+
+        coordinator.play(audio)
+        coordinator.seekAudio(to: 12)                // the overlay's scrub bar, in seconds
+        coordinator.seekAudio(toFraction: 0.5)       // the inlet's strip; no duration yet, so 0
+        #expect(recorder.seekToPositions == [12, 0])
+    }
+
     @Test func slideshowPreferencesPersist() throws {
         let container = try makeContainer()
         let context = container.mainContext

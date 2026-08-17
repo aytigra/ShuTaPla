@@ -133,20 +133,18 @@ final class HotkeyRouter {
 
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
-    /// Whether a modal confirmation or error alert is up and owns the keyboard. Covers the
-    /// confirmation dialogs (Manager trash, remove-audio, player trash, playlist tag removal,
-    /// saved-search delete, add-playlist media-type choice) and the single-button alerts that report
-    /// a failed or refused operation — for any of them the app-wide monitor must pass `[enter]`/`[esc]`
-    /// through and swallow the rest, or bare keys leak to playback / the file list behind the modal.
-    /// Every modal therefore raises itself through an `AppState` flag listed here: a view-local
-    /// `@State` alert is invisible from here, so the router swallows its `[esc]` (Manager's idle esc
-    /// chain consumes it) and the alert can only be dismissed by clicking its button.
+    /// Whether a modal confirmation or error alert is up and owns the keyboard. Covers the one
+    /// destructive-confirmation alert, the add-playlist media-type choice, and the single-button
+    /// alerts that report a failed or refused operation — for any of them the app-wide monitor must
+    /// pass `[enter]`/`[esc]` through and swallow the rest, or bare keys leak to playback / the file
+    /// list behind the modal. Every modal therefore raises itself through an `AppState` flag listed
+    /// here: a view-local `@State` alert is invisible from here, so the router swallows its `[esc]`
+    /// (Manager's idle esc chain consumes it) and the alert can only be dismissed by clicking its
+    /// button.
     private var hasBlockingConfirmation: Bool {
         guard let appState else { return false }
         return appState.pendingConfirmation != nil
             || appState.errorNotice != nil
-            || appState.playerRenameError != nil
-            || appState.audioRenameError != nil
             || appState.pendingTypeChoice != nil
             || appState.addPlaylistError != nil
             || appState.saveError != nil

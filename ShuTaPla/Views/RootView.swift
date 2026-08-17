@@ -48,6 +48,25 @@ struct RootView: View {
             .environment(appState.preview)
         }
         .environment(overlayManager)
+        // Every destructive confirmation, from one host: the enum allows only one pending at a
+        // time, so one alert presents them all, worded by the enum itself. Hosting them here rather
+        // than at each raising surface is what lets `HotkeyRouter` hold the keyboard for them — and
+        // keeps a confirmation on screen when the panel that raised it goes away under it.
+        .alert(
+            appState.pendingConfirmation?.title ?? "",
+            isPresented: Binding(
+                get: { appState.pendingConfirmation != nil },
+                set: { if !$0 { appState.cancelConfirmation() } }
+            ),
+            presenting: appState.pendingConfirmation
+        ) { pending in
+            Button(pending.confirmLabel, role: .destructive) { appState.confirmConfirmation() }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
+                .keyboardShortcut(.cancelAction)
+        } message: { pending in
+            Text(pending.message)
+        }
         // A persist failure is surfaced app-wide: any mutation surface could have raised it, and
         // `persistAndRefresh` has already rolled the context back to keep the model consistent.
         .alert(

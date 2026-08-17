@@ -10,8 +10,8 @@
 //
 //  The two surfaces differ only in what they feed it: `role` picks the selection semantics (Manager's
 //  independent multi-selection vs. the overlay's single current track), and the row actions arrive as
-//  plain `(PlaylistFile) -> Void` closures. Each owner computes its own `command` (the Manager's
-//  `routeScroll`, the overlay's `scrollTrigger`) and passes it in.
+//  one `FileActions`. Each owner computes its own `command` (the Manager's `routeScroll`, the
+//  overlay's `scrollTrigger`) and passes it in.
 //
 
 import SwiftUI
@@ -28,13 +28,9 @@ struct FileListSurface: View {
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
     @Binding var draftName: String
-    let onTap: (PlaylistFile) -> Void
     let onCommitRename: (PlaylistFile) -> Void
     let onCancelRename: () -> Void
-    let onRename: (PlaylistFile) -> Void
-    let onRemoveAudio: (PlaylistFile) -> Void
-    let onDownload: (PlaylistFile) -> Void
-    let onDelete: (PlaylistFile) -> Void
+    let actions: FileActions
 
     var body: some View {
         PagedList(
@@ -50,13 +46,9 @@ struct FileListSurface: View {
                     role: role,
                     renamingID: renamingID,
                     draftName: $draftName,
-                    onTap: onTap,
                     onCommitRename: onCommitRename,
                     onCancelRename: onCancelRename,
-                    onRename: onRename,
-                    onRemoveAudio: onRemoveAudio,
-                    onDownload: onDownload,
-                    onDelete: onDelete
+                    actions: actions
                 )
             }
         }

@@ -41,8 +41,6 @@ struct LibraryContext {
     let onDeleteFile: (PlaylistFile) -> Void
     /// Strip the audio track from a file; a no-op on channels where it doesn't apply.
     let onRemoveAudio: (PlaylistFile) -> Void
-    /// Surface a rename failure on the channel's error alert.
-    let onRenameError: (String) -> Void
 }
 
 struct LibrarySurface: View {
@@ -146,22 +144,12 @@ struct LibrarySurface: View {
             if let playlist = context.activePlaylist, !context.fileIDs.isEmpty {
                 fileList(playlist)
             } else {
-                emptyFiles
+                CenteredPlaceholder(
+                    context.activePlaylist == nil ? "Nothing Playing" : "No Files",
+                    systemImage: "doc"
+                )
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// A plain centered stack (not `ContentUnavailableView`, which lays out against the
-    /// window and jumps to screen center) so the empty state rides the overlay's slide-in.
-    private var emptyFiles: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "doc")
-                .font(.system(size: 40))
-            Text(context.activePlaylist == nil ? "Nothing Playing" : "No Files")
-                .font(.title3.weight(.semibold))
-        }
-        .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -178,16 +166,18 @@ struct LibrarySurface: View {
             command: fileScrollCommand,
             renamingID: fileRenamingID,
             draftName: $fileDraftName,
-            onTap: { file in
-                guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
-                context.onPlayFile(playlist, file)
-            },
             onCommitRename: { commitFileRename($0) },
             onCancelRename: { fileRenamingID = nil },
-            onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
-            onRemoveAudio: { context.onRemoveAudio($0) },
-            onDownload: { appState.downloadFiles([$0]) },
-            onDelete: { context.onDeleteFile($0) }
+            actions: FileActions(
+                onTap: { file in
+                    guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
+                    context.onPlayFile(playlist, file)
+                },
+                onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
+                onRemoveAudio: { context.onRemoveAudio($0) },
+                onDownload: { appState.downloadFiles([$0]) },
+                onDelete: { context.onDeleteFile($0) }
+            )
         )
         .onChange(of: context.scrollTrigger) { _, trigger in
             guard let index = fileTargetIndex else { return }
@@ -198,7 +188,7 @@ struct LibrarySurface: View {
     private func commitFileRename(_ file: PlaylistFile) {
         let name = fileDraftName
         fileRenamingID = nil
-        Task { if let error = await appState.renameFile(file, to: name) { context.onRenameError(error) } }
+        Task { await appState.renameFileReportingFailure(file, to: name) }
     }
 
     // MARK: - Tag column

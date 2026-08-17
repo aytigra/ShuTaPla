@@ -1093,13 +1093,13 @@ struct AppStateTests {
         #expect(message == expected)
     }
 
-    /// A Manager rename that fails has to raise the app-wide notice, not a message the panel keeps
-    /// to itself: `HotkeyRouter` can only hold the keyboard for a modal it can see on `AppState`
+    /// A rename that fails has to raise the app-wide notice, not a message the list keeps to itself:
+    /// `HotkeyRouter` can only hold the keyboard for a modal it can see on `AppState`
     /// (`errorAlertHoldsKeyboardContext` pins that end), so a view-local alert leaves `[esc]`
     /// swallowed by the Manager's idle chain and every other bare key reaching the file list behind
-    /// it. The overlay renames keep their own channels — their alerts belong to their own windows —
-    /// so this is the Manager entry point's own job, which is why it is a separate call.
-    @Test func aFailedManagerRenameRaisesTheAppWideNotice() async throws {
+    /// it. One channel for the Manager list and both player overlays, so none of them can grow a
+    /// local alert of its own.
+    @Test func aFailedRenameRaisesTheAppWideNotice() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -1114,7 +1114,7 @@ struct AppStateTests {
         stub.renameError = .nameCollision
         let appState = AppState(modelContext: context, fileSystem: stub)
 
-        await appState.renameManagerFile(file, to: "taken.mp4")
+        await appState.renameFileReportingFailure(file, to: "taken.mp4")
 
         #expect(appState.errorNotice?.title == "Couldn't rename")
         #expect(appState.errorNotice?.message == "A file with that name already exists.")

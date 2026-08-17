@@ -34,22 +34,6 @@ struct PlaylistSidebar: View {
         .safeAreaInset(edge: .top) {
             AudioInlet()
         }
-        // The Manager sidebar owns playlist deletion for every scope — visual and audio alike,
-        // since both browse here. The player-mode audio overlay is a pure selector with no delete.
-        .confirmationDialog(
-            "Delete playlist?",
-            isPresented: Binding(get: { appState.pendingConfirmation?.playlistToDelete != nil }, set: { if !$0 { appState.cancelConfirmation() } }),
-            titleVisibility: .visible,
-            presenting: appState.pendingConfirmation?.playlistToDelete
-        ) { playlist in
-            Button("Delete “\(playlist.name)”", role: .destructive) {
-                appState.confirmConfirmation()
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-        } message: { _ in
-            Text("This removes the playlist from Shutapla. The files on disk are not touched.")
-        }
     }
 
     // MARK: - Sections
@@ -109,6 +93,8 @@ struct PlaylistSidebar: View {
             .buttonStyle(.plain)
             .disabled(appState.deletingPlaylistIDs.contains(playlist.id))
             .listRowBackground(isSelectedRow(playlist) ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
+            // The Manager sidebar owns playlist deletion for every scope — visual and audio alike,
+            // since both browse here. The player-mode audio overlay is a pure selector with no delete.
             .contextMenu {
                 Button("Rename") { beginRename(playlist) }
                 Button("Delete", role: .destructive) { appState.requestPlaylistDelete(playlist) }

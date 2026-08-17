@@ -123,16 +123,14 @@ struct FileRowView: View {
             }
             Text(file.fileSizeBytes?.formattedFileSize ?? "")
         }
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .metadataCaption()
         .frame(width: 64, alignment: .trailing)
     }
 
     /// One right-aligned, fixed-width metadata value — empty until its field is cached.
     private func column(_ text: String?, width: CGFloat) -> some View {
         Text(text ?? "")
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .metadataCaption()
             .frame(width: width, alignment: .trailing)
     }
 }

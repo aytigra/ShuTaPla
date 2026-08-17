@@ -4,8 +4,8 @@
 //
 //  The Manager center panel for the active scope: the cache banner, the filter strip, and the file
 //  list. The playlist's name, Play, Reshuffle, and view-mode toggle live in the Manager toolbar.
-//  Owns the delete and remove-audio confirmations the list's interactions raise; a failed
-//  operation reports itself through the app-wide `errorNotice`.
+//  The confirmations the list's interactions raise, and any failure they report, are presented
+//  app-wide from `RootView`.
 //
 
 import SwiftUI
@@ -26,48 +26,6 @@ struct PlaylistCenterView: View {
                 placeholder
             }
         }
-        .alert(
-            deleteTitle,
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.managerDeleteFiles != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            )
-        ) {
-            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        }
-        .alert(
-            audioStripTitle,
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.audioStripFiles != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            )
-        ) {
-            Button("Remove Audio", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: {
-            Text("The original is moved to the Trash.")
-        }
-    }
-
-    private var deleteTitle: String {
-        let files = appState.pendingConfirmation?.managerDeleteFiles ?? []
-        return files.count.pluralized(
-            one: "Move “\(files[0].fileName)” to the Trash?",
-            many: "Move \(files.count) files to the Trash?"
-        )
-    }
-
-    private var audioStripTitle: String {
-        let files = appState.pendingConfirmation?.audioStripFiles ?? []
-        return files.count.pluralized(
-            one: "Remove the audio from “\(files[0].fileName)”?",
-            many: "Remove the audio from \(files.count) files?"
-        )
     }
 
     // MARK: - Center

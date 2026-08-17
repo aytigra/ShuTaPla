@@ -2,10 +2,10 @@
 //  ControlButtonStyle.swift
 //  ShuTaPla
 //
-//  The button style shared by the Player-mode control surfaces (the bottom playback
-//  bar and the audio overlay). Padding gives each glyph a real hit target, and a
-//  rounded fill appears on hover and deepens on press so the controls read as buttons
-//  rather than bare icons.
+//  The button style shared by the player control surfaces — worn by every
+//  `TransportButton` and by the labelled buttons sitting beside them. Padding gives each
+//  glyph a real hit target, and a rounded fill appears on hover and deepens on press so
+//  the controls read as buttons rather than bare icons.
 //
 
 import SwiftUI

@@ -35,17 +35,6 @@ struct PlaylistTagsView: View {
             Divider()
             content
         }
-        .alert(
-            appState.pendingConfirmation?.tagRemovalTag.map { "Remove “\($0)” from every file in this playlist?" } ?? "",
-            isPresented: Binding(get: { appState.pendingConfirmation?.tagRemovalTag != nil }, set: { if !$0 { appState.cancelConfirmation() } })
-        ) {
-            Button("Remove Tag", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: {
-            Text("This renames the files on disk and can't be undone.")
-        }
     }
 
     @ViewBuilder

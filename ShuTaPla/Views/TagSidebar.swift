@@ -25,17 +25,7 @@ struct TagSidebar: View {
                 tagEditing(playlist)
             }
         } else {
-            VStack(spacing: 8) {
-                Image(systemName: "tag")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.secondary)
-                Text("Select a playlist to filter and tag.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            CenteredPlaceholder("Select a playlist to filter and tag.", systemImage: "tag")
         }
     }
 

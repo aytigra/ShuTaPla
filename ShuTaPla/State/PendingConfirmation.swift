@@ -7,12 +7,16 @@
 //  that family's payload — makes "two confirmations pending at once" unrepresentable, where a
 //  bag of parallel per-family optionals could not.
 //
+//  Its wording lives here too, as pure properties over the case: one alert host reads them, so a
+//  family cannot be worded two ways by two presenters, and the phrasing is unit-testable without
+//  a view.
+//
 
 import Foundation
 
-/// Which destructive confirmation, if any, is pending — and its target. Presented by the
-/// matching `.alert` / `.confirmationDialog` host, consulted by `HotkeyRouter` while it owns
-/// the keyboard. At most one can be pending, enforced by the type.
+/// Which destructive confirmation, if any, is pending — and its target. Presented by the single
+/// `RootView` alert host, consulted by `HotkeyRouter` while it owns the keyboard. At most one can
+/// be pending, enforced by the type.
 enum PendingConfirmation {
     /// Trash the given Manager file-list selection.
     case managerDelete([PlaylistFile])
@@ -31,48 +35,6 @@ enum PendingConfirmation {
 }
 
 extension PendingConfirmation {
-    /// The Manager file-list selection this confirmation targets, or `nil` for other kinds.
-    var managerDeleteFiles: [PlaylistFile]? {
-        guard case .managerDelete(let files) = self else { return nil }
-        return files
-    }
-
-    /// The visual-channel file this confirmation targets, or `nil` for other kinds.
-    var playerDeleteFile: PlaylistFile? {
-        guard case .playerDelete(let file) = self else { return nil }
-        return file
-    }
-
-    /// The audio track this confirmation targets, or `nil` for other kinds.
-    var audioDeleteFile: PlaylistFile? {
-        guard case .audioDelete(let file) = self else { return nil }
-        return file
-    }
-
-    /// The videos whose audio this confirmation would strip, or `nil` for other kinds.
-    var audioStripFiles: [PlaylistFile]? {
-        guard case .audioStrip(let files) = self else { return nil }
-        return files
-    }
-
-    /// The tag this confirmation would remove playlist-wide, or `nil` for other kinds.
-    var tagRemovalTag: String? {
-        guard case .tagRemoval(let tag) = self else { return nil }
-        return tag
-    }
-
-    /// The playlist this confirmation would delete, or `nil` for other kinds.
-    var playlistToDelete: Playlist? {
-        guard case .playlistDelete(let playlist) = self else { return nil }
-        return playlist
-    }
-
-    /// The saved search this confirmation would delete, or `nil` for other kinds.
-    var savedSearchToDelete: SavedSearch? {
-        guard case .savedSearchDelete(let search) = self else { return nil }
-        return search
-    }
-
     /// This confirmation with any files a re-scan removed dropped from its payload, or `nil` if
     /// that leaves nothing to confirm — so confirming can't act on (and dereference) a destroyed
     /// model. Non-file confirmations pass through unchanged. Reads only the stored `id`, which a
@@ -99,9 +61,66 @@ extension PendingConfirmation {
     /// confirmation that is already on screen: a playlist-wide tag removal empties a search's filter
     /// and the cascade takes the search. Compares by identity, so nothing is read off the gone rows.
     func pruning(destroyedSearches searches: [SavedSearch]) -> PendingConfirmation? {
-        guard let search = savedSearchToDelete,
+        guard case .savedSearchDelete(let search) = self,
               searches.contains(where: { $0 === search }) else { return self }
         return nil
+    }
+}
+
+extension PendingConfirmation {
+    /// The question the confirmation asks, naming its target — one file by name, several by count.
+    var title: String {
+        switch self {
+        case .managerDelete(let files):
+            files.count.pluralized(
+                one: "Move “\(files[0].fileName)” to the Trash?",
+                many: "Move \(files.count) files to the Trash?"
+            )
+        case .playerDelete(let file), .audioDelete(let file):
+            "Move “\(file.fileName)” to the Trash?"
+        case .audioStrip(let files):
+            files.count.pluralized(
+                one: "Remove the audio from “\(files[0].fileName)”?",
+                many: "Remove the audio from \(files.count) files?"
+            )
+        case .tagRemoval(let tag):
+            "Remove “\(tag)” from every file in this playlist?"
+        case .playlistDelete(let playlist):
+            "Delete the playlist “\(playlist.name)”?"
+        case .savedSearchDelete(let search):
+            "Delete the saved search “\(search.name)”?"
+        }
+    }
+
+    /// What confirming does beyond the obvious — the consequence the title doesn't carry.
+    var message: String {
+        switch self {
+        case .managerDelete(let files):
+            files.count.pluralized(
+                one: "The file is moved to the Trash and removed from this playlist.",
+                many: "The files are moved to the Trash and removed from this playlist."
+            )
+        case .playerDelete, .audioDelete:
+            "The file is moved to the Trash and removed from this playlist."
+        case .audioStrip:
+            "The original is moved to the Trash."
+        case .tagRemoval:
+            "This renames the files on disk and can't be undone."
+        case .playlistDelete:
+            "This removes the playlist from Shutapla. The files on disk are not touched."
+        case .savedSearchDelete:
+            "Its tag lists go with it, leaving the playlist unfiltered if it is the one applied."
+        }
+    }
+
+    /// The label on the destructive button — the act, not "OK".
+    var confirmLabel: String {
+        switch self {
+        case .managerDelete, .playerDelete, .audioDelete: "Move to Trash"
+        case .audioStrip: "Remove Audio"
+        case .tagRemoval: "Remove Tag"
+        case .playlistDelete, .savedSearchDelete: "Delete"
+        }
     }
 }
 

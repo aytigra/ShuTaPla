@@ -62,23 +62,6 @@ struct FilterStrip: View {
                 .offset(y: rowHeight)
             }
         }
-        // Hosted here, beside the two controls that raise it — only one strip is ever mounted, since
-        // the Manager carries no overlay and the two overlays that carry one are mutually exclusive.
-        .alert(
-            appState.pendingConfirmation?.savedSearchToDelete
-                .map { "Delete the saved search “\($0.name)”?" } ?? "",
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.savedSearchToDelete != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            )
-        ) {
-            Button("Delete", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: {
-            Text("Its tag lists go with it, leaving the playlist unfiltered if it is the one applied.")
-        }
     }
 
     // MARK: - Collapsed row

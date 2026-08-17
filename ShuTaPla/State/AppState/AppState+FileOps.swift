@@ -28,12 +28,13 @@ extension AppState {
         } ?? nil
     }
 
-    /// Renames a file from the Manager file list, reporting a failure through the app-wide notice.
-    /// The report belongs here rather than in the panel: the `HotkeyRouter` can only hold the
-    /// keyboard for a modal it can see on `AppState`, so a view-local alert would leave `[esc]`
-    /// swallowed by the Manager's idle chain and every other bare key reaching the list behind it.
-    /// The overlay renames keep their own channels — each of those alerts belongs to its own window.
-    func renameManagerFile(_ file: PlaylistFile, to newName: String) async {
+    /// Renames a file from a file list — the Manager's or either player overlay's — reporting a
+    /// failure through the app-wide notice. The report belongs here rather than in the list: the
+    /// `HotkeyRouter` can only hold the keyboard for a modal it can see on `AppState`, so a
+    /// view-local alert would leave `[esc]` swallowed by the Manager's idle chain and every other
+    /// bare key reaching the list behind it. The plain `renameFile` above stays for the caller that
+    /// words its own report.
+    func renameFileReportingFailure(_ file: PlaylistFile, to newName: String) async {
         if let error = await renameFile(file, to: newName) {
             errorNotice = ErrorNotice(title: "Couldn't rename", message: error)
         }

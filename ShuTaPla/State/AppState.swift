@@ -183,16 +183,6 @@ final class AppState {
     /// spinner while the remux runs.
     var strippingFileIDs: Set<UUID> = []
 
-    /// A user-facing message when a rename from the Visual Overlay fails, surfaced by
-    /// that overlay's alert. Not a confirmation outcome, so it stays its own channel; on
-    /// `AppState` (not view-local) so the `HotkeyRouter` can register it as a blocking modal
-    /// and stop bare keys leaking to playback behind it.
-    var playerRenameError: String?
-
-    /// A user-facing message when an extended-overlay audio rename fails — its own channel
-    /// for the same reason as `playerRenameError`.
-    var audioRenameError: String?
-
     /// Folders currently being scanned into new playlists, shown in the sidebar as
     /// transient spinner rows so a large import gives immediate feedback.
     var importingPlaylists: [ImportingPlaylist] = []

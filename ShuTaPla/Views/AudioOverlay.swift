@@ -26,7 +26,7 @@ struct AudioOverlay: View {
     private var activePlaylist: Playlist? { appState.audioChannelPlaylist }
 
     /// The audio channel's wiring for the shared library surface: lists audio playlists,
-    /// plays on select, and routes deletes/rename errors to the audio alerts the overlay hosts.
+    /// plays on select, and routes a row's delete to the audio-delete confirmation.
     private var audioContext: LibraryContext {
         LibraryContext(
             mediaType: .audio,
@@ -39,8 +39,7 @@ struct AudioOverlay: View {
             onAddPlaylist: { appState.isImportingPlaylist = true },
             onPlayFile: { coordinator.playNow($0, startingAt: $1) },
             onDeleteFile: { appState.requestAudioDelete($0) },
-            onRemoveAudio: { _ in },
-            onRenameError: { appState.audioRenameError = $0 }
+            onRemoveAudio: { _ in }
         )
     }
 
@@ -59,29 +58,6 @@ struct AudioOverlay: View {
         // unfocused anywhere, not just by tabbing away.
         .contentShape(Rectangle())
         .onTapGesture { if isExpanded { NSApp.keyWindow?.makeFirstResponder(nil) } }
-        .alert(
-            "Move to Trash?",
-            isPresented: Binding(
-                get: { appState.pendingConfirmation?.audioDeleteFile != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            ),
-            presenting: appState.pendingConfirmation?.audioDeleteFile
-        ) { file in
-            Button("Move to Trash", role: .destructive) { appState.confirmConfirmation() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { appState.cancelConfirmation() }
-                .keyboardShortcut(.cancelAction)
-        } message: { file in
-            Text("“\(file.fileName)” is moved to the Trash and removed from this playlist.")
-        }
-        .alert(
-            "Couldn't complete",
-            isPresented: Binding(get: { appState.audioRenameError != nil }, set: { if !$0 { appState.audioRenameError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.audioRenameError = nil }
-        } message: {
-            Text(appState.audioRenameError ?? "")
-        }
     }
 
     // MARK: - Compact bar
@@ -98,7 +74,11 @@ struct AudioOverlay: View {
             if let audio = activePlaylist {
                 HStack(spacing: 12) {
                     AudioTransport(playlist: audio)
-                    scrubber
+                    TimelineScrubber(
+                        position: coordinator.audioCurrentTime,
+                        duration: coordinator.audioDuration,
+                        width: 160
+                    ) { coordinator.seekAudio(to: $0) }
                 }
                 .fixedSize()
             }
@@ -130,42 +110,17 @@ struct AudioOverlay: View {
         }
     }
 
-    private var scrubber: some View {
-        HStack(spacing: 8) {
-            Text(coordinator.audioCurrentTime.formattedDuration)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Slider(value: Binding(
-                get: { coordinator.audioProgressFraction },
-                set: { coordinator.seekAudio(toFraction: $0) }
-            ), in: 0...1)
-            .frame(width: 160)
-            .disabled(!coordinator.audioIsSeekable)
-            Text(coordinator.audioDuration.formattedDuration)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var trailingControls: some View {
         HStack(spacing: 4) {
-            Button {
-                isExpanded ? overlays.collapseAudioToCompact() : overlays.expandAudioToExtended()
-            } label: {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: 26, height: 22)
-            }
-            .buttonStyle(ControlButtonStyle())
-            .help(isExpanded ? "Collapse audio" : "Expand audio")
+            TransportButton(
+                title: isExpanded ? "Collapse audio" : "Expand audio",
+                systemImage: isExpanded ? "chevron.up" : "chevron.down",
+                size: .chrome
+            ) { isExpanded ? overlays.collapseAudioToCompact() : overlays.expandAudioToExtended() }
 
-            Button { overlays.closeAudioOverlay() } label: {
-                Image(systemName: "xmark")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: 26, height: 22)
+            TransportButton(title: "Close audio", systemImage: "xmark", size: .chrome) {
+                overlays.closeAudioOverlay()
             }
-            .buttonStyle(ControlButtonStyle())
-            .help("Close audio")
         }
     }
 

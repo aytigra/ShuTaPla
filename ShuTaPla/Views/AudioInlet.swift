@@ -41,68 +41,38 @@ struct AudioTransport: View {
             CloudStatusBadge(status: appState.currentAudioFile?.cloudStatus ?? .local)
                 .foregroundStyle(.secondary)
             if isLive {
-                controlButton("backward.fill") { coordinator.previous(playlist) }
+                TransportButton(title: "Previous track", systemImage: "backward.fill") {
+                    coordinator.previous(playlist)
+                }
             }
-            controlButton(playlist.playbackState == .playing ? "pause.fill" : "play.fill") {
-                coordinator.playOrTogglePause(playlist)
-            }
+            TransportButton(
+                title: isPlaying ? "Pause" : "Play",
+                systemImage: isPlaying ? "pause.fill" : "play.fill"
+            ) { coordinator.playOrTogglePause(playlist) }
             // A filter that matches nothing leaves no track to start on, so Play would be a no-op —
             // whereas Pause always applies, since a playing channel has a current file by definition.
-            .disabled(playlist.playbackState != .playing && playlist.sequenceEmpty)
+            .disabled(!isPlaying && playlist.sequenceEmpty)
             if isLive {
-                controlButton("stop.fill") { coordinator.stop(playlist) }
-                controlButton("forward.fill") { coordinator.next(playlist) }
-                loopButton
+                TransportButton(title: "Stop", systemImage: "stop.fill") { coordinator.stop(playlist) }
+                TransportButton(title: "Next track", systemImage: "forward.fill") { coordinator.next(playlist) }
+                TransportButton(
+                    title: "Loop current track", systemImage: "repeat",
+                    isActive: coordinator.isAudioLooping
+                ) { coordinator.toggleLoop(playlist) }
             }
             volumeButton
         }
     }
 
-    private var loopButton: some View {
-        Button { coordinator.toggleLoop(playlist) } label: {
-            Image(systemName: "repeat")
-                .foregroundStyle(coordinator.isAudioLooping ? Color.accentColor : .primary)
-        }
-        .buttonStyle(ControlButtonStyle())
-        .help("Loop current track")
-    }
+    private var isPlaying: Bool { playlist.playbackState == .playing }
 
     private var volumeButton: some View {
-        Button { showingVolume.toggle() } label: {
-            Image(systemName: "speaker.wave.2.fill")
-        }
-        .buttonStyle(ControlButtonStyle())
-        .help("Volume")
-        .popover(isPresented: $showingVolume, arrowEdge: .bottom) {
-            AudioVolumeControl(playlist: playlist)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-        }
-    }
-
-    private func controlButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-        }
-        .buttonStyle(ControlButtonStyle())
-    }
-}
-
-/// The per-playlist volume slider, shared by the sidebar transport's volume popover and the
-/// player-mode audio overlay.
-struct AudioVolumeControl: View {
-    let playlist: Playlist
-    @Environment(PlaybackCoordinator.self) private var coordinator
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.fill").font(.caption).foregroundStyle(.secondary)
-            Slider(value: Binding(
-                get: { coordinator.playbackVolume(for: playlist) },
-                set: { coordinator.setVolume(playlist, to: $0) }
-            ), in: 0...1)
-            .frame(width: 90)
-        }
+        TransportButton(title: "Volume", systemImage: "speaker.wave.2.fill") { showingVolume.toggle() }
+            .popover(isPresented: $showingVolume, arrowEdge: .bottom) {
+                VolumeControl(playlist: playlist, width: 90)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
     }
 }
 

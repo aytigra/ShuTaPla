@@ -30,19 +30,11 @@ struct VisualOverlay: View {
         // anywhere, not just by tabbing to another control.
         .contentShape(Rectangle())
         .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
-        .alert(
-            "Couldn't complete",
-            isPresented: Binding(get: { appState.playerRenameError != nil }, set: { if !$0 { appState.playerRenameError = nil } })
-        ) {
-            Button("OK", role: .cancel) { appState.playerRenameError = nil }
-        } message: {
-            Text(appState.playerRenameError ?? "")
-        }
     }
 
     /// The visual channel's wiring for the shared library surface: lists the active type's
     /// playlists, switches the visual channel on select, and routes file actions to the
-    /// player's delete / strip-audio / rename-error paths.
+    /// player's delete / strip-audio paths.
     private var visualContext: LibraryContext {
         LibraryContext(
             mediaType: playlist.mediaType,
@@ -55,8 +47,7 @@ struct VisualOverlay: View {
             onAddPlaylist: { appState.isImportingPlaylist = true },
             onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeVisualOverlay() },
             onDeleteFile: { appState.requestPlayerDelete($0) },
-            onRemoveAudio: { appState.requestAudioStrip([$0]) },
-            onRenameError: { appState.playerRenameError = $0 }
+            onRemoveAudio: { appState.requestAudioStrip([$0]) }
         )
     }
 
