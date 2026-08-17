@@ -107,7 +107,7 @@ extension PendingConfirmation {
         case .tagRemoval:
             "This renames the files on disk and can't be undone."
         case .playlistDelete:
-            "This removes the playlist from Shutapla. The files on disk are not touched."
+            "This removes the playlist from \(AppConstants.appName). The files on disk are not touched."
         case .savedSearchDelete:
             "Its tag lists go with it, leaving the playlist unfiltered if it is the one applied."
         }

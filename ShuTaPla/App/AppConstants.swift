@@ -9,6 +9,12 @@
 import Foundation
 
 nonisolated enum AppConstants {
+    /// The app's user-facing name — `PRODUCT_NAME`, which differs from the target, module, and
+    /// bundle identifier (`ShuTaPla`). Every string that speaks the name to the user takes it from
+    /// here: the Welcome heading, the sentences that name the app, and the toolbar title standing in
+    /// for a playlist when none is selected.
+    static let appName = "Shutapla"
+
     static let videoExtensions: Set<String> = ["mp4", "webm", "mov", "avi", "mkv", "m4v"]
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "jxl", "gif", "heic", "heif", "webp", "tiff", "bmp", "avif"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "aiff", "wma"]

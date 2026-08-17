@@ -79,6 +79,19 @@ nonisolated enum SidebarToolbarLayout {
     /// need the inset a system item gets from its own bezel.
     static let toolbarCapsuleInset: CGFloat = 6
 
+    /// What holds the title off whatever precedes it — the sidebar divider while the sidebar is
+    /// open, the `+` once it collapses.
+    ///
+    /// Carried by the title string rather than by a spacer item, because a toolbar item brings its
+    /// own inter-item spacing: an empty item reads as roughly 20pt of gap even at zero width, which
+    /// is already more than the title wants. A leading space is the only inset finer than that, and
+    /// it costs nothing to measure — the toolbar sizes a title-only item to whatever it holds. An
+    /// en space rather than a plain one, for its half-em width.
+    static let titleLeadingPad = "\u{2002}"
+
+    /// The title as its toolbar item carries it.
+    static func toolbarTitle(for name: String) -> String { titleLeadingPad + name }
+
     /// The Manager toolbar's item order. The sidebar's own controls appear only while the sidebar is
     /// collapsed, and then directly after the tracking separator — ahead of it they would be laid
     /// out inside the sidebar region, whose budget is zero in exactly that state, and the toolbar

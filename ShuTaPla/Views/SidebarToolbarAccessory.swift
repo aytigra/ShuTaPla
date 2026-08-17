@@ -57,7 +57,9 @@ final class SidebarToolbarAccessory: NSTitlebarAccessoryViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    @objc private func splitViewDidResizeSubviews() { updateGeometry() }
+    @objc private func splitViewDidResizeSubviews() {
+        updateGeometry()
+    }
 
     /// Resizes the container to the space the sidebar leaves and re-derives the sidebar's minimum
     /// thickness, both keyed on the container's own origin — which the traffic lights set, and which

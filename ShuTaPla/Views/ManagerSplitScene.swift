@@ -150,9 +150,16 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
     private weak var hostWindow: NSWindow?
     private var sidebarCollapseObservation: NSKeyValueObservation?
     private var inspectorCollapseObservation: NSKeyValueObservation?
+    /// Armed here, in `init`, so it is tracking the managed playlist long before the toolbar asks
+    /// for the item it writes to.
+    private let titleBinding: ToolbarTitleBinding
 
     init(env: ManagerEnv) {
         self.env = env
+        // The window's center title: the managed playlist's name, the app's when nothing is selected.
+        titleBinding = ToolbarTitleBinding { [appState = env.appState] in
+            SidebarToolbarLayout.toolbarTitle(for: appState.managedPlaylist?.name ?? AppConstants.appName)
+        }
 
         // Each pane fills its column: opting out of hosting-content sizing drops the intrinsic-width
         // constraint that would otherwise pin a pane (e.g. the audio placeholder) to its content's
@@ -439,9 +446,17 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         case .trailingSeparator:
             return NSTrackingSeparatorToolbarItem(identifier: .trailingSeparator, splitView: splitView, dividerIndex: 1)
         case .title:
-            // The title yields first when space is tight, and reads as a plain label, not a control.
-            let item = hosting(itemIdentifier, label: "Playlist", visibility: .low) { ManagerTitleLabel() }
+            // Title-only, deliberately without a custom view: a toolbar item sizes its own title,
+            // while it never re-measures a custom view whose content changes width. A hosted label
+            // therefore kept the *previous* playlist's width until some unrelated event — a divider
+            // drag, a window resize, the next selection — forced a toolbar layout pass, so a longer
+            // name rendered truncated to a few letters for as long as that took.
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Playlist"
+            // Yields first when space is tight, and reads as a plain label, not a control.
+            item.visibilityPriority = .low
             item.isBordered = false
+            titleBinding.item = item
             return item
         case .centerActions:
             return hosting(itemIdentifier, label: "Actions", visibility: .high) { CenterActionsBar() }
@@ -495,19 +510,6 @@ nonisolated extension NSToolbarItem.Identifier {
 }
 
 // MARK: - Toolbar controls
-
-/// The current playlist's name, the window's center title. Placeholder when nothing is selected.
-private struct ManagerTitleLabel: View {
-    @Environment(AppState.self) private var appState
-
-    var body: some View {
-        Text(appState.managedPlaylist?.name ?? "Shutapla")
-            .font(.headline)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: 280)
-    }
-}
 
 /// The active scope's playback actions, bounded to the center region: visual gets Play · Reshuffle ·
 /// List/Gallery · Settings; audio gets Reshuffle · Settings. Empty when nothing is selected.

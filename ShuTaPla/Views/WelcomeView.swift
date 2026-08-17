@@ -20,7 +20,7 @@ struct WelcomeView: View {
                 .symbolRenderingMode(.hierarchical)
 
             VStack(spacing: 8) {
-                Text("Welcome to Shutapla")
+                Text("Welcome to \(AppConstants.appName)")
                     .font(.largeTitle.weight(.semibold))
                 Text("Add a folder of videos, images, or audio to get started.")
                     .font(.title3)

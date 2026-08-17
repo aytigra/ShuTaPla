@@ -189,11 +189,34 @@ import AppKit
         #expect(rest == open)
     }
 
+    @Test(arguments: [false, true])
+    func aCollapsedOnlyIdentifierNeverRepeats(_ sidebarCollapsed: Bool) {
+        // The toolbar sync locates these with `firstIndex(of:)`, so a second occurrence anywhere in
+        // the order would be the one it inserted or removed. `.space` is the standing temptation:
+        // it is the obvious way to pad any other item, and using it to inset the title would have
+        // the sync strip the space that keeps the scope tabs and the `+` in two capsules.
+        let items = identifiers(sidebarCollapsed: sidebarCollapsed)
+        for identifier in SidebarToolbarLayout.collapsedOnlyIdentifiers {
+            #expect(items.filter { $0 == identifier }.count <= 1)
+        }
+    }
+
     @Test func theOpenOrderHoldsNoneOfTheCollapsedOnlyItems() {
         let open = identifiers(sidebarCollapsed: false)
         for identifier in SidebarToolbarLayout.collapsedOnlyIdentifiers {
             #expect(!open.contains(identifier))
         }
+    }
+}
+
+/// The title's inset, which the string carries because no toolbar item is narrow enough to.
+@Suite struct ManagerToolbarTitleTests {
+    @Test(arguments: ["Porrisen", "MESA", "4K", ""])
+    func theNameSurvivesThePadIntact(_ name: String) {
+        let title = SidebarToolbarLayout.toolbarTitle(for: name)
+        #expect(title.hasSuffix(name))
+        #expect(title.hasPrefix(SidebarToolbarLayout.titleLeadingPad))
+        #expect(title.count == name.count + 1)
     }
 }
 
