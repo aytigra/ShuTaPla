@@ -18,7 +18,10 @@ import SwiftData
 
     // MARK: - Helpers
 
-    /// A libavfilter sine tone of the given length, loadable by mpv with no file.
+    /// A libavfilter sine tone of the given length, loadable by mpv with no file. Give it a length
+    /// that outlasts everything the test then waits for: the client runs with `keep-open=yes`, so
+    /// reaching the end pauses mpv, which arrives as `pausedChanged(true)` and clears `isPlaying`.
+    /// A tone that can expire mid-test turns a slow host into a failure about playback state.
     private func sine(_ seconds: Int) -> String {
         "av://lavfi:sine=frequency=440:duration=\(seconds)"
     }
@@ -31,6 +34,12 @@ import SwiftData
 
     /// Polls `condition` on the main actor until it holds or `timeout` elapses,
     /// yielding between checks so the engine's event task can make progress.
+    ///
+    /// For state that only mpv's event stream can deliver, where there is nothing to await. Never
+    /// reach for it when the awaited work has a handle — awaiting that (the image engine's
+    /// `loadTask`) has no budget to overrun, whereas this expires on a contended main actor even
+    /// when the work itself is fine: the deadline is wall-clock, and the final re-check races the
+    /// completion it is looking for, both being main-actor jobs.
     private func poll(timeout: Duration, _ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
@@ -94,7 +103,7 @@ import SwiftData
         let engine = try makeEngine()
         defer { engine.shutdown() }
 
-        engine.load(nil, resource: sine(5))
+        engine.load(nil, resource: sine(60))
 
         let settled = await poll(timeout: .seconds(10)) { engine.duration > 0 }
         #expect(settled)
@@ -695,7 +704,9 @@ import SwiftData
         engine.load(nil, at: url)
 
         #expect(engine.transform == .identity)   // reset synchronously on load
-        #expect(await poll(timeout: .seconds(5)) { engine.currentImage != nil })
+
+        await engine.loadTask?.value
+        #expect(engine.currentImage != nil)
     }
 
     @Test func changingFitModeResetsTransform() {

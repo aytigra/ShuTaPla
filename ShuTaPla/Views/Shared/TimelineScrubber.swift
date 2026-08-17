@@ -4,9 +4,10 @@
 //
 //  The seek bar both timeline channels wear — the player's bottom bar for video, the audio
 //  overlay's compact bar for the current track: elapsed time, a draggable track, total time.
-//  It scrubs in absolute seconds and reports where the user let go; clamping the knob and
-//  disabling itself on a channel with no timeline yet are its own business, so a caller only
-//  hands it a position, a duration, and somewhere to seek.
+//  It scrubs in absolute seconds and seeks continuously, reporting every position the knob
+//  passes through rather than only where the drag ends; clamping the knob and disabling itself
+//  on a channel with no timeline yet are its own business, so a caller only hands it a position,
+//  a duration, and somewhere to seek.
 //
 
 import SwiftUI

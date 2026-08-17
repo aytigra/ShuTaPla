@@ -2148,6 +2148,33 @@ struct AppStateTests {
         #expect(appState.pendingConfirmation?.savedSearchToDelete === search)
     }
 
+    /// The saved-search family is the only one `confirmConfirmation` runs inline, so it is the only
+    /// one that dismisses the confirmation and reports a failure in the same update: the delete is a
+    /// store edit, and a failed persist surfaces through `saveError` rather than the `errorNotice`
+    /// the task-backed families use. `RootView` hosts both alerts, and hands the second one straight
+    /// over. Driven through the injectable `persist` seam, since the in-memory store's own `save`
+    /// never throws.
+    @Test func aFailedSavedSearchDeleteDismissesTheConfirmationAndSurfacesTheSaveError() throws {
+        struct SaveFailed: Error {}
+        let container = try makeContainer()
+        let context = container.mainContext
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        context.insert(playlist)
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult),
+            persist: { throw SaveFailed() }
+        )
+        defer { appState.coordinator.shutdown() }
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+
+        appState.requestSavedSearchDelete(search)
+        appState.confirmConfirmation()
+
+        #expect(appState.pendingConfirmation == nil)
+        #expect(appState.saveError != nil)
+    }
+
     @Test func confirmPlayerDeleteSurfacesFailureAndKeepsFile() async throws {
         let container = try makeContainer()
         let context = container.mainContext

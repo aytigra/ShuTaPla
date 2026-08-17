@@ -97,7 +97,11 @@ final class ImagePlaybackEngine: SourceNavigating {
     /// view reads `cloudLoad.pendingFile` to show the downloading placeholder.
     let cloudLoad = CloudLoadGate()
 
-    private var loadTask: Task<Void, Never>?
+    /// The decode in flight, or `nil` before the first load. Readable so a test can await the
+    /// decode itself rather than poll for its result: the decode's completion and a poller's own
+    /// resumption are both main-actor jobs, so on a contended main actor either can run first and
+    /// a wall-clock budget expires with nothing wrong but the scheduling.
+    private(set) var loadTask: Task<Void, Never>?
     private var slideshowTask: Task<Void, Never>?
 
     /// The sink the engine routes its decode-determined HDR finding through — the image half of the

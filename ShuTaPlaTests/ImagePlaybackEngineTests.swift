@@ -34,17 +34,6 @@ import UniformTypeIdentifiers
         return (container, file)
     }
 
-    /// Polls `condition` on the main actor until it holds or `timeout` elapses, yielding between
-    /// checks so the engine's off-main decode can land.
-    private func poll(timeout: Duration, _ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return condition()
-    }
-
     /// Writes a tiny SDR PNG (device RGB, no HDR range) to a temp file.
     private func writeSDRImage() throws -> URL {
         let space = CGColorSpaceCreateDeviceRGB()
@@ -85,8 +74,8 @@ import UniformTypeIdentifiers
         defer { engine.stop() }
 
         engine.load(file, at: url)
-        #expect(await poll(timeout: .seconds(10)) { engine.currentImage != nil })
-        #expect(await poll(timeout: .seconds(5)) { file.isHDR != nil })
+        await engine.loadTask?.value
+        #expect(engine.currentImage != nil)
         #expect(file.isHDR == true)
     }
 
@@ -100,8 +89,8 @@ import UniformTypeIdentifiers
         defer { engine.stop() }
 
         engine.load(file, at: url)
-        #expect(await poll(timeout: .seconds(10)) { engine.currentImage != nil })
-        #expect(await poll(timeout: .seconds(5)) { file.isHDR != nil })
+        await engine.loadTask?.value
+        #expect(engine.currentImage != nil)
         #expect(file.isHDR == false)
     }
 }

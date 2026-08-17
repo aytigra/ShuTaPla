@@ -9,7 +9,9 @@ both rename-error channels are gone into `errorNotice`. D3 ✅ — one `Transpor
 eleven icon controls. D4 ✅ — one `TimelineScrubber` behind both seek bars. D5 ✅ — one `VolumeControl`
 behind both volume sliders, closing step 2. D6 ✅ — one `.fileActions` behind row and cell, closing
 step 3. D7 ✅ — one `.metadataCaption()`. D8 ✅ — `CenteredPlaceholder` and `StagePlaceholder`, closing
-step 4. Step 5 ✅ — both conventions are in CLAUDE.md. **Task complete.**
+step 4. Step 5 ✅ — both conventions are in CLAUDE.md. All eight folds are in.
+The branch review below is closed too: R1 refuted, R2 fixed, R3 (two flaky engine tests) fixed.
+**Task complete.**
 
 Wording calls settled while folding, since one host means one phrasing per family:
 - a single-file delete is titled by name in every context (`Move “a.mp4” to the Trash?`), so the
@@ -253,3 +255,96 @@ moves: confirm `AppStateTests` / `HotkeyRouterTests` cover the confirmation requ
 paths and `hasBlockingConfirmation`, and `PlaybackCoordinatorTests` covers the transport/volume/seek
 paths, adding any missing case first. The new `PendingConfirmation` wording extension gets its own
 suite, written first.
+
+---
+
+## Review (post-D8, branch `dedup-views` vs `main`)
+
+Full-diff review over the 1,700-line source diff plus the surrounding files. The build is clean and
+the navigator carries no new warnings (two pre-existing: a QoS-inversion remark in
+`ThumbnailServiceTests`, and "Update to recommended settings").
+
+Behaviour-preservation checks that came back clean: `TimelineScrubber`'s `.disabled(duration <= 0)`
+matches both old conditions; `seekAudio(toFraction:)` still guards `liveAudioPlaylist` (the guard
+moved into `seekAudio(to:)`); `.disabled(!isPlaying && playlist.sequenceEmpty)`, `showsPlayPause` and
+the flattened video-row branch are logically identical; `pluralized` is `@autoclosure`, so the
+`files[0]` in `PendingConfirmation.title` never evaluates on the plural branch; `pruning(
+destroyedSearches:)` as a direct `case` match is equivalent; no stale references to the removed
+`FileContextMenu` / `renameManagerFile` / `onRenameError` / `playerRenameError` / `audioRenameError`
+or the moved payload accessors survive in app code or `doc/`.
+
+Consolidating `audioDelete` onto `RootView` incidentally closed a real prior hole:
+`requestDeletePlayingAudioFile()` could set `pendingConfirmation` while `AudioOverlay` — its only
+host — was unmounted, leaving `hasBlockingConfirmation` true with no visible alert.
+
+### R1 · The synchronous `savedSearchDelete` branch can raise two alerts in one update
+
+**Status: REFUTED — no code change. Closed.**
+
+`confirmConfirmation()` handles `.savedSearchDelete` synchronously
+(`AppState+Confirmations.swift:134` → `deleteSavedSearch` → `persistAndRefresh()`), and
+`persistAndRefresh` sets `saveError` on a failed save (`AppState.swift:260`). So on a failing save
+that one branch clears `pendingConfirmation` and sets `saveError` inside a single SwiftUI update —
+and both `.alert`s now hang off the same `RootView` body (lines 55 and 72). The other six families go
+through `runConfirmation`'s `Task`, so their confirmation is fully dismissed before any error lands;
+before D1 the saved-search confirmation lived on `FilterStrip`, a different host, so the two alerts
+never shared a presenter either.
+
+The finding rested on two claims. The first holds; the second — the one that made it a bug — does not.
+
+1. **State: confirmed.** `aFailedSavedSearchDeleteDismissesTheConfirmationAndSurfacesTheSaveError`
+   (driven through the injectable `persist` seam) shows the one call clearing `pendingConfirmation`
+   and setting `saveError`. Kept, as the saved-search confirm path had no failure coverage at all —
+   and it is the only family whose failure lands on `saveError` rather than `errorNotice`.
+2. **Presentation: refuted.** The claim was that SwiftUI drops an alert raised in the same update
+   that dismisses a sibling on the same host, leaving its `isPresented` stuck true — and with it
+   `hasBlockingConfirmation`, so the app-wide monitor would swallow every bare key with no modal on
+   screen. Observed instead in a standalone AppKit-hosted harness reproducing this exact shape (a
+   container view with children and an `.overlay`, carrying the `presenting:` confirmation alert
+   followed by the two single-button error alerts; the destructive button's action clears the
+   pending case and sets `saveError`, and the button is clicked for real rather than simulated):
+   the confirmation panel is replaced by the save-error panel, correctly worded. The stacking
+   limitation the finding assumed is the pre-iOS-15 `.alert` API's; the current API hands the second
+   alert straight over.
+
+So the synchronous branch stays as it is, and no ordering workaround is warranted. What the review
+was right about is narrower and already documented in `confirmConfirmation`: `savedSearchDelete` is
+the one family with no file work to own, which is why it doesn't go through `runConfirmation`.
+
+### R2 · `TimelineScrubber`'s header misdescribes when the seek fires
+
+**Status: fixed.**
+
+The header said the scrubber "reports where the user let go", but `seek` is the `Slider` binding's
+`set:` and fires on every value change during the drag. Runtime behaviour matched both old call
+sites, so this was never a regression — it was a description that would mislead anyone later adding
+drag-commit or debounce behaviour on the strength of it. The header now says the seek is continuous.
+Comment only: no code, and so no test, changed.
+
+### R3 · Two flaky `PlaybackEngineTests` (found by the review's own suite runs)
+
+**Status: fixed. Both were the tests' own timing assumptions, not product bugs.**
+
+Each was reproduced against the unchanged code before anything was touched, and each turned out to
+have a different cause:
+
+1. `loadDeliversStateThroughEventStream` waited up to 10s on a **5-second** tone. The client runs
+   with `keep-open=yes`, so reaching the end pauses mpv — arriving as `pausedChanged(true)`, which
+   clears `isPlaying`. A probe on a 1s tone reproduced the exact reported failure
+   (`isPlaying → false`, `currentTime` pinned at the end). The tone is now 60s, and the hazard is
+   written on the `sine` helper so every caller sees it.
+2. `loadPublishesImageAtIdentityTransform` polled 5s for `currentImage`. Cooperative-pool
+   starvation was tried first as the cause and **refuted** — the decode lands fine with the pool
+   saturated. The real mechanism is the main actor: the decode's completion and the poll's own
+   resumption are both main-actor jobs, so when something else holds the main actor past the
+   deadline, `poll`'s final re-check can run first and report failure with nothing wrong. A 6s
+   main-actor block reproduces it every time.
+
+The fix for (2) is to stop polling for something that can be awaited: `ImagePlaybackEngine.loadTask`
+is now readable, and the four decode waits (one here, two in `ImagePlaybackEngineTests`, whose
+`isHDR` assertions the same task settles) await it instead. An await has no budget to overrun. That
+retired `ImagePlaybackEngineTests`' copy of the `poll` helper, and the one left in
+`PlaybackEngineTests` now says what it is for: mpv event-stream state, where there is no handle to
+await.
+
+Full suite green at 984/984 — the first run with no failures at all.
