@@ -42,7 +42,7 @@ struct ManagerSelectionPreview: View {
 
     var body: some View {
         content
-            .frame(maxWidth: .infinity, maxHeight: 150, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: 250, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -120,7 +120,7 @@ struct ManagerSelectionPreview: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: 150)
+            .frame(maxWidth: .infinity, maxHeight: 250)
         }
         .padding(.horizontal, 12)
     }

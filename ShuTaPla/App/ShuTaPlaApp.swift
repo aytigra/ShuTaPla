@@ -2,9 +2,9 @@
 //  ShuTaPlaApp.swift
 //  ShuTaPla
 //
-//  @main entry point: single WindowGroup, SwiftData container, the shared
-//  AppState, and removal of the default "New Window" command to enforce a
-//  single-window interface. Cmd+, opens the Settings scene.
+//  @main entry point: the single main window, SwiftData container, the shared
+//  AppState, and removal of the default "New Window" command. Cmd+, opens the
+//  Settings scene.
 //
 
 import SwiftUI
@@ -59,7 +59,20 @@ struct ShuTaPlaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // `Window`, not `WindowGroup`: the app is single-window by design, and a group can vend a
+        // second window — a Dock reopen racing the closed window's teardown produced one. Two windows
+        // of this scene would host `RootView` twice over the one shared `AppState`, so every app-wide
+        // alert presents in both (and presenting orders a hidden window front, which is how such a
+        // duplicate surfaces). A `Window` scene is single-instance, so that cannot happen.
+        //
+        // Two invariants the rest of the app is written against, and this line is what makes them
+        // true. Exactly one `RootView` instance exists, so `AppState` *is* window state — the mode,
+        // the managed playlist, the selection, the frame and the one modal host are unambiguous, and
+        // `HotkeyRouter`'s app-wide key monitor has a single window to route to. And that window and
+        // its view tree are permanent: closing only hides them, with no teardown and no re-mount, so
+        // window-scoped state (`FullscreenController`) outlives a close and view-lifecycle bridges
+        // are silent across it.
+        Window(AppConstants.appName, id: "main") {
             if let appState, let modelContainer {
                 RootView()
                     .environment(appState)

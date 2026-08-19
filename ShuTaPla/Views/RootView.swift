@@ -97,6 +97,10 @@ struct RootView: View {
         }
         .addPlaylistFlow()
         .background(WindowCloseBridge { appState.windowWasClosed() })
+        // Player mode claims the window's fullscreen state for as long as it runs, and the mode
+        // drives that directly: the window is permanent, so nothing about it can be tied to how long
+        // a particular view is on screen. Outside the claim the window is the user's.
+        .background(WindowFullscreenBridge(isFullscreen: appState.mode == .player))
         .background(WindowFrameBridge(
             restoredFrame: { appState.restoredWindowFrame },
             onFrameChange: { appState.persistWindowFrame($0) }

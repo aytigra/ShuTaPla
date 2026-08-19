@@ -32,17 +32,24 @@ import SwiftData
         try MPVPlaybackEngine(configuration: keyframeStepping ? .silentKeyframeStepping : .silentAudio)
     }
 
-    /// Polls `condition` on the main actor until it holds or `timeout` elapses,
-    /// yielding between checks so the engine's event task can make progress.
+    /// Polls `condition` on the main actor until it holds or the budget of attempts runs out,
+    /// sleeping between checks so the engine's event task can make progress.
     ///
     /// For state that only mpv's event stream can deliver, where there is nothing to await. Never
-    /// reach for it when the awaited work has a handle — awaiting that (the image engine's
-    /// `loadTask`) has no budget to overrun, whereas this expires on a contended main actor even
-    /// when the work itself is fine: the deadline is wall-clock, and the final re-check races the
-    /// completion it is looking for, both being main-actor jobs.
-    private func poll(timeout: Duration, _ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline {
+    /// reach for it when the awaited work has a handle — await that instead (the image engine's
+    /// `loadTask`).
+    ///
+    /// The budget is counted in attempts rather than wall clock, and that is the whole point.
+    /// Everything this waits for is delivered on the main actor: mpv drains its events on a private
+    /// queue but hands each one to the engine's `@MainActor` event task, and this poll's own
+    /// resumption is a main-actor job too. A full-suite run admits every test at once, so hundreds
+    /// of main-actor bodies queue on the one thread and even a test doing sub-millisecond work
+    /// reports twelve seconds. A wall-clock deadline expires against that congestion while the
+    /// engine is merely waiting its turn; a budget of turns is throttled by the very queue that
+    /// throttles the work it is watching, so it stretches with the machine and runs out only when
+    /// the state genuinely never arrives. 300 × 50 ms is 15 seconds on an idle host.
+    private func poll(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<300 {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(50))
         }
@@ -105,7 +112,7 @@ import SwiftData
 
         engine.load(nil, resource: sine(60))
 
-        let settled = await poll(timeout: .seconds(10)) { engine.duration > 0 }
+        let settled = await poll { engine.duration > 0 }
         #expect(settled)
         #expect(engine.isPlaying)
     }
@@ -435,11 +442,11 @@ import SwiftData
         #expect(!engine.isLooping)
         engine.setLooping(true)
         #expect(engine.isLooping)
-        #expect(await poll(timeout: .seconds(5)) { engine.client.isLooping })
+        #expect(await poll { engine.client.isLooping })
 
         engine.setLooping(false)
         #expect(!engine.isLooping)
-        #expect(await poll(timeout: .seconds(5)) { !engine.client.isLooping })
+        #expect(await poll { !engine.client.isLooping })
     }
 
     @Test func loadingANewFileResetsLooping() async throws {
@@ -449,13 +456,13 @@ import SwiftData
         engine.load(makeFile("a"), resource: sine(30))
         engine.setLooping(true)
         #expect(engine.isLooping)
-        #expect(await poll(timeout: .seconds(5)) { engine.client.isLooping })
+        #expect(await poll { engine.client.isLooping })
 
         // Loading the next file (what explicit advance/previous do) starts it unlooped:
         // looping is a per-file choice, not a sticky engine mode.
         engine.load(makeFile("b"), resource: sine(30))
         #expect(!engine.isLooping)
-        #expect(await poll(timeout: .seconds(5)) { !engine.client.isLooping })
+        #expect(await poll { !engine.client.isLooping })
     }
 
     @Test func loadingAnEvictedFileResetsLoopingImmediately() async throws {
@@ -491,16 +498,23 @@ import SwiftData
         #expect(engine.isLooping)
 
         evicted.cloudStatus = .local   // the live feed reports the bytes arrived; the deferred load runs
-        #expect(await poll(timeout: .seconds(5)) { engine.cloudLoad.pendingFile == nil })
+        #expect(await poll { engine.cloudLoad.pendingFile == nil })
 
         #expect(engine.isLooping)                                                   // the toggle stands
-        #expect(await poll(timeout: .seconds(5)) { engine.client.isLooping })
+        #expect(await poll { engine.client.isLooping })
     }
 
     @Test func seekMovesTime() async throws {
-        // A seekable WAV, and a poll shorter than the seek target: reaching 9s by just
-        // playing in real time can't pass this — only the seek can. (The lavfi sources
-        // used elsewhere are not seekable; see `writeTempWAV`.)
+        // A seekable WAV — the lavfi sources used elsewhere are not seekable; see `writeTempWAV`.
+        // `seek(to:)` posts the target to `currentTime` optimistically and lets mpv's `time-pos`
+        // correct it, so each leg settles as soon as the engine has taken the seek. That mpv really
+        // honors it is the client's business, proven in `MPVClientTests`.
+        //
+        // The load autoplays, so a forward target alone would be reached by plain playback inside
+        // the poll budget and the assertion would hold with `seek(to:)` doing nothing at all
+        // (measured). Landing *backward* is what only a seek can produce — that leg is what refutes
+        // a broken absolute seek, and the range proves it landed on the target rather than merely
+        // moved.
         let url = try writeTempWAV(seconds: 30)
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -508,11 +522,13 @@ import SwiftData
         defer { engine.shutdown() }
         engine.load(nil, at: url)
 
-        _ = await poll(timeout: .seconds(8)) { engine.duration > 0 }
-        engine.seek(to: 10)
+        _ = await poll { engine.duration > 0 }
+        engine.seek(to: 25)
+        #expect(await poll { engine.currentTime >= 24 })
 
-        let seeked = await poll(timeout: .seconds(8)) { engine.currentTime >= 9 }
-        #expect(seeked)
+        engine.seek(to: 3)
+        let landedBack = await poll { (2.5...8).contains(engine.currentTime) }
+        #expect(landedBack)
     }
 
     @Test func audioEngineSeeksByTheFullDelta() async throws {
@@ -527,12 +543,12 @@ import SwiftData
         defer { engine.shutdown() }
         engine.load(nil, at: url)
 
-        _ = await poll(timeout: .seconds(8)) { engine.duration > 0 }
+        _ = await poll { engine.duration > 0 }
         engine.seek(to: 10)
-        #expect(await poll(timeout: .seconds(8)) { engine.currentTime >= 9.9 })
+        #expect(await poll { engine.currentTime >= 9.9 })
 
         engine.seek(by: -3)
-        let landed = await poll(timeout: .seconds(8)) { (6.5...7.6).contains(engine.currentTime) }
+        let landed = await poll { (6.5...7.6).contains(engine.currentTime) }
         #expect(landed)
     }
 
@@ -574,7 +590,7 @@ import SwiftData
         defer { engine.shutdown() }
         engine.load(file, at: try MediaFixture.hdr.url)
 
-        #expect(await poll(timeout: .seconds(15)) { file.isHDR != nil })
+        #expect(await poll { file.isHDR != nil })
         #expect(file.isHDR == true)
         #expect(file.hdrGamma == "pq")
     }
@@ -588,7 +604,7 @@ import SwiftData
         defer { engine.shutdown() }
         engine.load(file, at: try MediaFixture.h264.url)
 
-        #expect(await poll(timeout: .seconds(15)) { file.isHDR != nil })
+        #expect(await poll { file.isHDR != nil })
         #expect(file.isHDR == false)
     }
 
@@ -604,7 +620,7 @@ import SwiftData
         defer { engine.shutdown() }
         engine.load(file, at: try MediaFixture.hdr.url)
 
-        #expect(await poll(timeout: .seconds(15)) { engine.videoSize.width > 0 })
+        #expect(await poll { engine.videoSize.width > 0 })
         #expect(file.isHDR == nil)
     }
 
@@ -613,7 +629,7 @@ import SwiftData
         defer { engine.shutdown() }
 
         engine.volume = 42
-        #expect(await poll(timeout: .seconds(5)) { abs(engine.client.volume - 42) < 0.5 })
+        #expect(await poll { abs(engine.client.volume - 42) < 0.5 })
     }
 
     @Test func switchingToEvictedFileStopsThePreviousFile() async throws {
@@ -626,7 +642,7 @@ import SwiftData
         defer { engine.shutdown() }
 
         engine.load(makeFile("a"), resource: sine(30))
-        #expect(await poll(timeout: .seconds(10)) { engine.currentTime > 0.5 })   // A is really playing
+        #expect(await poll { engine.currentTime > 0.5 })   // A is really playing
 
         let evicted = makeFile("b")
         evicted.cloudStatus = .inCloud
@@ -655,7 +671,7 @@ import SwiftData
         engine.pause()   // the coordinator's suspend() path: the channel should stay halted
 
         evicted.cloudStatus = .local   // the live feed reports the bytes arrived
-        #expect(await poll(timeout: .seconds(5)) { engine.cloudLoad.pendingFile == nil })   // load ran
+        #expect(await poll { engine.cloudLoad.pendingFile == nil })   // load ran
 
         // The file is loaded but must be at rest. Give any time-pos event a chance to land.
         try? await Task.sleep(for: .seconds(1))

@@ -2,9 +2,10 @@
 //  PlayerView.swift
 //  ShuTaPla
 //
-//  The fullscreen playback container. It shows the active visual channel (video or
-//  image), drives the window into fullscreen while it is on screen, and hosts the
-//  pause overlay. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
+//  The full-window playback container. It shows the active visual channel (video or
+//  image) and hosts the pause overlay; the window's own fullscreen state follows
+//  player mode through `RootView`'s `WindowFullscreenBridge`, not this view's
+//  lifetime. Keyboard input is owned app-wide by `HotkeyRouter`. The edge hover
 //  zones drive the `OverlayManager`; this view composes its overlay content: the bottom
 //  controls bar, the left playlists selector, and the Visual Overlay. The independent
 //  audio overlay is layered above by `RootView`.
@@ -66,7 +67,6 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
         }
-        .background(FullscreenView())
         .background(CursorAutoHider(isActive: cursorShouldAutoHide))
         .overlay(alignment: .bottom) { bottomControlsContainer }
         .overlay { visualOverlayContainer }
