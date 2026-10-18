@@ -343,7 +343,7 @@ Unit and integration tests use **Swift Testing** (`import Testing`); `ShuTaPlaUI
 
 ---
 
-## 17. Future considerations (out of scope for v1)
+## 17. Future considerations
 
 Architectural hooks, not planned features — the design accommodates them without structural change:
 

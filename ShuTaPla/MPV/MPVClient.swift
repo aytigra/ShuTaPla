@@ -154,7 +154,14 @@ nonisolated final class MPVClient: @unchecked Sendable {
             setOption("audio-display", "no")
         }
 
-        if configuration.audioOutput == .null {
+        switch configuration.audioOutput {
+        case .device:
+            // Not coreaudio: in libmpv 0.41.0 a failed coreaudio init (common on macOS 26+,
+            // `-50` for some channel layouts) leaves its device-change listener registered on
+            // the freed AO, and the next device change crashes the app (mpv#18274, fixed after
+            // 0.41.0 by af067b5ea8 and c5d391adba). Revisit once the bundled libmpv has the fix.
+            setOption("ao", "avfoundation")
+        case .null:
             setOption("ao", "null")
         }
 

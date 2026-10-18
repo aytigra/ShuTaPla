@@ -34,9 +34,9 @@ macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
 ## Writing rules
 
-**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice.
+**Concise Writing Style.** Terse Simplified Technical English ASD-STE100 appropriate for software engineering should be used for all software developer (user) facing outputs.
 
-This governs *descriptions of the code* and main documentation. It does not apply to work-tracking artifacts in `doc/tasks/`.
+**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice. Work-tracking artifacts in `doc/tasks/` can have change narration because they are describing implementation, but they also shouldn't be overloaded with minute details and verbose descriptions of dismissed paths.
 
 ## Code conventions
 
