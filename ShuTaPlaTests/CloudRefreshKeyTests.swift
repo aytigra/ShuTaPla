@@ -33,8 +33,8 @@ import SwiftUI
         let (playlist, file) = makeFile()
         let row = FileRowView(
             file: file, playlist: playlist, isSelected: false, isCurrent: false,
-            isRenaming: false, isStripping: false, draftName: .constant(""),
-            onCommitRename: {}, onCancelRename: {}
+            isRenaming: false, isBusy: false,
+            onCommitRename: { _ in }, onCancelRename: {}
         )
         file.cloudStatus = .inCloud
         let evicted = row.metadataKey

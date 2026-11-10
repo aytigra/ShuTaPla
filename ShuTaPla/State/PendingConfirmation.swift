@@ -18,12 +18,8 @@ import Foundation
 /// `RootView` alert host, consulted by `HotkeyRouter` while it owns the keyboard. At most one can
 /// be pending, enforced by the type.
 enum PendingConfirmation {
-    /// Trash the given Manager file-list selection.
-    case managerDelete([PlaylistFile])
-    /// Trash the file playing on the visual channel.
-    case playerDelete(PlaylistFile)
-    /// Trash the audio channel's current track (from the extended overlay).
-    case audioDelete(PlaylistFile)
+    /// Trash the given files: a Manager selection, or a file in a player overlay.
+    case delete([PlaylistFile])
     /// Remove the audio track from the given videos.
     case audioStrip([PlaylistFile])
     /// Remove the given tag from every file in the managed playlist.
@@ -35,35 +31,29 @@ enum PendingConfirmation {
 }
 
 extension PendingConfirmation {
-    /// This confirmation with any files a re-scan removed dropped from its payload, or `nil` if
-    /// that leaves nothing to confirm — so confirming can't act on (and dereference) a destroyed
-    /// model. Non-file confirmations pass through unchanged. Reads only the stored `id`, which a
-    /// deleted model still surrenders.
-    func pruning(removedFileIDs removed: Set<UUID>) -> PendingConfirmation? {
+    /// The files the confirmation acts on; empty for one without files.
+    var files: [PlaylistFile] {
         switch self {
-        case .managerDelete(let files):
-            let kept = files.filter { !removed.contains($0.id) }
-            return kept.isEmpty ? nil : .managerDelete(kept)
-        case .audioStrip(let files):
-            let kept = files.filter { !removed.contains($0.id) }
-            return kept.isEmpty ? nil : .audioStrip(kept)
-        case .playerDelete(let file):
-            return removed.contains(file.id) ? nil : self
-        case .audioDelete(let file):
-            return removed.contains(file.id) ? nil : self
-        case .tagRemoval, .playlistDelete, .savedSearchDelete:
-            return self
+        case .delete(let files), .audioStrip(let files): files
+        case .tagRemoval, .playlistDelete, .savedSearchDelete: []
         }
     }
 
-    /// This confirmation unless it names one of `searches`, in which case `nil` — the saved-search
-    /// counterpart to the file pruning above, for the other way a target is destroyed under a
-    /// confirmation that is already on screen: a playlist-wide tag removal empties a search's filter
-    /// and the cascade takes the search. Compares by identity, so nothing is read off the gone rows.
-    func pruning(destroyedSearches searches: [SavedSearch]) -> PendingConfirmation? {
-        guard case .savedSearchDelete(let search) = self,
-              searches.contains(where: { $0 === search }) else { return self }
-        return nil
+    /// This confirmation with any files a re-scan removed dropped from its payload, or `nil` if
+    /// that leaves nothing to confirm — so confirming can't act on (and dereference) a destroyed
+    /// model. Non-file confirmations pass through unchanged. Reads `id` of the removed rows, so it
+    /// runs where `forgetRemovedFiles` runs.
+    func pruning(removedFileIDs removed: Set<UUID>) -> PendingConfirmation? {
+        switch self {
+        case .delete(let files):
+            let kept = files.excluding(removed)
+            return kept.isEmpty ? nil : .delete(kept)
+        case .audioStrip(let files):
+            let kept = files.excluding(removed)
+            return kept.isEmpty ? nil : .audioStrip(kept)
+        case .tagRemoval, .playlistDelete, .savedSearchDelete:
+            return self
+        }
     }
 }
 
@@ -71,13 +61,11 @@ extension PendingConfirmation {
     /// The question the confirmation asks, naming its target — one file by name, several by count.
     var title: String {
         switch self {
-        case .managerDelete(let files):
+        case .delete(let files):
             files.count.pluralized(
                 one: "Move “\(files[0].fileName)” to the Trash?",
                 many: "Move \(files.count) files to the Trash?"
             )
-        case .playerDelete(let file), .audioDelete(let file):
-            "Move “\(file.fileName)” to the Trash?"
         case .audioStrip(let files):
             files.count.pluralized(
                 one: "Remove the audio from “\(files[0].fileName)”?",
@@ -95,13 +83,11 @@ extension PendingConfirmation {
     /// What confirming does beyond the obvious — the consequence the title doesn't carry.
     var message: String {
         switch self {
-        case .managerDelete(let files):
+        case .delete(let files):
             files.count.pluralized(
                 one: "The file is moved to the Trash and removed from this playlist.",
                 many: "The files are moved to the Trash and removed from this playlist."
             )
-        case .playerDelete, .audioDelete:
-            "The file is moved to the Trash and removed from this playlist."
         case .audioStrip:
             "The original is moved to the Trash."
         case .tagRemoval:
@@ -116,7 +102,7 @@ extension PendingConfirmation {
     /// The label on the destructive button — the act, not "OK".
     var confirmLabel: String {
         switch self {
-        case .managerDelete, .playerDelete, .audioDelete: "Move to Trash"
+        case .delete: "Move to Trash"
         case .audioStrip: "Remove Audio"
         case .tagRemoval: "Remove Tag"
         case .playlistDelete, .savedSearchDelete: "Delete"
@@ -125,10 +111,43 @@ extension PendingConfirmation {
 }
 
 /// An operation failed or was refused, in the words of the site that knows why. One channel for
-/// every such report — a destructive confirmation's work, a tag edit, a save the store already
-/// covers — so a single host can present them all without losing each site's wording, and the
+/// every such report — a destructive confirmation's work, a tag edit, a failed
+/// save — so a single host can present them all without losing each site's wording, and the
 /// `HotkeyRouter` has one flag to register rather than one per surface.
-struct ErrorNotice {
+struct ErrorNotice: Equatable {
     let title: String
     let message: String
+
+    /// Every report title. An operation's request-time refusal and its own failure report share one.
+    enum Title {
+        static let saveFailed = "Couldn't save your changes"
+        static let addPlaylist = "Couldn't add playlist"
+        static let folderNotFound = "Folder not found"
+        static let alreadySaved = "Already saved"
+        static let trash = "Couldn't move to Trash"
+        static let audioStrip = "Couldn't remove audio"
+        static let move = "Couldn't move"
+        static let rename = "Couldn't rename"
+        static let tagChange = "Tag change failed"
+        static let tagRemoval = "Couldn't remove tag"
+    }
+
+    /// A failed save. Each caller states whether it rolls the context back.
+    static func saveFailed(_ detail: String) -> ErrorNotice {
+        ErrorNotice(title: Title.saveFailed, message: detail)
+    }
+
+    /// Adding a playlist failed, or its folder has no media.
+    static func addPlaylistFailed(_ detail: String) -> ErrorNotice {
+        ErrorNotice(title: Title.addPlaylist, message: detail)
+    }
+
+    /// A playlist whose folder bookmark doesn't resolve. The files are the source of truth, so the
+    /// user adds the folder again as a new playlist.
+    static func folderNotFound(_ playlistName: String) -> ErrorNotice {
+        ErrorNotice(
+            title: Title.folderNotFound,
+            message: "“\(playlistName)”'s folder can't be found. If it's on a disk that isn't connected, connect the disk and try again. If the folder was deleted, delete the playlist and add the folder again."
+        )
+    }
 }

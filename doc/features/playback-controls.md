@@ -19,7 +19,7 @@ The bottom playback controls bar and the Pause Overlay are not considered "overl
 
 These hotkeys apply during video or image playback (Playing or Paused state). When a text input (e.g. Tag Editor, filter search) is focused, all keys are captured by the input and do not trigger player actions.
 
-**Key Context.** Arrow keys, `[space]`, `[l]`, and seek are routed to whichever target currently holds *Key Context*:
+**Key Context.** Arrow keys, `[space]`, `[l]`, seek, `[delete]`, and `[m]` are routed to whichever target currently holds *Key Context*:
 
 - By default the Visual Channel holds Key Context.
 - When the Audio Overlay is revealed (Compact or Expanded) it takes Key Context, but only once it is **fully** revealed (after the slide-in animation completes). This applies whether the Audio Overlay was opened by hotkey or by hover. Closing the Audio Overlay back to Hidden returns Key Context to the Visual Channel.
@@ -39,6 +39,7 @@ While the Visual Channel holds Key Context:
 | `[esc]` | Close overlay → suppress (if playing) → close window (if suppressed). See Esc behavior above. |
 | `[delete]` | Ask to move the current file to the system Trash (a confirmation dialog appears; see below) |
 | `[r]` | Ask to remove the audio track from the current video (a confirmation dialog appears). Video only — ignored for image or audio files. Always targets the Visual Channel, even when the Audio Overlay holds Key Context. |
+| `[m]` | Move the current file to another folder (the system folder chooser opens; see [Move to…](manager-mode.md#file-interactions)) |
 | `[shift]` | Cycle image fit modes: Fit → Cover → Original (image playlists only) |
 | `[l]` | Toggle loop on the current file (video only here) |
 | `[right option] + [arrow left]` | Seek −3 s (video only here) |
@@ -46,7 +47,7 @@ While the Visual Channel holds Key Context:
 
 The `[delete]` confirmation dialog **holds Key Context until it closes**: `[enter]` confirms (trashes the file and advances to the next still-available file), `[esc]` cancels, and all other keys are ignored while it is shown. After a delete, if the playing file was the one removed, playback advances to the next remaining file.
 
-**When the Audio Overlay holds Key Context** (revealed as Compact or Expanded), arrow keys, `[space]`, `[l]`, and seek act on the Audio Channel Playlist instead:
+**When the Audio Overlay holds Key Context** (revealed as Compact or Expanded), arrow keys, `[space]`, `[l]`, seek, `[delete]`, and `[m]` act on the Audio Channel Playlist instead:
 
 | Key | Action (Audio Overlay has Key Context) |
 |-----|--------|
@@ -57,6 +58,8 @@ The `[delete]` confirmation dialog **holds Key Context until it closes**: `[ente
 | `[arrow down]` | Step the Audio Overlay Compact → Expanded. (Expanded is exclusive and closes the Visual Overlay.) |
 | `[l]` | Toggle loop on the current audio track |
 | `[right option] + [arrow left/right]` | Seek the audio track ∓3 s |
+| `[delete]` | Ask to move the current audio track to the system Trash (a confirmation dialog appears) |
+| `[m]` | Move the current audio track to another folder (the system folder chooser opens) |
 
 ## Manager mode hotkeys
 
@@ -69,6 +72,8 @@ In Manager mode (Stopped state), most playback hotkeys are inactive. The followi
 | `[enter]` | Play the selected file (enters Player mode starting from it), the keyboard equivalent of double-clicking it. Inactive while a text field (rename, tag input) is focused, where `[enter]` commits that field instead. With nothing selected the key passes through. |
 | `[esc]` | Cancel an in-progress operation (rename, dialog, tagging); otherwise no effect — the window stays open (see Esc behavior, rule 5). |
 | `[delete]` | Ask to move selected file(s) to the system Trash (a confirmation dialog appears) |
+| `[m]` | Move selected file(s) to another folder (the system folder chooser opens; see [Move to…](manager-mode.md#file-interactions)) |
+| `[r]` | Ask to remove the audio track from selected file(s) (a confirmation dialog appears). Video playlists only; skipped files are left out. |
 
 Arrow keys are consumed by the file-list/gallery navigation, so they never ring the system beep. The Manager delete confirmation holds Key Context: `[enter]` confirms, `[esc]` cancels, and other keys are ignored while it is shown.
 

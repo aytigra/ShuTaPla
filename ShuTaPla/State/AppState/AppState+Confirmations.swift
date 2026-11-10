@@ -2,13 +2,15 @@
 //  AppState+Confirmations.swift
 //  ShuTaPla
 //
-//  The modal confirmations (Manager, Player, and extended-overlay audio delete; remove-audio;
-//  playlist-wide tag removal; sidebar playlist delete; saved-search delete). Each `request*` sets
+//  The modal confirmations (file delete from any surface; remove-audio; playlist-wide tag
+//  removal; sidebar playlist delete; saved-search delete). Each `request*` sets
 //  `pendingConfirmation` to its case — the state a blocking `.alert` / `.confirmationDialog` binds
 //  to; the shared `confirmConfirmation` runs whatever touches the file system as a retained,
 //  self-pruning Task so its SwiftData work is owned rather than fire-and-forget. The `request*`
-//  functions stay distinct because their guards differ (video-only strip, current-track reads);
-//  everything after the request is one path.
+//  functions stay distinct because their targets differ (remove-audio eligibility, a chooser in
+//  place of an alert); every file request refuses when a target is busy (`isBusy`). Everything after
+//  the request is one path. A move confirms through the folder chooser instead of an alert (`requestMove` sets
+//  `folderPick`), and its work runs on the same retained-task path.
 //
 
 import Foundation
@@ -17,68 +19,43 @@ extension AppState {
 
     // MARK: - Requests
 
-    /// Requests confirmation to trash the current file-list selection (Manager `[delete]`).
-    /// Resolves the *visible* selection (`visibleSelectedManagerFiles`), not the whole editor
-    /// selection: a file edited out of the effective filter stays in the tag editor but must not be
-    /// trashable by a bare `[delete]` it can no longer see — so an all-filtered-out selection makes
-    /// `[delete]` a safe no-op. Returns whether there was anything visible to delete.
+    /// Requests confirmation to trash `files` (the Delete command and `[delete]` on every surface).
+    /// Returns whether it handled the request (`request(_:failure:_:)`).
     @discardableResult
-    func requestDeleteSelectedFiles() -> Bool {
-        let files = visibleSelectedManagerFiles()
+    func requestDelete(_ files: [PlaylistFile]) -> Bool {
+        request(files, failure: ErrorNotice.Title.trash) { pendingConfirmation = .delete($0) }
+    }
+
+    /// Requests confirmation to remove the audio track from `files` (`[r]`, the Remove Audio
+    /// command in Manager or the player overlay). Only the files `canRemoveAudio` admits
+    /// are kept. Returns whether it handled the request (`request(_:failure:_:)`).
+    @discardableResult
+    func requestAudioStrip(_ files: [PlaylistFile]) -> Bool {
+        request(files.filter(\.canRemoveAudio), failure: ErrorNotice.Title.audioStrip) {
+            pendingConfirmation = .audioStrip($0)
+        }
+    }
+
+    /// Raises the folder chooser to move `files` (the Move to… command). The chooser is the
+    /// confirmation. Returns whether it handled the request (`request(_:failure:_:)`).
+    @discardableResult
+    func requestMove(_ files: [PlaylistFile]) -> Bool {
+        request(files, failure: ErrorNotice.Title.move) { folderPick = .move($0.map(\.id)) }
+    }
+
+    /// Raises `present` over `files`, or refuses when any of them is busy (`isBusy`) and reports the
+    /// busy count under `title`, so a confirmation always covers every file the user picked. The
+    /// playlist-wide tag edits refuse a busy carrier the same way. Returns `false` only for no files.
+    private func request(
+        _ files: [PlaylistFile], failure title: String, _ present: ([PlaylistFile]) -> Void
+    ) -> Bool {
         guard files.isNotEmpty else { return false }
-        pendingConfirmation = .managerDelete(files)
+        if let busy = busyNotice(files) {
+            report(ErrorNotice(title: title, message: busy))
+        } else {
+            present(files)
+        }
         return true
-    }
-
-    /// Requests confirmation to trash a specific set of Manager files (a file row's Delete command).
-    func requestManagerDelete(_ files: [PlaylistFile]) {
-        pendingConfirmation = .managerDelete(files)
-    }
-
-    /// Requests confirmation to trash the file currently playing on the visual channel
-    /// (Player `[delete]`). Returns whether there was a file to delete.
-    @discardableResult
-    func requestDeletePlayingFile() -> Bool {
-        guard let file = coordinator.visualCurrentFile else { return false }
-        pendingConfirmation = .playerDelete(file)
-        return true
-    }
-
-    /// Requests confirmation to trash a specific file from the Visual Overlay.
-    func requestPlayerDelete(_ file: PlaylistFile) {
-        pendingConfirmation = .playerDelete(file)
-    }
-
-    /// Requests confirmation to trash the audio channel's current track (the extended
-    /// overlay's `[delete]`, when audio holds key context). Returns whether there was a
-    /// track to delete. The visual `[delete]` analog is `requestDeletePlayingFile`.
-    @discardableResult
-    func requestDeletePlayingAudioFile() -> Bool {
-        guard let file = currentAudioFile else { return false }
-        pendingConfirmation = .audioDelete(file)
-        return true
-    }
-
-    /// Requests confirmation to trash an audio track from the extended overlay.
-    func requestAudioDelete(_ file: PlaylistFile) {
-        pendingConfirmation = .audioDelete(file)
-    }
-
-    /// Requests confirmation to remove the audio from the video currently playing on the
-    /// visual channel (Player `[r]`). Video-only — an image or audio file has no audio track
-    /// to strip. Returns whether there was a video to act on.
-    @discardableResult
-    func requestStripPlayingFile() -> Bool {
-        guard coordinator.liveVisualPlaylist?.mediaType == .video,
-              let file = coordinator.visualCurrentFile else { return false }
-        requestAudioStrip([file])
-        return true
-    }
-
-    /// Requests confirmation to remove the audio track from a video-row's selection (its
-    /// Remove Audio command, in Manager or the player overlay).
-    func requestAudioStrip(_ files: [PlaylistFile]) {
-        pendingConfirmation = .audioStrip(files)
     }
 
     /// Requests confirmation to remove `tag` from every file in the managed playlist.
@@ -112,21 +89,18 @@ extension AppState {
         guard let pending = pendingConfirmation else { return }
         pendingConfirmation = nil
         switch pending {
-        case .managerDelete(let files): performDelete(files)
-        case .playerDelete(let file): performDelete([file])
-        case .audioDelete(let file): performDelete([file])
+        case .delete(let files):
+            // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is a
+            // no-op and the surface stays on the file; surface the message rather than silently
+            // advancing past an undeleted file.
+            runFileOp(files.map(\.id), failure: ErrorNotice.Title.trash) { await self.deleteFiles($0) }
         case .audioStrip(let files):
-            guard files.isNotEmpty else { return }
-            runConfirmation {
-                if let error = await self.stripAudio(from: files) {
-                    self.errorNotice = ErrorNotice(title: "Couldn't remove audio", message: error)
-                }
-            }
+            runFileOp(files.map(\.id), failure: ErrorNotice.Title.audioStrip) { await self.stripAudio(from: $0) }
         case .tagRemoval(let tag):
             guard let playlist = managedPlaylist else { return }
             runConfirmation {
                 if let error = await self.removeTagAcrossPlaylist(playlist, tag: tag) {
-                    self.errorNotice = ErrorNotice(title: "Couldn't remove tag", message: error)
+                    self.report(ErrorNotice(title: ErrorNotice.Title.tagRemoval, message: error))
                 }
             }
         case .playlistDelete(let playlist):
@@ -139,21 +113,45 @@ extension AppState {
         }
     }
 
+    /// Acts on the folder chooser's outcome for `pick`, then clears the pick. A failure is reported
+    /// under the pick's title.
+    func completeFolderPick(_ pick: FolderPick, with result: Result<[URL], any Error>) {
+        folderPick = nil
+        switch (pick, result) {
+        case (.addPlaylist, .success(let urls)):
+            guard let url = urls.first else { return }
+            Task { await importPlaylist(from: url) }
+        case (.addPlaylist, .failure(let error)):
+            report(.addPlaylistFailed(error.localizedDescription))
+        case (.move(let ids), .success(let urls)):
+            guard let folder = urls.first else { return }
+            lastMoveDestination = folder
+            runFileOp(ids, failure: ErrorNotice.Title.move) { await self.moveFiles($0, to: folder) }
+        case (.move, .failure(let error)):
+            report(ErrorNotice(title: ErrorNotice.Title.move, message: error.localizedDescription))
+        }
+    }
+
     // MARK: - Shared confirmation plumbing
 
-    /// Trashes `files` as a retained confirmation task — `deleteFiles` advances any live channel
-    /// off them — surfacing the first failure as a "Couldn't move to Trash" error. Shared by the
-    /// Manager, Player, and audio delete confirmations.
-    private func performDelete(_ files: [PlaylistFile]) {
-        guard files.isNotEmpty else { return }
-        // On failure (permissions/locked) `deleteFiles` trashes nothing, so its reconcile is a
-        // no-op and the surface stays on the file; surface the message rather than silently
-        // advancing past an undeleted file.
-        runConfirmation {
-            if let error = await self.deleteFiles(files) {
-                self.errorNotice = ErrorNotice(title: "Couldn't move to Trash", message: error)
-            }
-        }
+    /// Whether `file` has disk work in flight (rename, tag edit, trash, move, audio removal). A
+    /// second operation on it would race that work, so the requests refuse it and the operations
+    /// leave it out.
+    func isBusy(_ file: PlaylistFile) -> Bool {
+        busyFileIDs.contains(file.id)
+    }
+
+    /// `files` without the busy ones (`isBusy`).
+    func idle(_ files: [PlaylistFile]) -> [PlaylistFile] {
+        files.excluding(busyFileIDs)
+    }
+
+    /// A message naming how many of `files` are busy (`isBusy`), or `nil` when none is.
+    func busyNotice(_ files: [PlaylistFile]) -> String? {
+        let busy = files.count(where: isBusy)
+        guard busy > 0 else { return nil }
+        let count = busy.pluralized(one: "1 file", many: "\(busy) files")
+        return "\(count) busy. Try again when their current operation is done."
     }
 
     /// Runs a confirmation operation as a retained, self-pruning Task so the SwiftData work
@@ -163,6 +161,31 @@ extension AppState {
         confirmationTasks[token] = Task {
             await operation()
             confirmationTasks[token] = nil
+        }
+    }
+
+    /// Runs `operation` as a confirmation operation on the files of `ids` still in the store, and
+    /// reports its failure under `title`. The files resolve when the Task starts: a re-scan can
+    /// prune one while the chooser is open, or in the turn before the Task starts, and a read of a
+    /// pruned row traps. A view starts its file edits here for the same reason, and for the report:
+    /// the `HotkeyRouter` holds the keyboard only for a modal it can see on `AppState`.
+    func runFileOp(
+        _ ids: [UUID], failure title: String, _ operation: @escaping ([PlaylistFile]) async -> String?
+    ) {
+        runConfirmation {
+            let files = self.modelContext.files(withIDs: ids)
+            guard files.isNotEmpty, let error = await operation(files) else { return }
+            self.report(ErrorNotice(title: title, message: error))
+        }
+    }
+
+    /// Runs the playlist-wide Replace of `oldTag` by `entry` on the retained confirmation path, as
+    /// the tag removal runs, and reports its failure.
+    func commitTagReplace(_ oldTag: String, with entry: String, on playlist: Playlist) {
+        runConfirmation {
+            if let error = await self.replaceTagAcrossPlaylist(playlist, oldTag, with: entry) {
+                self.report(ErrorNotice(title: ErrorNotice.Title.tagChange, message: error))
+            }
         }
     }
 

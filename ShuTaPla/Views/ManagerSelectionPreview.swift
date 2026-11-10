@@ -6,7 +6,7 @@
 //  selected after a tag edit pushes it out of the effective filter (add the first tag under an
 //  "untagged" filter → it leaves the list but stays editable), so the list no longer shows what the
 //  tag field acts on. This makes that out-of-view selection legible: one selected file as a read-only
-//  `GalleryCell`, several as a summary line over a scrolling list of their names.
+//  `GalleryCell`, several as a summary line over a scrolling list of their paths.
 //
 
 import SwiftUI
@@ -68,8 +68,8 @@ struct ManagerSelectionPreview: View {
         }
     }
 
-    /// One selected file: a read-only `GalleryCell` — its thumbnail, name caption, and badges are
-    /// the whole preview. Held in a scoped-access session so the thumbnail read appends to a
+    /// One selected file: a read-only `GalleryCell` — its thumbnail, name caption, and badges —
+    /// over the file's folder. Held in a scoped-access session so the thumbnail read appends to a
     /// pre-resolved folder URL rather than resolving the bookmark for the lone file.
     private func single(_ file: PlaylistFile) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -79,19 +79,19 @@ struct ManagerSelectionPreview: View {
                 isSelected: false,
                 isCurrent: false,
                 isRenaming: false,
-                isStripping: false,
-                draftName: .constant(""),
-                onCommitRename: {},
+                isBusy: false,
+                onCommitRename: { _ in },
                 onCancelRename: {}
             )
             .padding(.top, 8)
+            FolderPathText(file: file, in: playlist)
         }
         .padding(.horizontal, 12)
         .browsingSession(for: playlist, folderAccess: appState.folderAccess)
     }
 
-    /// Several selected files: the summary line over a lazily rendered, self-scrolling list of their
-    /// names — plain rows, no marks or dimming — that owns the remaining height instead of growing
+    /// Several selected files: the summary line and the playlist folder over a lazily rendered,
+    /// self-scrolling list of their paths inside that folder — plain rows, no marks or dimming — that owns the remaining height instead of growing
     /// the sidebar.
     private func multi(_ files: [PlaylistFile]) -> some View {
         let summary = ManagerSelectionSummary(
@@ -109,10 +109,12 @@ struct ManagerSelectionPreview: View {
             .foregroundStyle(.secondary)
             .padding(.top, 8)
 
+            FolderPathText(folderOf: playlist)
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(files, id: \.persistentModelID) { file in
-                        Text(file.fileName)
+                        Text(file.relativePath)
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.middle)

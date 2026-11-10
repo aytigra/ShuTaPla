@@ -104,10 +104,10 @@ nonisolated enum TagParser {
         return assemble(base: writeTags(remaining, inBase: base, scan: scan), ext: ext)
     }
 
-    /// Renames a tag, collapsing any resulting within-file duplicate to one
+    /// Replaces a tag with another, collapsing any resulting within-file duplicate to one
     /// instance. No-op if the new tag is invalid, the file isn't validly
     /// tagged, or the old tag isn't present.
-    static func renameTag(from oldTag: String, to newTag: String, in fileName: String) -> String {
+    static func replaceTag(_ oldTag: String, with newTag: String, in fileName: String) -> String {
         guard isValidTag(newTag) else { return fileName }
         let base = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension

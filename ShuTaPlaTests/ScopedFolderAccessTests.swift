@@ -14,7 +14,7 @@ import Foundation
 @MainActor
 struct ScopedFolderAccessTests {
 
-    /// A temp directory and a plain (non-scoped, test) bookmark to it.
+    /// A temp directory and a bookmark to it.
     private func makeFolder() throws -> (url: URL, bookmark: Data) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ShuTaPlaScopedAccess-\(UUID().uuidString)", isDirectory: true)
@@ -22,14 +22,8 @@ struct ScopedFolderAccessTests {
         return (url, try BookmarkService.makeBookmark(for: url))
     }
 
-    private func makePlaylist(_ bookmark: Data) -> Playlist {
-        Playlist(name: "p", folderBookmark: bookmark, folderPath: "/tmp", mediaType: .video)
-    }
-
-    /// A re-access prompt returning a preset URL (or `nil` to model the user cancelling).
-    private struct StubReaccess: FolderReaccessPrompting {
-        var granted: URL?
-        func requestAccess(to playlist: Playlist) -> URL? { granted }
+    private func makePlaylist(_ bookmark: Data, folderPath: String = "/tmp") -> Playlist {
+        Playlist(name: "p", folderBookmark: bookmark, folderPath: folderPath, mediaType: .video)
     }
 
     @Test func beginOpensSessionAndUrlResolves() throws {
@@ -65,6 +59,133 @@ struct ScopedFolderAccessTests {
         access.end(for: playlist.id)
         #expect(access.url(for: playlist.id) == nil)
         #expect(bookmarks.referenceCount(for: folder.bookmark) == 0)
+    }
+
+    /// The folder is renamed while a session is open, and another op opens a session at the new
+    /// path. Ending the first session leaves the other op's session open.
+    @Test func endAfterAFolderRenameLeavesASessionAtTheNewPath() throws {
+        let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
+        let folder = try makeFolder()
+        let renamed = try renamedLocation(of: folder.url)
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        let playlist = makePlaylist(folder.bookmark)
+
+        access.begin(for: playlist)
+        let other = try openSessionAfterRenaming(folder.url, to: renamed, bookmarks)
+        access.end(for: playlist.id)
+
+        #expect(bookmarks.referenceCount(for: other) == 1)
+    }
+
+    /// A free location beside `url` for a rename.
+    private func renamedLocation(of url: URL) throws -> URL {
+        url.deletingLastPathComponent().appending(path: "\(url.lastPathComponent)-renamed")
+    }
+
+    /// Renames `url` to `renamed` and opens a session there, as a second op does. Returns that
+    /// session's bookmark.
+    private func openSessionAfterRenaming(_ url: URL, to renamed: URL, _ bookmarks: BookmarkService) throws -> Data {
+        try FileManager.default.moveItem(at: url, to: renamed)
+        let bookmark = try BookmarkService.makeBookmark(for: renamed)
+        _ = try bookmarks.startAccess(to: bookmark)
+        return bookmark
+    }
+
+    /// The three ways to open a playlist's folder.
+    @MainActor enum Opener: CaseIterable {
+        case playback, browsing, oneShot
+
+        func open(_ playlist: Playlist, with access: ScopedFolderAccess) -> URL? {
+            switch self {
+            case .playback: access.begin(for: playlist)
+            case .browsing: access.beginBrowsing(playlist)
+            case .oneShot: access.withAccess(to: playlist) { $0 }
+            }
+        }
+    }
+
+    /// A renamed folder opens at its new path, and the playlist takes a bookmark that resolves there
+    /// without being stale, reported once for the owner to save.
+    @Test(arguments: Opener.allCases)
+    func openingARenamedFolderRefreshesTheBookmark(opener: Opener) throws {
+        let access = ScopedFolderAccess(bookmarkService: BookmarkService())
+        var refreshes = 0
+        access.onBookmarkRefresh = { refreshes += 1 }
+        let folder = try makeFolder()
+        let renamed = try renamedLocation(of: folder.url)
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        let playlist = makePlaylist(folder.bookmark)
+        try FileManager.default.moveItem(at: folder.url, to: renamed)
+
+        let url = try #require(opener.open(playlist, with: access))
+
+        #expect(url.standardizedFileURL == renamed.standardizedFileURL)
+        let resolved = try BookmarkService.resolve(playlist.folderBookmark)
+        #expect(resolved.url.standardizedFileURL == renamed.standardizedFileURL)
+        #expect(!resolved.isStale)
+        #expect(playlist.folderPath == url.path(percentEncoded: false))
+        #expect(refreshes == 1)
+    }
+
+    /// A current bookmark whose stored path names another location opens with the path corrected,
+    /// reported once for the owner to save.
+    @Test(arguments: Opener.allCases)
+    func openingAFolderWithAStalePathCorrectsThePath(opener: Opener) throws {
+        let access = ScopedFolderAccess(bookmarkService: BookmarkService())
+        var refreshes = 0
+        access.onBookmarkRefresh = { refreshes += 1 }
+        let folder = try makeFolder()
+        let playlist = makePlaylist(folder.bookmark, folderPath: "/old/location/")
+
+        let url = try #require(opener.open(playlist, with: access))
+
+        #expect(playlist.folderPath == url.path(percentEncoded: false))
+        #expect(playlist.folderBookmark == folder.bookmark)
+        #expect(refreshes == 1)
+    }
+
+    /// A current bookmark and path open with no refresh.
+    @Test(arguments: Opener.allCases)
+    func openingAFolderWithACurrentBookmarkRefreshesNothing(opener: Opener) throws {
+        let access = ScopedFolderAccess(bookmarkService: BookmarkService())
+        var refreshes = 0
+        access.onBookmarkRefresh = { refreshes += 1 }
+        let folder = try makeFolder()
+        let path = folder.url.path(percentEncoded: false)
+        let playlist = makePlaylist(folder.bookmark, folderPath: path)
+
+        #expect(opener.open(playlist, with: access) != nil)
+
+        #expect(playlist.folderBookmark == folder.bookmark)
+        #expect(playlist.folderPath == path)
+        #expect(refreshes == 0)
+    }
+
+    /// A folder in the Trash does not open, and the playlist keeps the bookmark and path it had, so
+    /// the folder opens again after Put Back.
+    @Test(arguments: Opener.allCases)
+    func aFolderInTheTrashDoesNotOpen(opener: Opener) throws {
+        let access = ScopedFolderAccess(bookmarkService: BookmarkService())
+        var refreshes = 0
+        access.onBookmarkRefresh = { refreshes += 1 }
+        let folder = try makeFolder()
+        let path = folder.url.path(percentEncoded: false)
+        let playlist = makePlaylist(folder.bookmark, folderPath: path)
+        var trashed: NSURL?
+        try FileManager.default.trashItem(at: folder.url, resultingItemURL: &trashed)
+        let trashedURL = try #require(trashed as URL?)
+        defer { try? FileManager.default.removeItem(at: trashedURL) }
+
+        #expect(opener.open(playlist, with: access) == nil)
+
+        #expect(playlist.folderBookmark == folder.bookmark)
+        #expect(playlist.folderPath == path)
+        #expect(refreshes == 0)
+
+        try FileManager.default.moveItem(at: trashedURL, to: folder.url)
+        defer { try? FileManager.default.removeItem(at: folder.url) }
+        #expect(opener.open(playlist, with: access) == folder.url)
     }
 
     @Test func twoPlaylistsShareOneGrant() throws {
@@ -186,24 +307,25 @@ struct ScopedFolderAccessTests {
         #expect(bookmarks.referenceCount(for: playlist.folderBookmark) == 0)
     }
 
-    @Test func withAccessRefreshesStaleBookmarkThroughPrompt() throws {
+    /// The folder is renamed while the body runs, and another op opens a session at the new path.
+    /// The end of the body leaves that session open.
+    @Test func withAccessAfterAFolderRenameLeavesASessionAtTheNewPath() throws {
         let bookmarks = BookmarkService()
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
         let folder = try makeFolder()
-        // A garbage bookmark fails the initial resolve, forcing the re-grant path.
-        let access = ScopedFolderAccess(bookmarkService: bookmarks, prompt: StubReaccess(granted: folder.url))
-        let playlist = makePlaylist(Data([0x01, 0x02, 0x03]))
+        let renamed = try renamedLocation(of: folder.url)
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        let playlist = makePlaylist(folder.bookmark)
 
-        let seen = access.withAccess(to: playlist) { $0 }
-        #expect(seen == folder.url)
-        // The prompt's folder was baked into a fresh bookmark and path on the playlist.
-        #expect(playlist.folderPath == folder.url.path(percentEncoded: false))
-        #expect((try? BookmarkService.resolve(playlist.folderBookmark))?.url == folder.url)
-        #expect(bookmarks.referenceCount(for: playlist.folderBookmark) == 0)
+        let other = try #require(access.withAccess(to: playlist) { _ in
+            try? openSessionAfterRenaming(folder.url, to: renamed, bookmarks)
+        } ?? nil)
+        #expect(bookmarks.referenceCount(for: other) == 1)
     }
 
-    @Test func withAccessReturnsNilWhenPromptCancels() {
+    @Test func withAccessUnresolvableBookmarkSkipsTheBody() {
         let bookmarks = BookmarkService()
-        let access = ScopedFolderAccess(bookmarkService: bookmarks, prompt: StubReaccess(granted: nil))
+        let access = ScopedFolderAccess(bookmarkService: bookmarks)
         let playlist = makePlaylist(Data([0x01, 0x02, 0x03]))
 
         let result = access.withAccess(to: playlist) { _ in "ran" }

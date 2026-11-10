@@ -9,7 +9,7 @@ The video player plays files from the Visual Channel Playlist one after another 
 ### Hover zones
 
 - **Top edge** — slides in the Compact Audio Overlay (auto-closes when the cursor leaves; see [Audio player](#audio-player) for details).
-- **Bottom-center** — the compact playback controls bar (reveal and dismissal behavior under Overlay interaction rules): previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Visual Overlay. Each control shows a hover highlight.
+- **Bottom-center** — the compact playback controls bar (reveal and dismissal behavior under Overlay interaction rules): the current file's name over its folder [path](manager-mode.md#layout), then previous, play/pause, stop, next, loop toggle, track progress / scrub, volume slider, and a **file list button** that toggles the Visual Overlay. Each control shows a hover highlight.
 
 ### Content clicks
 
@@ -35,7 +35,7 @@ The overlay is a **simplified** view meant for quick playlist/file switching and
 
 1. **Playlist selector** — the playlists of the active visual type (video *or* image), with a `+` to add one from a folder. Selecting a playlist switches the Visual Channel to it and starts playing it immediately. It does **not** expose full management (no rename, delete, or reorder — those live in Manager mode).
 2. **File list & filtering** — the [Filter Strip](filtering.md) over the list (the four-field tag filter and its saved searches — no Service Filter counters, those live in Manager, though a Service Filter set there is honored here and its banner can clear it), the list of files in the Visual Channel Playlist (always list view, not gallery). If a filter change leaves nothing matching, the player stays in Player mode and shows a "No files match the filter" placeholder rather than dropping back to Manager.
-3. **Tag management** — Tag Editor for the **current file** only (same UI as described in [Tag editing UI](tags.md#tag-editing-ui)).
+3. **Tag management** — the current file's name over its folder [path](manager-mode.md#layout), then the Tag Editor for the **current file** only (same UI as described in [Tag editing UI](tags.md#tag-editing-ui)).
 
 Per-file actions in the list act on a single file:
 
@@ -43,6 +43,7 @@ Per-file actions in the list act on a single file:
 - **Rename** the file on disk (the playlist updates in place).
 - **Delete** the file (moves it to the system Trash and removes it from the playlist).
 - **Show in Finder**.
+- **Move to…** another folder (see [Move to…](manager-mode.md#file-interactions) in Manager mode).
 
 Bulk operations — multi-select delete and editing tags across a selection — are reserved for Manager mode; the overlay focuses on the current file for fast in-playback edits.
 
@@ -60,7 +61,7 @@ Images are presented in **Fit** mode by default. The user can cycle through mode
 - **Cover** — shows clipped image to fill the screen, preserving aspect ratio.
 - **Original** — show the image at 1:1 pixel size.
 
-There is no stretch / distort mode. Pan and zoom are supported in **Original** mode using the trackpad / scroll wheel.
+There is no stretch / distort mode. Pan and zoom are supported in **Original** mode using the trackpad / scroll wheel. A new file, or a fit-mode change, starts un-panned and un-zoomed.
 
 ### Slideshow
 
@@ -71,7 +72,7 @@ Slideshow interval is configurable both globally (default 10s) and per playlist;
 ### Hover zones
 
 - **Top edge** — slides in the Compact Audio Overlay (same behavior as video player).
-- **Bottom-center** — a compact playback controls bar (same hover-to-reveal behavior as the video player): previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Visual Overlay. A play/pause button appears only while a slideshow is running (a still image has nothing to pause).
+- **Bottom-center** — a compact playback controls bar (same hover-to-reveal behavior as the video player): the current file's name over its folder path, as in the video player, then previous, stop, next, slideshow on/off toggle, slideshow interval selector, and a **file list button** that toggles the Visual Overlay. A play/pause button appears only while a slideshow is running (a still image has nothing to pause).
 
 Clicking the image drives playback the same way the video player's content does: a single click toggles play/pause (where a slideshow is running), a double click stops. Pan and zoom claim a click only once it becomes a drag, so a stationary click still toggles. The Visual Overlay works identically to the video player's (see above).
 
@@ -89,10 +90,10 @@ Audio playlists use the same folder / shuffle / tag model as the other types. Th
 A single overlay with a compact and an expanded state:
 
 1. **Hidden** (default) — nothing is shown for audio.
-2. **Compact** — a slim top bar with the current track and the transport (plus track progress / scrub and a volume control). Appears via:
+2. **Compact** — a slim top bar with the current track's name over its folder [path](manager-mode.md#layout) (the Audio Channel Playlist's name while no track is current) and the transport (plus track progress / scrub and a volume control). Appears via:
    - **Hovering** over the top edge of the screen — auto-closes when the cursor leaves the overlay area.
    - **`[arrow down]`** from Hidden — stays open until explicitly closed. Does not auto-close on mouse leave; closes on click outside or `[arrow up]`.
-3. **Expanded** — the same bar with a lower section revealed: an audio playlists **selector** (with a `+` to add one — selecting a playlist plays it immediately), the Audio Channel Playlist's file list with filtering, and tag management for the current track. Playlist rename / delete / reorder live in the Manager. It does not pause playback (TBD, maybe it should in the same way the Visual Overlay does, to prevent jumping to another track while the Tag Editor is engaged).
+3. **Expanded** — the same bar with a lower section revealed: an audio playlists **selector** (with a `+` to add one — selecting a playlist plays it immediately), the Audio Channel Playlist's file list with filtering, and tag management for the current track, laid out as the Visual Overlay's tag column. Playlist rename / delete / reorder live in the Manager. It does not pause playback (TBD, maybe it should in the same way the Visual Overlay does, to prevent jumping to another track while the Tag Editor is engaged).
 
 ### Navigation between overlay states
 

@@ -27,8 +27,7 @@ struct FileListSurface: View {
     let command: ScrollCommand?
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
-    @Binding var draftName: String
-    let onCommitRename: (PlaylistFile) -> Void
+    let onCommitRename: (UUID, String) -> Void
     let onCancelRename: () -> Void
     let actions: FileActions
 
@@ -45,7 +44,6 @@ struct FileListSurface: View {
                     playlist: playlist,
                     role: role,
                     renamingID: renamingID,
-                    draftName: $draftName,
                     onCommitRename: onCommitRename,
                     onCancelRename: onCancelRename,
                     actions: actions

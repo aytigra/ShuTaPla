@@ -2,7 +2,7 @@
 //  PlaybackControlsBar.swift
 //  ShuTaPla
 //
-//  The bottom hover control bar. It adapts to the active visual channel: video gets a
+//  The bottom hover control bar, topped by the current file's name and folder. It adapts to the active visual channel: video gets a
 //  scrubber, volume slider, and loop toggle; image gets a slideshow toggle and interval
 //  selector. The play/pause button flips the playlist's own Playing/Paused state — never
 //  suppression — and a Files & Tags button toggles that overlay.
@@ -18,9 +18,12 @@ struct PlaybackControlsBar: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            if let file = appState.currentVisualFile {
+                currentFile(file)
+            }
             if playlist.mediaType == .video {
                 TimelineScrubber(
-                    position: coordinator.visualCurrentTime,
+                    position: { coordinator.visualCurrentTime },
                     duration: coordinator.visualDuration
                 ) { coordinator.seek(playlist, to: $0) }
             }
@@ -31,6 +34,19 @@ struct PlaybackControlsBar: View {
         .playerOverlayPanel(opacity: 0.85, cornerRadius: 16)
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.08)))
         .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+    }
+
+    // MARK: - Current file
+
+    private func currentFile(_ file: PlaylistFile) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(file.fileName)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            FolderPathText(file: file, in: playlist)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Transport row

@@ -23,3 +23,11 @@ private final class Fired: @unchecked Sendable { var value = false }
     mutate()
     return fired.value
 }
+
+/// `firesObservation` for a mutation that suspends.
+@MainActor func firesObservation(reading read: () -> Void, onAwaiting mutate: () async -> Void) async -> Bool {
+    let fired = Fired()
+    withObservationTracking(read) { fired.value = true }
+    await mutate()
+    return fired.value
+}

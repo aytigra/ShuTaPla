@@ -119,6 +119,12 @@ final class PlaylistFile {
     /// Owning playlist (inverse of `Playlist.files`).
     var playlist: Playlist?
 
+    /// Whether Remove Audio applies: a playable file of a video playlist. A skipped file is
+    /// wrong-type for its playlist; an image or audio file has no audio track to strip.
+    var canRemoveAudio: Bool {
+        !isSkipped && playlist?.mediaType == .video
+    }
+
     /// Runtime-only iCloud availability — derived from disk, never persisted. Routed through
     /// the model's own `@Observable` registrar so the live cloud feed's writes re-render every
     /// reader (badges, the playback gate): SwiftData's `@Model` macro wraps *persisted* stored
@@ -155,5 +161,12 @@ final class PlaylistFile {
         self.taggingStatus = taggingStatus
         self.isSkipped = isSkipped
         self.sortOrder = sortOrder
+    }
+}
+
+extension [PlaylistFile] {
+    /// These files without the ones whose `id` is in `ids`.
+    func excluding(_ ids: Set<UUID>) -> [PlaylistFile] {
+        filter { !ids.contains($0.id) }
     }
 }

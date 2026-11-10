@@ -65,8 +65,7 @@ extension AppState {
     }
 
     /// Folder-picker callback for the shared add flow: scans the folder and either creates
-    /// the playlist, raises the media-type choice (Mixed), or sets an error (empty/failed),
-    /// driving the observable state the `AddPlaylistFlow` modifier presents.
+    /// the playlist, raises the media-type choice (Mixed), or reports a failure (empty/failed).
     func importPlaylist(from url: URL) async {
         isAddingPlaylist = true
         defer { isAddingPlaylist = false }
@@ -76,9 +75,9 @@ extension AppState {
         case .needsTypeChoice(let pending):
             pendingTypeChoice = pending
         case .empty:
-            addPlaylistError = "“\(url.lastPathComponent)” has no videos, images, or audio files."
+            report(.addPlaylistFailed("“\(url.lastPathComponent)” has no videos, images, or audio files."))
         case .failed(let message):
-            addPlaylistError = message
+            report(.addPlaylistFailed(message))
         }
     }
 

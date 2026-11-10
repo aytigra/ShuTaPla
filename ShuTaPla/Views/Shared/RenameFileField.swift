@@ -5,19 +5,20 @@
 //  An inline rename field for files. On focus it selects only the base name —
 //  everything before the file extension — matching Finder's rename behavior, so
 //  a quick edit changes the name and leaves the extension untouched. Commits on
-//  [return] or when focus is lost (a click away), cancels on [esc].
+//  [return] or when focus is lost (a click away, or the field leaving the view tree),
+//  cancels on [esc]. The field owns its text from `name` on and hands it to `onCommit`.
 //
 
 import SwiftUI
 import AppKit
 
 struct RenameFileField: NSViewRepresentable {
-    @Binding var text: String
-    var onCommit: () -> Void
+    let name: String
+    var onCommit: (String) -> Void
     var onCancel: () -> Void
 
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField(string: text)
+        let field = NSTextField(string: name)
         field.delegate = context.coordinator
         field.bezelStyle = .roundedBezel
         field.focusRingType = .default
@@ -38,7 +39,6 @@ struct RenameFileField: NSViewRepresentable {
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
-        if field.stringValue != text { field.stringValue = text }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -51,26 +51,20 @@ struct RenameFileField: NSViewRepresentable {
 
         init(_ parent: RenameFileField) { self.parent = parent }
 
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSTextField else { return }
-            parent.text = field.stringValue
-        }
-
         /// Clicking away (losing focus without `[return]`/`[esc]`) commits the edit
         /// rather than stranding the field in rename mode.
         func controlTextDidEndEditing(_ notification: Notification) {
             guard !resolved else { return }
             resolved = true
-            if let field = notification.object as? NSTextField { parent.text = field.stringValue }
-            parent.onCommit()
+            guard let field = notification.object as? NSTextField else { return }
+            parent.onCommit(field.stringValue)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 resolved = true
-                parent.text = textView.string
-                parent.onCommit()
+                parent.onCommit(textView.string)
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 resolved = true

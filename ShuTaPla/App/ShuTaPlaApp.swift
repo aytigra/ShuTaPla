@@ -106,9 +106,9 @@ struct ShuTaPlaApp: App {
 }
 
 /// Owns the app-level lifecycle hooks SwiftUI's `App` can't express: keeping the app
-/// running when the window closes, lifting the close-time suppression on a Dock reopen, and
-/// a final position persist on quit. The window-close halt itself is observed in-window by
-/// `WindowCloseBridge` (so the Settings window doesn't trigger it).
+/// running when the window closes, lifting the close-time suppression on a Dock reopen, holding
+/// a quit while files are under disk work, and a final position persist on quit. The window-close
+/// halt itself is observed in-window by the `RootView` window bridge (so the Settings window doesn't trigger it).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Wired once the main window appears. The lifecycle callbacks below all run after that,
     /// so it is set by the time they fire.
@@ -124,6 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows { appState?.windowWillReopen() }
         return true
+    }
+
+    /// Quit while files are under disk work: held until the work ends (`AppState.shouldTerminate`).
+    /// While held, AppKit runs the run loop in the modal-panel mode, a common mode, so the main
+    /// queue and the main actor run on.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        appState?.shouldTerminate() ?? .terminateNow
     }
 
     /// Quit: a final write of both channels' live positions before teardown.

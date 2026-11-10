@@ -6,14 +6,16 @@
 //  overlay's compact bar for the current track: elapsed time, a draggable track, total time.
 //  It scrubs in absolute seconds and seeks continuously, reporting every position the knob
 //  passes through rather than only where the drag ends; clamping the knob and disabling itself
-//  on a channel with no timeline yet are its own business, so a caller only hands it a position,
-//  a duration, and somewhere to seek.
+//  on a channel with no timeline yet are its own business, so a caller only hands it a way to read
+//  the position, a duration, and somewhere to seek.
 //
 
 import SwiftUI
 
 struct TimelineScrubber: View {
-    let position: TimeInterval
+    /// Read in this body, so each position update re-evaluates only the scrubber. A caller that
+    /// read the position in its own body would re-evaluate on every engine `time-pos` event.
+    let position: () -> TimeInterval
     let duration: TimeInterval
     /// The track's width, or `nil` to take what the row gives it. The overlay's transport is
     /// centred by equal flexible columns, so its scrubber must be a fixed size to stay put.
@@ -35,6 +37,7 @@ struct TimelineScrubber: View {
     }
 
     var body: some View {
+        let position = position()
         HStack(spacing: 10) {
             timeLabel(position)
 

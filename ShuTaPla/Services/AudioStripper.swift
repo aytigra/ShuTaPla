@@ -17,7 +17,7 @@ import Foundation
 import Cffmpeg
 
 // `nonisolated`: this project defaults to `@MainActor` isolation, but the remux blocks on
-// a background Dispatch queue, and its `pool.async` closure must not be MainActor-isolated.
+// a background Dispatch queue, and its `pool.run` closure must not be MainActor-isolated.
 nonisolated enum AudioStripper {
 
     /// One background-priority lane for remuxes. Stream-copy is I/O-bound, so serializing
@@ -25,35 +25,43 @@ nonisolated enum AudioStripper {
     private static let pool = DispatchQueue(label: "com.aytigra.ShuTaPla.audio-strip", qos: .utility)
 
     /// Remuxes the video at `input` into `output`, copying the video stream and dropping
-    /// every other (audio, data, subtitle) stream. Returns whether `output` was written
-    /// successfully. Runs the blocking remux off the cooperative thread pool so a large
-    /// file never ties up a concurrency-limited Swift task thread.
-    static func stripAudio(at input: URL, to output: URL) async -> Bool {
-        await withCheckedContinuation { continuation in
-            pool.async {
-                let ok = remux(input: input.path, output: output.path)
+    /// every other (audio, data, subtitle) stream. Returns the failure (the step and
+    /// libavformat's error), `nil` when `output` was written. Runs the blocking remux off the
+    /// cooperative thread pool so a large file never ties up a concurrency-limited Swift task
+    /// thread.
+    static func stripAudio(at input: URL, to output: URL) async -> String? {
+        await pool.run { () -> String? in
+            do throws(Failure) {
+                try remux(input: input.path, output: output.path)
+                return nil
+            } catch {
+                log(error.message)
                 // A mid-stream failure (write header/frame/trailer) can leave a truncated,
                 // unplayable file at the destination. Remove it so callers never see a
                 // corrupt output — `remux`'s `defer`s have already closed the file handles.
-                if !ok { try? FileManager.default.removeItem(at: output) }
-                continuation.resume(returning: ok)
+                try? FileManager.default.removeItem(at: output)
+                return error.message
             }
         }
     }
 
+    private struct Failure: Error {
+        let message: String
+    }
+
     /// The libavformat copy loop. Synchronous and blocking — only called from
     /// `stripAudio(at:to:)`.
-    private static func remux(input: String, output: String) -> Bool {
+    private static func remux(input: String, output: String) throws(Failure) {
         var inCtx: UnsafeMutablePointer<AVFormatContext>?
-        guard check(avformat_open_input(&inCtx, input, nil, nil), "open input"),
-              let inCtx else { return false }
+        try check(avformat_open_input(&inCtx, input, nil, nil), "Open input")
+        guard let inCtx else { throw Failure(message: "Open input failed") }
         defer { var c: UnsafeMutablePointer<AVFormatContext>? = inCtx; avformat_close_input(&c) }
 
-        guard check(avformat_find_stream_info(inCtx, nil), "read stream info") else { return false }
+        try check(avformat_find_stream_info(inCtx, nil), "Read stream info")
 
         var outCtx: UnsafeMutablePointer<AVFormatContext>?
-        guard check(avformat_alloc_output_context2(&outCtx, nil, nil, output), "alloc output"),
-              let outCtx else { return false }
+        try check(avformat_alloc_output_context2(&outCtx, nil, nil, output), "Allocate output")
+        guard let outCtx else { throw Failure(message: "Allocate output failed") }
         defer {
             if outCtx.pointee.oformat.pointee.flags & AVFMT_NOFILE == 0 { avio_closep(&outCtx.pointee.pb) }
             avformat_free_context(outCtx)
@@ -67,21 +75,23 @@ nonisolated enum AudioStripper {
         for i in 0..<inputStreamCount {
             guard let inStream = inCtx.pointee.streams[i],
                   inStream.pointee.codecpar.pointee.codec_type == AVMEDIA_TYPE_VIDEO else { continue }
-            guard let outStream = avformat_new_stream(outCtx, nil) else { return false }
-            guard check(avcodec_parameters_copy(outStream.pointee.codecpar, inStream.pointee.codecpar),
-                        "copy codec parameters") else { return false }
+            guard let outStream = avformat_new_stream(outCtx, nil) else {
+                throw Failure(message: "Allocate output stream failed")
+            }
+            try check(avcodec_parameters_copy(outStream.pointee.codecpar, inStream.pointee.codecpar),
+                      "Copy codec parameters")
             outStream.pointee.codecpar.pointee.codec_tag = 0   // let the muxer pick the tag
             outputIndex[i] = next
             next += 1
         }
-        guard next > 0 else { log("no video stream to keep"); return false }
+        guard next > 0 else { throw Failure(message: "No video stream to keep") }
 
         if outCtx.pointee.oformat.pointee.flags & AVFMT_NOFILE == 0 {
-            guard check(avio_open(&outCtx.pointee.pb, output, AVIO_FLAG_WRITE), "open output file") else { return false }
+            try check(avio_open(&outCtx.pointee.pb, output, AVIO_FLAG_WRITE), "Open output file")
         }
-        guard check(avformat_write_header(outCtx, nil), "write header") else { return false }
+        try check(avformat_write_header(outCtx, nil), "Write header")
 
-        guard let packet = av_packet_alloc() else { return false }
+        guard let packet = av_packet_alloc() else { throw Failure(message: "Allocate packet failed") }
         defer { var p: UnsafeMutablePointer<AVPacket>? = packet; av_packet_free(&p) }
 
         while av_read_frame(inCtx, packet) >= 0 {
@@ -98,17 +108,16 @@ nonisolated enum AudioStripper {
             packet.pointee.pos = -1
             // `av_interleaved_write_frame` takes the packet's contents (it unrefs internally),
             // so the deferred `av_packet_unref` is a safe no-op afterwards.
-            guard check(av_interleaved_write_frame(outCtx, packet), "write frame") else { return false }
+            try check(av_interleaved_write_frame(outCtx, packet), "Write frame")
         }
 
-        return check(av_write_trailer(outCtx), "write trailer")
+        try check(av_write_trailer(outCtx), "Write trailer")
     }
 
-    /// Logs and returns success for an FFmpeg return code (negative is an error).
-    private static func check(_ code: Int32, _ what: String) -> Bool {
-        guard code < 0 else { return true }
-        log("\(what) failed: \(errorString(code))")
-        return false
+    /// Throws the failure of step `what` for an FFmpeg return code (negative is an error).
+    private static func check(_ code: Int32, _ what: String) throws(Failure) {
+        guard code < 0 else { return }
+        throw Failure(message: "\(what) failed: \(errorString(code))")
     }
 
     private static func errorString(_ code: Int32) -> String {

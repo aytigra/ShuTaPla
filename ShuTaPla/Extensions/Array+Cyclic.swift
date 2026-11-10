@@ -14,7 +14,7 @@ extension Array {
     /// The element after the first one satisfying `isCurrent`, wrapping past the
     /// end back to the start. When nothing matches, returns `first` — a natural
     /// "start from the beginning". `nil` only when the array is empty.
-    func cyclicSuccessor(where isCurrent: (Element) throws -> Bool) rethrows -> Element? {
+    nonisolated func cyclicSuccessor(where isCurrent: (Element) throws -> Bool) rethrows -> Element? {
         guard !isEmpty else { return nil }
         guard let index = try firstIndex(where: isCurrent) else { return first }
         return self[(index + 1) % count]
@@ -23,7 +23,7 @@ extension Array {
     /// The element before the first one satisfying `isCurrent`, wrapping from the
     /// start back to the end. When nothing matches, returns `last`. `nil` only when
     /// the array is empty.
-    func cyclicPredecessor(where isCurrent: (Element) throws -> Bool) rethrows -> Element? {
+    nonisolated func cyclicPredecessor(where isCurrent: (Element) throws -> Bool) rethrows -> Element? {
         guard !isEmpty else { return nil }
         guard let index = try firstIndex(where: isCurrent) else { return last }
         return self[(index - 1 + count) % count]

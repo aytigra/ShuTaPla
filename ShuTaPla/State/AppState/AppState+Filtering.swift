@@ -89,10 +89,10 @@ extension AppState {
         guard let filter = playlist.currentFilter else { return }
         let combination = filter.normalizedFields
         if let existing = playlist.savedSearches.first(where: { $0.filter?.normalizedFields == combination }) {
-            errorNotice = ErrorNotice(
-                title: "Already saved",
+            report(ErrorNotice(
+                title: ErrorNotice.Title.alreadySaved,
                 message: "The search “\(existing.name)” already covers this combination."
-            )
+            ))
             return
         }
 

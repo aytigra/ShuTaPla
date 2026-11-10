@@ -12,7 +12,7 @@ extension Array {
     /// Moves the elements at `source` so they land just before `destination`,
     /// where `destination` is an offset into the pre-move array (the same index
     /// SwiftUI hands an `.onMove` closure).
-    mutating func move(fromOffsets source: IndexSet, toOffset destination: Int) {
+    nonisolated mutating func move(fromOffsets source: IndexSet, toOffset destination: Int) {
         var moved: [Element] = []
         moved.reserveCapacity(source.count)
         for index in source {

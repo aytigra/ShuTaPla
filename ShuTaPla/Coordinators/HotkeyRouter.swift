@@ -21,7 +21,7 @@
 import AppKit
 
 /// Which surface currently receives the contextual keys (arrows, `[space]`, `[l]`, seek,
-/// `[delete]`): the Visual Channel or the Audio Overlay.
+/// `[delete]`, `[m]`): the Visual Channel or the Audio Overlay.
 enum KeyContext {
     case visual, audio
 }
@@ -37,7 +37,7 @@ protocol HotkeyOverlayContext: AnyObject {
     /// `[arrow down]` closes it rather than revealing audio.
     var isVisualOverlayOpen: Bool { get }
     /// Which surface owns key context. `.audio` once the audio overlay is fully revealed —
-    /// arrows, `[space]`, `[l]`, seek, and `[delete]` then act on the audio playlist;
+    /// arrows, `[space]`, `[l]`, seek, `[delete]`, and `[m]` then act on the audio playlist;
     /// otherwise `.visual`.
     var keyContext: KeyContext { get }
 
@@ -68,7 +68,7 @@ final class NoOverlayContext: HotkeyOverlayContext {
 /// The keys the router acts on, decoded from an `NSEvent` once so the routing logic
 /// is a pure function of key + right-option and is unit-testable without AppKit.
 enum Hotkey: Equatable {
-    case space, escape, tab, enter, p, l, s, r, delete
+    case space, escape, tab, enter, p, l, s, r, m, delete
     case arrowUp, arrowDown, arrowLeft, arrowRight
 
     /// Decodes a key-down event, or `nil` if it isn't a key the router handles.
@@ -84,6 +84,7 @@ enum Hotkey: Equatable {
         case "l": self = .l
         case "s": self = .s
         case "r": self = .r
+        case "m": self = .m
         default: return nil
         }
     }
@@ -133,21 +134,24 @@ final class HotkeyRouter {
 
     private var coordinator: PlaybackCoordinator? { appState?.coordinator }
 
-    /// Whether a modal confirmation or error alert is up and owns the keyboard. Covers the one
-    /// destructive-confirmation alert, the add-playlist media-type choice, and the single-button
-    /// alerts that report a failed or refused operation — for any of them the app-wide monitor must
-    /// pass `[enter]`/`[esc]` through and swallow the rest, or bare keys leak to playback / the file
-    /// list behind the modal. Every modal therefore raises itself through an `AppState` flag listed
-    /// here: a view-local `@State` alert is invisible from here, so the router swallows its `[esc]`
-    /// (Manager's idle esc chain consumes it) and the alert can only be dismissed by clicking its
-    /// button.
+    /// Whether an app-root modal is up and owns the keyboard: the monitor must pass `[enter]`/`[esc]`
+    /// through and swallow the rest, or bare keys leak to playback / the file list behind it. Every
+    /// modal is raised through `AppState.windowModals`, so one check covers each kind; a view-local
+    /// `@State` alert is invisible from here, so the router swallows its `[esc]`. A queued modal and
+    /// a sheet still on the window (an alert in its closing animation) hold the keyboard too: the
+    /// next modal shows once the window has no sheet (`AppState.windowHasSheet`).
     private var hasBlockingConfirmation: Bool {
         guard let appState else { return false }
-        return appState.pendingConfirmation != nil
-            || appState.errorNotice != nil
-            || appState.pendingTypeChoice != nil
-            || appState.addPlaylistError != nil
-            || appState.saveError != nil
+        return appState.windowHasSheet || appState.windowModals.isNotEmpty
+    }
+
+    /// Whether bare keys belong to something the router never intercepts: a focused text field
+    /// types, and a shown modal whose kind `ownsKeys` takes the keyboard. Such a panel runs out of
+    /// process, so its keys normally never reach the monitor; any that do (while it opens, a key
+    /// repeat of the key that raised it) pass through rather than act on playback or the file list
+    /// behind it. Checked before `hasBlockingConfirmation`, which the panel's queue entry also sets.
+    private var keysBelongElsewhere: Bool {
+        isTextInputActive() || appState?.windowModals.shown?.kind.ownsKeys == true
     }
 
     // MARK: - Monitor lifecycle
@@ -178,10 +182,11 @@ final class HotkeyRouter {
         if event.type == .flagsChanged {
             if event.keyCode == 61 { rightOptionDown = event.modifierFlags.contains(.option) }
             // `[shift]` (left 56 / right 60) cycles the image player's fit mode, once on the
-            // press edge. A focused text field types a capital instead, so it's exempt.
+            // press edge. A focused text field types a capital instead, so it's exempt; a
+            // blocking modal swallows it, as it does every bare key.
             if event.keyCode == 56 || event.keyCode == 60 {
                 let down = event.modifierFlags.contains(.shift)
-                if down, !shiftDown, !isTextInputActive() { cycleImageFitMode() }
+                if down, !shiftDown, !keysBelongElsewhere, !hasBlockingConfirmation { cycleImageFitMode() }
                 shiftDown = down
             }
             return event
@@ -194,8 +199,7 @@ final class HotkeyRouter {
             return event
         }
 
-        // A focused text field types; the router never intercepts it.
-        if isTextInputActive() { return event }
+        if keysBelongElsewhere { return event }
 
         // A confirmation dialog is a modal that owns `[enter]`/`[esc]` natively. Pass
         // those through so its own default/cancel buttons fire instantly; consuming them
@@ -293,16 +297,16 @@ final class HotkeyRouter {
         // video-only, so — unlike the contextual keys — it always targets the visual channel:
         // an audio track has nothing to strip. A no-op when an image or audio file is on it.
         if key == .r {
-            return appState.requestStripPlayingFile()
+            return coordinator.visualCurrentFile.map { appState.requestAudioStrip([$0]) } ?? false
         }
 
-        // `[delete]` raises the trash confirmation for the playing file — the focused track when
-        // the audio overlay holds key context, otherwise the visual channel's file. Every other
-        // contextual key already respects key context, so `[delete]` does too.
-        if key == .delete {
-            return overlayContext.keyContext == .audio
-                ? appState.requestDeletePlayingAudioFile()
-                : appState.requestDeletePlayingFile()
+        // `[delete]` raises the trash confirmation and `[m]` the folder chooser for the playing
+        // file — the focused track when the audio overlay holds key context, otherwise the visual
+        // channel's file. Every other contextual key already respects key context, so these do too.
+        if key == .delete || key == .m {
+            let file = overlayContext.keyContext == .audio ? appState.currentAudioFile : coordinator.visualCurrentFile
+            guard let file else { return false }
+            return key == .delete ? appState.requestDelete([file]) : appState.requestMove([file])
         }
 
         return overlayContext.keyContext == .audio
@@ -371,11 +375,6 @@ final class HotkeyRouter {
     }
 
     private func routeManager(_ key: Hotkey, rightOption: Bool) -> Bool {
-        // A top-edge-hover audio overlay can take key context in Manager too; otherwise
-        // arrows are left for the file list.
-        if overlayContext.keyContext == .audio {
-            return routeAudio(key, rightOption: rightOption)
-        }
         switch key {
         case .escape:
             // Cancel an in-progress operation (rename / tagging) if there is one;
@@ -390,8 +389,15 @@ final class HotkeyRouter {
             // Play the selected file (the text-input guard upstream means this only fires
             // when no field is focused, so a rename's Return still commits the field).
             return appState?.playSelectedFile() ?? false
+        // `[delete]` / `[m]` / `[r]` act on the *visible* selection, not the whole editor selection:
+        // a file edited out of the effective filter stays in the tag editor, but a bare key must not
+        // act on a file it can no longer see. An all-filtered-out selection makes them a no-op.
         case .delete:
-            return appState?.requestDeleteSelectedFiles() ?? false
+            return appState.map { $0.requestDelete($0.visibleSelectedManagerFiles()) } ?? false
+        case .m:
+            return appState.map { $0.requestMove($0.visibleSelectedManagerFiles()) } ?? false
+        case .r:
+            return appState.map { $0.requestAudioStrip($0.visibleSelectedManagerFiles()) } ?? false
         case .arrowUp:
             return appState?.moveFileSelection(.up) ?? false
         case .arrowDown:

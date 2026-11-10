@@ -19,7 +19,7 @@ import Cmpv
 
 // `nonisolated`: this project defaults to `@MainActor` isolation, but every member
 // here runs off the main actor — the extraction blocks on a background Dispatch
-// queue, and its `pool.async` closure must not be MainActor-isolated or it would
+// queue, and its `pool.run` closure must not be MainActor-isolated or it would
 // trip an executor assertion when it runs on that background thread.
 nonisolated enum MPVThumbnailer {
 
@@ -41,12 +41,8 @@ nonisolated enum MPVThumbnailer {
     static func frame(at url: URL, maxPixelSize: Int) async -> (image: CGImage?, metadata: MediaMetadata, hdr: ThumbnailHDR?) {
         let cancelled = Mutex(false)
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                pool.async {
-                    continuation.resume(returning: extract(
-                        at: url, maxPixelSize: maxPixelSize, isCancelled: { cancelled.withLock { $0 } }
-                    ))
-                }
+            await pool.run {
+                extract(at: url, maxPixelSize: maxPixelSize, isCancelled: { cancelled.withLock { $0 } })
             }
         } onCancel: {
             cancelled.withLock { $0 = true }
@@ -61,11 +57,7 @@ nonisolated enum MPVThumbnailer {
     static func metadata(at url: URL) async -> MediaMetadata {
         let cancelled = Mutex(false)
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                pool.async {
-                    continuation.resume(returning: probeMetadata(at: url, isCancelled: { cancelled.withLock { $0 } }))
-                }
-            }
+            await pool.run { probeMetadata(at: url, isCancelled: { cancelled.withLock { $0 } }) }
         } onCancel: {
             cancelled.withLock { $0 = true }
         }

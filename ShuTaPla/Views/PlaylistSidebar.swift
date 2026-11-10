@@ -12,9 +12,8 @@ import SwiftUI
 struct PlaylistSidebar: View {
     @Environment(AppState.self) private var appState
 
-    // Inline rename: the playlist being edited and its draft text.
+    // Inline rename: the playlist being edited.
     @State private var renaming: Playlist?
-    @State private var draftName = ""
 
     var body: some View {
         // One fetch per body evaluation, shared by the section and its empty state rather than
@@ -74,11 +73,12 @@ struct PlaylistSidebar: View {
     private func row(_ playlist: Playlist) -> some View {
         if renaming === playlist {
             RenameFileField(
-                text: $draftName,
-                onCommit: { commitRename() },
+                name: playlist.name,
+                onCommit: { commitRename(playlist, to: $0) },
                 onCancel: { renaming = nil }
             )
         } else {
+            let deleting = appState.playlistWork.isDeleting(playlist.id)
             Button {
                 appState.manage(playlist)
             } label: {
@@ -91,13 +91,17 @@ struct PlaylistSidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(appState.deletingPlaylistIDs.contains(playlist.id))
+            .disabled(deleting)
             .listRowBackground(isSelectedRow(playlist) ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
             // The Manager sidebar owns playlist deletion for every scope — visual and audio alike,
             // since both browse here. The player-mode audio overlay is a pure selector with no delete.
+            // A rename committed after the delete ends would write to a destroyed playlist.
             .contextMenu {
-                Button("Rename") { beginRename(playlist) }
-                Button("Delete", role: .destructive) { appState.requestPlaylistDelete(playlist) }
+                Group {
+                    Button("Rename") { beginRename(playlist) }
+                    Button("Delete", role: .destructive) { appState.requestPlaylistDelete(playlist) }
+                }
+                .disabled(deleting)
             }
         }
     }
@@ -110,14 +114,13 @@ struct PlaylistSidebar: View {
     // MARK: - Rename
 
     private func beginRename(_ playlist: Playlist) {
-        draftName = playlist.name
         renaming = playlist
     }
 
-    private func commitRename() {
-        if let playlist = renaming {
-            appState.rename(playlist, to: draftName)
-        }
-        renaming = nil
+    /// A field also commits when its row leaves the list (a rename started on another playlist),
+    /// so it closes the rename only while it is still the open one.
+    private func commitRename(_ playlist: Playlist, to name: String) {
+        if renaming === playlist { renaming = nil }
+        appState.rename(playlist, to: name)
     }
 }

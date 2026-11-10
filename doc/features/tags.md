@@ -19,7 +19,7 @@ Rules:
 - An **empty** bracket group (`[]`, or whitespace only) yields no tags; the file is treated as **untagged**, and the empty group is cleaned up the next time the file's tags are edited.
 - A non-empty bracket group containing **any** token that fails the rules above (for example `[beach ab]`, where `ab` is too short, or `[a b c]`) is **not** treated as untagged. It is flagged as **invalid tagging** (see below) so its contents are surfaced to the user and never silently dropped on the next tag edit.
 - Tags are **case-insensitive**. They are normalized for matching and filtering but the on-disk casing is preserved when reading and writing.
-- Duplicate tags never accumulate: adding a tag a file already has (case-insensitively) is a no-op, and a playlist-wide tag rename that would produce a duplicate within a file collapses it to a single instance.
+- Duplicate tags never accumulate: adding a tag a file already has (case-insensitively) is a no-op, and a playlist-wide tag replace that would produce a duplicate within a file collapses it to a single instance.
 - A file without any bracket group is **untagged**. Untagged files are surfaced via a counter notice that activates the Untagged Service Filter.
 - Removing the last tag from a file also removes the now-empty brackets from the filename.
 
@@ -38,7 +38,7 @@ A single stray, unmatched bracket that does not break parsing (for example a lit
 
 ## Tag cache
 
-When a playlist is created (and after each Update / Reshuffle) the app collects all tags from all filenames in the playlist and caches them as the playlist's known-tags set. This drives the dropdown suggestions in the Tag Editor and the Filter Strip. Adding new tags to files also adds them to the tag cache so they appear in suggestions. Remove/rename tag playlist-wide operations also rename/remove them in the cache.
+When a playlist is created (and after each Update / Reshuffle) the app collects all tags from all filenames in the playlist and caches them as the playlist's known-tags set. This drives the dropdown suggestions in the Tag Editor and the Filter Strip. Adding new tags to files also adds them to the tag cache so they appear in suggestions. Playlist-wide remove/replace operations also remove/replace them in the cache.
 
 ## Tag editing UI
 
@@ -47,7 +47,7 @@ The Tag Editor's UI and behavior are identical in all three places it appears �
 The Tag Editor applies to the **currently selected or active file(s)**. UI is a multi-select tag input:
 
 - Existing tags appear as chips.
-- A text input lets the user type freely. As they type, a dropdown shows matching existing tags and commonly used tags from the playlist's cache.
+- A text input lets the user type freely. As they type, a dropdown shows matching existing tags and commonly used tags from the playlist's cache. Suggestions rank by how the tag matches the typed text (exact, then prefix, then substring), then by how many files in the playlist carry it.
 
 When the selected or active file has **invalid tagging**, the chip editor is not shown — editing by chip would rewrite the filename and risk dropping the bracket content (which could be relevant). Instead the editor displays an **"invalid tag syntax"** message that explains the problem and offers a plain filename-rename field so the user can fix the name by hand. Once the filename parses cleanly (valid or untagged), the chip editor returns automatically. In a Manager multi-selection, files with invalid tagging are excluded from tag add/remove operations and called out so the user can fix them individually.
 
@@ -64,6 +64,6 @@ The input does not take focus on its own — clicking the field opens it for edi
 | `[enter]` | Confirm the highlighted dropdown option, or add the typed string as a new tag |
 | `[esc]` | Unfocus the tag input (does not close the overlay or pause) |
 
-Adding, removing, or renaming a tag immediately renames the underlying file on disk. The playlist's reference is updated in place so play position is not lost.
+Adding, removing, or replacing a tag immediately renames the underlying file on disk. The playlist's reference is updated in place so play position is not lost.
 
-If the app has lost write access to a playlist's folder (the saved permission went stale, or the folder moved or was renamed), it asks the user to locate the folder again before the edit; once re-granted, it remembers the new permission and proceeds. If a disk operation still fails — a rename that would collide with an existing filename, a permission error, a read-only or disconnected volume, or any move-to-Trash failure — the app does not lose the file or its playlist entry: it leaves the file as-is and surfaces a clear, non-blocking notification so the user knows to resolve it. This applies to all file mutations (tag edits, renames, deletes, and playlist-wide tag operations).
+If the playlist's folder moved or was renamed, the app refreshes its saved permission and proceeds. If the folder can't be found, the edit doesn't run, and a notice tells the user to connect the disk the folder is on, or, when the folder was deleted, to delete the playlist and add the folder again. If a disk operation still fails — a rename that would collide with an existing filename, a permission error, a read-only or disconnected volume, or any move-to-Trash failure — the app does not lose the file or its playlist entry: it leaves the file as-is and surfaces a clear, non-blocking notification so the user knows to resolve it. This applies to all file mutations (tag edits, renames, deletes, moves, and playlist-wide tag operations).

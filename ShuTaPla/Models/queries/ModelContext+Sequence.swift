@@ -158,6 +158,28 @@ extension ModelContext {
         return (try? fetchIdentifiers(descriptor))?.first
     }
 
+    /// The files whose app id is in `fileIDs` and that still exist in the store, in the order of
+    /// `fileIDs`: a batch op runs in its request's order. A file pruned since
+    /// the ids were taken is left out, so a caller holding ids across an await never reads a
+    /// destroyed row. The default `includePendingChanges` returns a dirty registered row unchanged.
+    func files(withIDs fileIDs: [UUID]) -> [PlaylistFile] {
+        guard fileIDs.isNotEmpty else { return [] }
+        let files = (try? fetch(FetchDescriptor<PlaylistFile>(predicate: #Predicate { fileIDs.contains($0.id) }))) ?? []
+        let position = Dictionary(fileIDs.enumerated().map { ($1, $0) }) { first, _ in first }
+        return files.sorted { position[$0.id, default: 0] < position[$1.id, default: 0] }
+    }
+
+    /// The names of the first `limit` files whose app id is in `fileIDs`, in Finder order, and the
+    /// count of all of them. The store sorts and limits, so only `limit` rows are fetched.
+    func fileNames(withIDs fileIDs: [UUID], limit: Int) -> (names: [String], count: Int) {
+        guard fileIDs.isNotEmpty else { return ([], 0) }
+        let predicate = #Predicate<PlaylistFile> { fileIDs.contains($0.id) }
+        var descriptor = FetchDescriptor(predicate: predicate, sortBy: [SortDescriptor(\.fileName, comparator: .localizedStandard)])
+        descriptor.fetchLimit = limit
+        let names = ((try? fetch(descriptor)) ?? []).map(\.fileName)
+        return (names, (try? fetchCount(FetchDescriptor(predicate: predicate))) ?? 0)
+    }
+
     // MARK: - Fetch primitives
 
     private func identifiers(matching predicate: Predicate<PlaylistFile>) -> [PersistentIdentifier] {

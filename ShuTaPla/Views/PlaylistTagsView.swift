@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  The Manager right panel's tag-management mode: a flat list of every tag in the
-//  playlist with its file count, each row offering an inline rename (the field takes
+//  playlist with its file count, each row offering an inline replace (the field takes
 //  focus immediately, commits with [return], cancels with [esc]) and a remove action.
 //  Removal renames files on disk and can't be undone, so it asks for confirmation.
 //  Lets tags be curated playlist-wide without selecting or opening any file.
@@ -15,9 +15,9 @@ struct PlaylistTagsView: View {
     let playlist: Playlist
     @Environment(AppState.self) private var appState
 
-    @State private var renamingTag: String?
-    @State private var renameDraft = ""
-    @FocusState private var renameFieldFocused: Bool
+    @State private var replacingTag: String?
+    @State private var replaceDraft = ""
+    @FocusState private var replaceFieldFocused: Bool
 
     /// Tags sorted alphabetically (case-insensitive) so a given tag is easy to find.
     private var tags: [(name: String, count: Int)] {
@@ -58,16 +58,16 @@ struct PlaylistTagsView: View {
 
     @ViewBuilder
     private func row(_ tag: String, count: Int) -> some View {
-        if renamingTag == tag {
+        if replacingTag == tag {
             HStack(spacing: 6) {
-                TextField("Tag", text: $renameDraft)
+                TextField("Tag", text: $replaceDraft)
                     .textFieldStyle(.roundedBorder)
-                    .focused($renameFieldFocused)
-                    .onAppear { renameFieldFocused = true }
-                    .onSubmit { commitRename(tag) }
-                    .onExitCommand { renamingTag = nil }
-                Button("Rename") { commitRename(tag) }
-                Button("Cancel") { renamingTag = nil }
+                    .focused($replaceFieldFocused)
+                    .onAppear { replaceFieldFocused = true }
+                    .onSubmit { commitReplace(tag) }
+                    .onExitCommand { replacingTag = nil }
+                Button("Replace") { commitReplace(tag) }
+                Button("Cancel") { replacingTag = nil }
                     .buttonStyle(.borderless)
             }
             .padding(.horizontal, 10)
@@ -81,16 +81,18 @@ struct PlaylistTagsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Button { beginRename(tag) } label: {
-                    Image(systemName: "pencil")
+                Button { beginReplace(tag) } label: {
+                    Label("Replace Tag", systemImage: "pencil")
                 }
                 .buttonStyle(.borderless)
-                .help("Rename this tag across the playlist")
+                .labelStyle(.iconOnly)
+                .help("Replace this tag in every file")
 
                 Button(role: .destructive) { appState.requestTagRemoval(tag) } label: {
-                    Image(systemName: "trash")
+                    Label("Remove Tag", systemImage: "trash")
                 }
                 .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
                 .help("Remove this tag from every file")
             }
             .padding(.horizontal, 10)
@@ -103,28 +105,13 @@ struct PlaylistTagsView: View {
 
     // MARK: - Actions
 
-    private func beginRename(_ tag: String) {
-        renameDraft = tag
-        renamingTag = tag
+    private func beginReplace(_ tag: String) {
+        replaceDraft = tag
+        replacingTag = tag
     }
 
-    private func commitRename(_ oldTag: String) {
-        let new = renameDraft.trimmingCharacters(in: .whitespaces)
-        renamingTag = nil
-        // An empty entry or an unchanged name just closes the editor; a non-empty but
-        // malformed entry is reported rather than silently dropped.
-        guard new.isNotEmpty, !TagParser.sameTag(new, oldTag) else { return }
-        guard TagParser.isValidTag(new) else {
-            appState.errorNotice = ErrorNotice(
-                title: "Tag change failed",
-                message: "“\(new)” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters)."
-            )
-            return
-        }
-        Task {
-            if let error = await appState.renameTagAcrossPlaylist(playlist, from: oldTag, to: new) {
-                appState.errorNotice = ErrorNotice(title: "Tag change failed", message: error)
-            }
-        }
+    private func commitReplace(_ oldTag: String) {
+        replacingTag = nil
+        appState.commitTagReplace(oldTag, with: replaceDraft, on: playlist)
     }
 }

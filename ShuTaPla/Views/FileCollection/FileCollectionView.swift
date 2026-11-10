@@ -36,13 +36,11 @@ private struct FileScrollRequest: Equatable {
 struct FileCollectionView: View {
     let playlist: Playlist
     let layout: FileCollectionLayout
-    let confirmDelete: ([PlaylistFile]) -> Void
 
     @Environment(AppState.self) private var appState
 
     @State private var anchor: PersistentIdentifier?
     @State private var renamingID: UUID?
-    @State private var draftName = ""
     // A mouse click already targets a visible item, so the auto-scroll that keeps the
     // keyboard selection centered would only jar the view. Set when a click changes
     // the selection, consumed by the next selection-change scroll.
@@ -110,8 +108,7 @@ struct FileCollectionView: View {
             targetIndex: currentFileIndex(in: ids),
             command: scrollCommand,
             renamingID: renamingID,
-            draftName: $draftName,
-            onCommitRename: { commitRename($0) },
+            onCommitRename: commitRename(of:to:),
             onCancelRename: { renamingID = nil },
             actions: actions
         )
@@ -146,8 +143,7 @@ struct FileCollectionView: View {
                     id: id,
                     playlist: playlist,
                     renamingID: renamingID,
-                    draftName: $draftName,
-                    onCommitRename: { commitRename($0) },
+                    onCommitRename: commitRename(of:to:),
                     onCancelRename: { renamingID = nil },
                     actions: actions
                 )
@@ -187,9 +183,10 @@ struct FileCollectionView: View {
         FileActions(
             onTap: { handleTap($0) },
             onRename: { beginRename($0) },
+            onMove: { appState.requestMove(targets(for: $0)) },
             onRemoveAudio: { appState.requestAudioStrip(targets(for: $0)) },
             onDownload: { appState.downloadFiles(targets(for: $0)) },
-            onDelete: { confirmDelete(targets(for: $0)) }
+            onDelete: { appState.requestDelete(targets(for: $0)) }
         )
     }
 
@@ -237,13 +234,13 @@ struct FileCollectionView: View {
     // MARK: - Rename
 
     private func beginRename(_ file: PlaylistFile) {
-        draftName = file.fileName
         renamingID = file.id
     }
 
-    private func commitRename(_ file: PlaylistFile) {
-        let name = draftName
-        renamingID = nil
-        Task { await appState.renameFileReportingFailure(file, to: name) }
+    /// A field also commits when its row leaves the list (a rename started on another file, a
+    /// prune), so it closes the rename only while it is still the open one.
+    private func commitRename(of id: UUID, to name: String) {
+        if renamingID == id { renamingID = nil }
+        appState.commitRename(of: id, to: name)
     }
 }

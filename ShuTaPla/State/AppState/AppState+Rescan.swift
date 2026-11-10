@@ -15,8 +15,10 @@ extension AppState {
     // MARK: - Select / activate
 
     /// Makes `playlist` the Manager selection, activates it for its channel, and
-    /// kicks off a background re-scan to pick up files added or removed on disk.
+    /// kicks off a background re-scan to pick up files added or removed on disk. A playlist being
+    /// deleted is refused: the delete released it before it waits for the playlist's file ops.
     func manage(_ playlist: Playlist) {
+        guard !playlistWork.isDeleting(playlist.id) else { return }
         let isNewSelection = managedPlaylist !== playlist
         if isNewSelection {
             managerSelection = []
@@ -45,6 +47,7 @@ extension AppState {
     /// genuinely new selection playing. Re-selecting the playing playlist re-scans and re-centers
     /// without restarting it.
     func playOnVisualChannel(_ playlist: Playlist) {
+        guard !playlistWork.isDeleting(playlist.id) else { return }
         let isNewSelection = coordinator.liveVisualPlaylist !== playlist
         manage(playlist)
         if isNewSelection { coordinator.play(playlist) }
@@ -54,8 +57,9 @@ extension AppState {
     /// re-reads its folder (every click — the same automatic Update the Manager does). A
     /// genuinely new selection also starts it playing; re-selecting the loaded one re-scans and
     /// re-centers without restarting playback. Independent of the managed slot — the overlay
-    /// drives the audio channel, not the Manager.
+    /// drives the audio channel, not the Manager. A playlist being deleted is refused, as in `manage`.
     func playOnAudioChannel(_ playlist: Playlist) {
+        guard !playlistWork.isDeleting(playlist.id) else { return }
         let isNewSelection = audioChannelPlaylist !== playlist
         remember(playlist)   // audioChannelPlaylist = playlist
         if isNewSelection { coordinator.play(playlist) }
@@ -75,10 +79,15 @@ extension AppState {
     /// it and compacting the remaining sort orders in its section. The selection
     /// clears immediately; the files are then removed in batches (yielding between
     /// each) so a large playlist's cleanup keeps the UI responsive and its row can
-    /// show a spinner until it disappears.
+    /// show a spinner until it disappears. The removal waits for the playlist's file ops in
+    /// flight: their disk work (a long move, a remux) can't stop midway, and their tails read the
+    /// rows and the playlist. It also waits for the cancelled re-scan: one past its commit decision
+    /// still applies to the playlist (`PlaylistWorkGate`). The slots and the channel are released
+    /// before the wait, so only a listing can hand a caller the playlist meanwhile: every function
+    /// that takes one into a slot or a channel refuses it.
     func delete(_ playlist: Playlist) async {
-        updateTasks[playlist.id]?.cancel()
-        updateTasks[playlist.id] = nil
+        let id = playlist.id
+        guard playlistWork.beginDelete(id) else { return }
         // Release the playback channel first: a playing audio playlist (which runs even in
         // Manager mode) would otherwise leave the engine on files about to be deleted, and
         // its next advance would dereference a destroyed model.
@@ -88,9 +97,8 @@ extension AppState {
         // A playlist can only sit in its own type's remembered slot, so clearing that one slot
         // covers every reference the delete must drop.
         if rememberedPlaylist(for: mediaType) === playlist { setRemembered(nil, for: mediaType) }
-        let id = playlist.id
 
-        deletingPlaylistIDs.insert(id)
+        await playlistWork.waitForWork(on: id)
         let files = Array(playlist.files)
         var start = 0
         let batchSize = 200
@@ -104,7 +112,7 @@ extension AppState {
             await Task.yield()
         }
         modelContext.delete(playlist)
-        deletingPlaylistIDs.remove(id)
+        playlistWork.endDelete(id)
         compactSortOrder(for: mediaType)
         persistAndRefresh()
         notePlaylistsChanged()   // the row is gone and the section renumbered
@@ -121,14 +129,14 @@ extension AppState {
         notePlaylistsChanged()   // the section's order
     }
 
-    /// Cancels a running background re-scan — the only cancellable Manager operation.
-    /// Returns whether something was in flight (the Manager `[esc]` hotkey consumes the
-    /// key either way).
+    /// Cancels the running background re-scans — the only cancellable Manager operation. A new
+    /// playlist's tag derive keeps running: nothing re-derives a playlist whose derive rolled back.
+    /// Returns whether something was in flight (the Manager `[esc]` hotkey consumes the key either
+    /// way).
     @discardableResult
     func cancelInProgressOperation() -> Bool {
-        guard busyPlaylistIDs.isNotEmpty else { return false }
-        for task in updateTasks.values { task.cancel() }
-        updateTasks.removeAll()
+        guard rescanCounts.isNotEmpty else { return false }
+        playlistWork.cancel(rescanCounts.keys)
         updateTask = nil
         return true
     }
@@ -138,20 +146,45 @@ extension AppState {
     /// Re-reads `playlist`'s folder on disk in the background — the automatic Update, the reason
     /// there's no dedicated control: re-clicking the open playlist re-scans and re-centers.
     /// Supersedes any in-flight re-scan of the *same* playlist so rapid clicks don't pile up,
-    /// while leaving a different playlist's scan running. The spawned task is also remembered as
-    /// `updateTask` so a delete can cancel it and tests can await it.
+    /// while leaving a different playlist's scan running. A playlist with a file op in flight
+    /// defers the re-scan until the op ends (`PlaylistWorkGate`).
     private func rescan(_ playlist: Playlist) {
+        guard playlistWork.requestScan(playlist.id) else { return }
         trackBackgroundTask(for: playlist.id) { await self.update(playlist) }
     }
 
-    /// Launches `work` as the playlist's tracked background task: cancels any in-flight one for the
-    /// same playlist (so rapid re-selection, or a create followed by a rescan, doesn't pile up),
-    /// records it per-playlist so a delete can cancel it, and as `updateTask` so tests can await it.
+    /// Runs `work` as the playlist's tracked background task (`PlaylistWorkGate.track`), which a
+    /// delete or a file op cancels and awaits, and as `updateTask` so tests can await it.
     func trackBackgroundTask(for playlistID: UUID, _ work: @escaping () async -> Void) {
-        updateTasks[playlistID]?.cancel()
-        let task = Task { await work() }
-        updateTasks[playlistID] = task
-        updateTask = task
+        updateTask = playlistWork.track(playlistID, work)
+    }
+
+    /// Opens `playlist`'s folder for a file op's disk work, apart from the playlist's re-scan. A
+    /// re-scan that lists the folder before the op and reconciles after it would undo the op: bring
+    /// back a trashed or moved row, or put a renamed row back under its old name. So the in-flight
+    /// re-scan is cancelled (its reconcile rolls back) and awaited first, and a re-scan requested
+    /// during the op runs once the playlist's last op ends (`PlaylistWorkGate`). A playlist being
+    /// deleted starts no op (returns `nil`).
+    func withDiskOpAccess<T>(to playlist: Playlist, perform body: (URL) async -> T) async -> T? {
+        guard await playlistWork.beginOp(playlist.id) else { return nil }
+        defer { if playlistWork.endOp(playlist.id) { rescan(playlist) } }
+        return await withFolderAccess(to: playlist, perform: body)
+    }
+
+    /// Runs `body` under a one-shot session on `playlist`'s folder. A folder that can't be found
+    /// reports `folderNotFound` and returns `nil`.
+    func withFolderAccess<T>(to playlist: Playlist, perform body: (URL) -> T) -> T? {
+        reportingLostFolder(of: playlist, folderAccess.withAccess(to: playlist, perform: body))
+    }
+
+    /// The `async` form of `withFolderAccess(to:perform:)`.
+    func withFolderAccess<T>(to playlist: Playlist, perform body: (URL) async -> T) async -> T? {
+        reportingLostFolder(of: playlist, await folderAccess.withAccess(to: playlist, perform: body))
+    }
+
+    private func reportingLostFolder<T>(of playlist: Playlist, _ result: T?) -> T? {
+        if result == nil { report(.folderNotFound(playlist.name)) }
+        return result
     }
 
     /// Re-scans a playlist's folder and reconciles its files against what's now on disk: prunes
@@ -159,15 +192,12 @@ extension AppState {
     /// onto the index the filters query. The reconcile — the O(N) derive/diff/write/orphan-sweep —
     /// runs on the background `scanActor`; the main actor only finishes applying the result.
     /// A rescan failure (e.g. a stale bookmark) is silent — the file list stays as it was — but a
-    /// failed background save surfaces through `saveError`, like the main-actor save path.
+    /// failed background save surfaces through `errorNotice`, like the main-actor save path.
     func update(_ playlist: Playlist) async {
         guard !Task.isCancelled else { return }
-        busyPlaylistIDs.insert(playlist.id)
-        defer { busyPlaylistIDs.remove(playlist.id) }
-
-        // Commit a refreshed bookmark before handing off, so the main context holds no pending
-        // edit the background reconcile is unaware of and the actor's fetch sees the new bookmark.
-        if folderAccess.refreshStaleBookmark(for: playlist) { try? modelContext.save() }
+        let id = playlist.id
+        rescanCounts[id, default: 0] += 1
+        defer { rescanCounts.decrementCount(forKey: id) }
 
         let current: [ScannedFile]
         do {
@@ -182,7 +212,7 @@ extension AppState {
     /// Reconciles `playlist` against `current` on the background `scanActor` and applies a committed
     /// result on the main actor — the derivation half shared by Update (which re-reads the folder
     /// first) and creation (which already holds the scanned files). A failed background save
-    /// surfaces through `saveError`; a no-op or cancelled/rolled-back reconcile leaves the store and
+    /// surfaces through `errorNotice`; a no-op or cancelled/rolled-back reconcile leaves the store and
     /// UI untouched.
     func deriveInBackground(_ playlist: Playlist, from current: [ScannedFile]) async {
         // Where playback stands, read before the reconcile can prune the row out from under it —
@@ -198,7 +228,7 @@ extension AppState {
         if let message = result.saveErrorMessage {
             // The background save threw and rolled back — nothing committed. Surface it through the
             // same app-root alert the main-actor save path uses; do not apply (the store is intact).
-            saveError = Self.saveErrorText(message)
+            report(.saveFailed(message))
             return
         }
         guard result.changed else { return }
@@ -213,11 +243,7 @@ extension AppState {
     /// bump the version so the store-side file lists re-fetch, and advance either channel off a
     /// dropped playing file.
     private func applyScanResult(_ result: ScanReconcileResult, to playlist: Playlist, resumingFrom sortOrder: Int?) {
-        let removedIDs = Set(result.removedFileIDs)
-        // Drop pending references to pruned files so a confirmation raised over one the re-scan
-        // removed can't act on (and dereference) a destroyed model when the user confirms.
-        pendingConfirmation = pendingConfirmation?.pruning(removedFileIDs: removedIDs)
-        managerSelection.subtract(removedIDs)
+        forgetRemovedFiles(Set(result.removedFileIDs))
 
         // The actor committed on its own context, which doesn't merge into this held playlist; a
         // fetch refaults it in place so the tag UI (which reads `playlist.tagFrequency`) and any

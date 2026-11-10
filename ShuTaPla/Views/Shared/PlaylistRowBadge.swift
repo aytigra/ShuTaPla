@@ -23,11 +23,11 @@ struct PlaylistRowBadge: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        if appState.deletingPlaylistIDs.contains(playlist.id) {
+        if appState.playlistWork.isDeleting(playlist.id) {
             ProgressView()
                 .controlSize(.small)
                 .tint(.red)
-        } else if appState.busyPlaylistIDs.contains(playlist.id) {
+        } else if appState.rescanCounts[playlist.id] != nil {
             ProgressView()
                 .controlSize(.small)
         } else {

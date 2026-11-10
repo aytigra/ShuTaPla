@@ -27,8 +27,8 @@ struct PendingConfirmationWordingTests {
     // MARK: - Titles
 
     @Test func aSingleFileIsNamedAndSeveralAreCounted() {
-        #expect(PendingConfirmation.managerDelete([file("a.mp4")]).title == "Move “a.mp4” to the Trash?")
-        #expect(PendingConfirmation.managerDelete([file("a.mp4"), file("b.mp4")]).title == "Move 2 files to the Trash?")
+        #expect(PendingConfirmation.delete([file("a.mp4")]).title == "Move “a.mp4” to the Trash?")
+        #expect(PendingConfirmation.delete([file("a.mp4"), file("b.mp4")]).title == "Move 2 files to the Trash?")
 
         #expect(PendingConfirmation.audioStrip([file("a.mp4")]).title == "Remove the audio from “a.mp4”?")
         #expect(PendingConfirmation.audioStrip([file("a.mp4"), file("b.mp4")]).title == "Remove the audio from 2 files?")
@@ -37,15 +37,8 @@ struct PendingConfirmationWordingTests {
     /// The host evaluates the wording for whatever is pending, and a request can be pruned down to
     /// nothing by a re-scan; the plural branch must not index the payload.
     @Test func anEmptyPayloadCountsRatherThanIndexing() {
-        #expect(PendingConfirmation.managerDelete([]).title == "Move 0 files to the Trash?")
+        #expect(PendingConfirmation.delete([]).title == "Move 0 files to the Trash?")
         #expect(PendingConfirmation.audioStrip([]).title == "Remove the audio from 0 files?")
-    }
-
-    @Test func thePlayerAndAudioDeletesWordTheSameAsASingleManagerDelete() {
-        let track = file("song.mp3")
-        #expect(PendingConfirmation.playerDelete(track).title == "Move “song.mp3” to the Trash?")
-        #expect(PendingConfirmation.audioDelete(track).title == "Move “song.mp3” to the Trash?")
-        #expect(PendingConfirmation.playerDelete(track).message == PendingConfirmation.managerDelete([track]).message)
     }
 
     @Test func theRemainingTitlesNameTheirTarget() {
@@ -59,8 +52,8 @@ struct PendingConfirmationWordingTests {
     // MARK: - Messages and buttons
 
     @Test func aDeleteMessageAgreesWithItsCount() {
-        #expect(PendingConfirmation.managerDelete([file("a.mp4")]).message.hasPrefix("The file is"))
-        #expect(PendingConfirmation.managerDelete([file("a.mp4"), file("b.mp4")]).message.hasPrefix("The files are"))
+        #expect(PendingConfirmation.delete([file("a.mp4")]).message.hasPrefix("The file is"))
+        #expect(PendingConfirmation.delete([file("a.mp4"), file("b.mp4")]).message.hasPrefix("The files are"))
     }
 
     /// Every confirmation says what it costs — none of them leans on the title alone.
@@ -72,9 +65,7 @@ struct PendingConfirmationWordingTests {
 
     /// The destructive button names the act, so the choice reads without the title.
     @Test func theConfirmButtonNamesTheAct() {
-        #expect(PendingConfirmation.managerDelete([file("a.mp4")]).confirmLabel == "Move to Trash")
-        #expect(PendingConfirmation.playerDelete(file("a.mp4")).confirmLabel == "Move to Trash")
-        #expect(PendingConfirmation.audioDelete(file("a.mp3")).confirmLabel == "Move to Trash")
+        #expect(PendingConfirmation.delete([file("a.mp4")]).confirmLabel == "Move to Trash")
         #expect(PendingConfirmation.audioStrip([file("a.mp4")]).confirmLabel == "Remove Audio")
         #expect(PendingConfirmation.tagRemoval("beach").confirmLabel == "Remove Tag")
         #expect(PendingConfirmation.playlistDelete(playlist("Trips")).confirmLabel == "Delete")
@@ -84,9 +75,7 @@ struct PendingConfirmationWordingTests {
     /// One of each case, so the sweep above covers every family.
     private func allFamilies() -> [PendingConfirmation] {
         [
-            .managerDelete([file("a.mp4")]),
-            .playerDelete(file("a.mp4")),
-            .audioDelete(file("a.mp3")),
+            .delete([file("a.mp4")]),
             .audioStrip([file("a.mp4")]),
             .tagRemoval("beach"),
             .playlistDelete(playlist("Trips")),

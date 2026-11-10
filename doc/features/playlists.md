@@ -37,6 +37,8 @@ Each playlist stores:
 - Its own preferences: volume (relative to system volume, default 100%), slideshow interval, slideshow enabled, file-position persistence, image fit mode, list/gallery mode.
 - Its state: playback state (Stopped / Playing / Paused), current file, file-position, filter state, search history, frequently-used-tag ordering (see relevant sections below).
 
+A playlist keeps its folder. When the folder moves or is renamed, the playlist follows it. A folder in the Trash counts as deleted; after Put Back the playlist finds it at its original place. When the folder can't be found, the app doesn't ask the user to locate it: the folder picker grants access to whatever folder is picked, and the files on disk are the source of truth. For a folder on a disk that isn't connected, the user connects the disk; for a deleted folder, the user deletes the playlist and adds the folder again. Deleting a playlist needs no folder access.
+
 ### Global settings
 
 - **Appearance** — System / Light / Dark. System (the initial value) follows the Mac's own setting; the other two override it for the app alone. It governs Manager mode, the Welcome screen, and the Settings window; the fullscreen player is always dark, whichever appearance is chosen. Unlike the settings below it, appearance has no per-playlist counterpart.

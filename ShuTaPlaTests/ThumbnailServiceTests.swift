@@ -3,8 +3,7 @@
 //  ShuTaPlaTests
 //
 //  Task 8 — thumbnail generation and caching. Real image files in a temp folder
-//  back a plain (non-scoped) bookmark, so generation and the disk cache run
-//  without SwiftData or a sandbox.
+//  back a bookmark, so generation and the disk cache run without SwiftData.
 //
 
 import Testing

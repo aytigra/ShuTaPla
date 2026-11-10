@@ -144,19 +144,22 @@ extension AppState {
 
     /// The audio inlet's Play when no audio playlist is active: start the first audio playlist
     /// if any exist, otherwise raise the add-folder flow to create one. (Once a playlist is
-    /// active, the inlet shows the transport instead, whose Play continues that playlist.)
+    /// active, the inlet shows the transport instead, whose Play continues that playlist.) A
+    /// playlist being deleted counts as gone.
     func startFirstAudioPlaylistOrAdd() {
-        if let first = modelContext.playlists(ofType: .audio).first {
+        if let first = modelContext.playlists(ofType: .audio).first(where: { !playlistWork.isDeleting($0.id) }) {
             startPlayback(of: first)
         } else {
-            isImportingPlaylist = true
+            folderPick = .addPlaylist
         }
     }
 
     /// Starts a playlist playing through the coordinator. A visual playlist takes the window
     /// into Player mode and becomes the managed playlist; an audio playlist plays on its
-    /// independent channel without changing mode or the managed (visual) slot.
+    /// independent channel without changing mode or the managed (visual) slot. A playlist being
+    /// deleted is refused, as in `manage`.
     func startPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
+        guard !playlistWork.isDeleting(playlist.id) else { return }
         // Audio is an independent channel driven from its overlay/inlet, so starting it must
         // not disturb the managed visual playlist or the scope.
         if playlist.mediaType == .audio {

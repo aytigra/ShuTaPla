@@ -58,6 +58,53 @@ private func addFile(
     return file
 }
 
+/// A disk op that can race a rescan of its playlist, run on `a.jpg` beside a new `c.jpg`.
+enum RacingDiskOp: CaseIterable, Sendable {
+    case delete, move, rename
+
+    @MainActor
+    func perform(on file: PlaylistFile, _ appState: AppState) async {
+        switch self {
+        case .delete: _ = await appState.deleteFiles([file])
+        case .move: _ = await appState.moveFiles([file], to: FileManager.default.temporaryDirectory)
+        case .rename: _ = await appState.renameFile(file, to: "b.jpg")
+        }
+    }
+
+    /// The playlist's files after the op and the rescan.
+    var storedNames: [String] { self == .rename ? ["b.jpg", "c.jpg"] : ["c.jpg"] }
+}
+
+/// An entry point that can start playback of a playlist. The audio inlet's Play plays an audio
+/// playlist; the others get an image playlist.
+enum PlayEntry: CaseIterable, Sendable {
+    case visualChannel, audioChannel, startPlayback, inletPlay
+}
+
+/// A file op over `a.jpg`, which the re-scan it awaits prunes, and `b.jpg`, which stays.
+enum PrunedFileOp: CaseIterable, Sendable {
+    case delete, move, rename, tag
+
+    @MainActor
+    func perform(on files: [PlaylistFile], _ appState: AppState) async -> String? {
+        switch self {
+        case .delete: await appState.deleteFiles(files)
+        case .move: await appState.moveFiles(files, to: FileManager.default.temporaryDirectory)
+        case .rename: await appState.renameFile(files[0], to: "c.jpg")
+        case .tag: await appState.addTag("cats", to: files)
+        }
+    }
+
+    /// The playlist's files after the op and the re-scans.
+    var storedNames: [String] {
+        switch self {
+        case .delete, .move: []
+        case .rename: ["b.jpg"]
+        case .tag: [TagParser.addTag("cats", to: "b.jpg")]
+        }
+    }
+}
+
 // MARK: - Tests
 
 @MainActor
@@ -391,7 +438,7 @@ struct AppStateTests {
 
         #expect(appState.pendingTypeChoice != nil)   // Mixed folder raises the choice
         #expect(appState.isAddingPlaylist == false)  // spinner cleared on return
-        #expect(appState.addPlaylistError == nil)
+        #expect(appState.errorNotice == nil)
         #expect(appState.mode == .welcome)           // nothing created yet
 
         appState.confirmPendingTypeChoice(.image)
@@ -413,10 +460,36 @@ struct AppStateTests {
 
         await appState.importPlaylist(from: dir)
 
-        #expect(appState.addPlaylistError != nil)
+        #expect(appState.errorNotice?.title == "Couldn't add playlist")
         #expect(appState.pendingTypeChoice == nil)
         #expect(appState.isAddingPlaylist == false)
         #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
+    /// A picked folder starts the import; with nothing to import it reports the add failure.
+    @Test func completingAnAddPlaylistPickImportsThePickedFolder() async throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.folderPick = .addPlaylist
+
+        appState.completeFolderPick(.addPlaylist, with: .success([dir]))
+
+        #expect(appState.folderPick == nil)
+        try await waitUntil { appState.errorNotice != nil }
+        #expect(appState.errorNotice == .addPlaylistFailed("“\(dir.lastPathComponent)” has no videos, images, or audio files."))
+    }
+
+    @Test func aFailedAddPlaylistPickReportsTheAddFailure() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        appState.folderPick = .addPlaylist
+
+        appState.completeFolderPick(.addPlaylist, with: .failure(CocoaError(.fileReadNoPermission)))
+
+        #expect(appState.folderPick == nil)
+        #expect(appState.errorNotice == .addPlaylistFailed(CocoaError(.fileReadNoPermission).localizedDescription))
     }
 
     @Test func nonMatchingFilesAreMarkedSkipped() async throws {
@@ -639,7 +712,7 @@ struct AppStateTests {
         #expect(!storeChanged)                    // rolled back: the prune never committed
     }
 
-    /// A failed background save surfaces like the main-actor save path: `saveError` is set, the
+    /// A failed background save surfaces like the main-actor save path: `errorNotice` is set, the
     /// reconcile rolls back so the prune never lands, and `sequences.version` stays put (nothing
     /// committed to re-derive from). Forced through the actor's save-override seam.
     @Test func updateSurfacesBackgroundSaveFailure() async throws {
@@ -670,7 +743,7 @@ struct AppStateTests {
         appState.scanActor.saveOverride.withLock { $0 = { throw SaveFailure() } }
         await appState.update(playlist)
 
-        #expect(appState.saveError != nil)                                      // surfaced, not swallowed
+        #expect(appState.errorNotice?.title == "Couldn't save your changes")                                      // surfaced, not swallowed
         #expect(Set(storedFiles(of: playlist).map(\.fileName)) == namesBefore)  // rolled back: prune never landed
         #expect(appState.sequences.version == versionBefore)                      // nothing committed to re-derive
     }
@@ -717,7 +790,7 @@ struct AppStateTests {
         return search
     }
 
-    @Test func renameTagPreservesSavedSearchResumePosition() async throws {
+    @Test func replaceTagPreservesSavedSearchResumePosition() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
@@ -725,7 +798,7 @@ struct AppStateTests {
         let search = addSearch("Old", tags: ["old"], resumeSortOrder: 3, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        await appState.renameTagAcrossPlaylist(playlist, from: "old", to: "new")
+        await appState.replaceTagAcrossPlaylist(playlist, "old", with: "new")
 
         #expect(search.filter?.mustHaveAll == ["new"])
         #expect(search.resumeSortOrder == 3)
@@ -1114,11 +1187,31 @@ struct AppStateTests {
         stub.renameError = .nameCollision
         let appState = AppState(modelContext: context, fileSystem: stub)
 
-        await appState.renameFileReportingFailure(file, to: "taken.mp4")
+        appState.commitRename(of: file.id, to: "taken.mp4")
+        for task in appState.confirmationTasks.values { await task.value }
 
         #expect(appState.errorNotice?.title == "Couldn't rename")
         #expect(appState.errorNotice?.message == "A file with that name already exists.")
         #expect(file.fileName == "old.mp4")
+    }
+
+    /// A rename field commits on every click-away. A commit of the file's own name runs no file op:
+    /// no busy mark, no save, no sequence bump.
+    @Test func aRenameToTheSameNameRunsNoFileOp() async throws {
+        let container = try makeContainer()
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg"], in: container.mainContext)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        let before = appState.sequences.version
+        var error: String?
+
+        let marked = await firesObservation(reading: { _ = appState.busyFileIDs }, onAwaiting: {
+            error = await appState.renameFile(files[0], to: " a.jpg ")
+        })
+
+        #expect(error == nil)
+        #expect(!marked)
+        #expect(appState.sequences.version == before)
     }
 
     @Test func deleteFilesRemovesTrashedFromPlaylist() async throws {
@@ -1278,7 +1371,7 @@ struct AppStateTests {
         context.insert(playlist)
         let files = names.enumerated().map { insertFile($1, order: $0, to: playlist, in: context) }
         try context.save()
-        let hook = TrashHook()
+        let hook = DiskOpHook()
         let appState = AppState(
             modelContext: context,
             fileSystem: StubFileSystem(result: emptyResult, whileTrashing: hook)
@@ -1295,6 +1388,886 @@ struct AppStateTests {
 
         #expect(error == nil)
         #expect(appState.coordinator.visualCurrentFile?.fileName == "4.jpg")
+    }
+
+    // MARK: - Move
+
+    /// An image playlist over real (empty) files in a fresh bookmarked folder, plus the `AppState`
+    /// driving it through `stub` (a stub file system by default).
+    private func makeMovePlaylist(
+        _ names: [String], mediaType: MediaType = .image, in context: ModelContext,
+        stub: any FileSystemProviding = StubFileSystem(result: emptyResult)
+    ) throws -> (dir: URL, playlist: Playlist, files: [PlaylistFile], appState: AppState) {
+        let dir = try makeTempDir()
+        for name in names {
+            let url = dir.appending(path: name)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: mediaType)
+        context.insert(playlist)
+        let files = names.enumerated().map { index, name in
+            let file = insertFile(name, order: index, to: playlist, in: context)
+            file.fileName = (name as NSString).lastPathComponent
+            return file
+        }
+        try context.save()
+        return (dir, playlist, files, AppState(modelContext: context, fileSystem: stub))
+    }
+
+    @Test func movingThePlayingFileDropsItAndResumesAfterIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, _, appState) = try makeMovePlaylist(["1.jpg", "2.jpg", "3.jpg", "4.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+        defer { appState.coordinator.shutdown() }
+
+        appState.coordinator.play(playlist)
+        appState.coordinator.next(playlist)
+        appState.coordinator.next(playlist)
+        let playing = try #require(appState.coordinator.visualCurrentFile)
+        #expect(playing.fileName == "3.jpg")
+
+        let error = await appState.moveFiles([playing], to: destination)
+
+        #expect(error == nil)
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["1.jpg", "2.jpg", "4.jpg"])
+        #expect(appState.coordinator.visualCurrentFile?.fileName == "4.jpg")
+    }
+
+    /// Two files of one name moved into one folder: the first in the request's order moves, the
+    /// other fails on the taken name.
+    @Test func aConfirmedMoveRunsInTheRequestsOrder() async throws {
+        let container = try makeContainer()
+        let names = (1...8).map { "a\($0).jpg" }
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            names.map { "sub2/\($0)" } + names.map { "sub1/\($0)" }, in: container.mainContext, stub: FileSystemService()
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+        defer { appState.coordinator.shutdown() }
+        let requested = files.filter { $0.relativePath.hasPrefix("sub1/") } + files.filter { $0.relativePath.hasPrefix("sub2/") }
+
+        appState.completeFolderPick(.move(requested.map(\.id)), with: .success([destination]))
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(storedFiles(of: playlist).map(\.relativePath).sorted() == names.map { "sub2/\($0)" }.sorted())
+    }
+
+    /// A batch over two folders moves the file from the other folder and leaves the one already in
+    /// the destination.
+    @Test func aMoveIntoOneFilesFolderMovesOnlyTheOthers() async throws {
+        let container = try makeContainer()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "sub/b.jpg"], in: container.mainContext, stub: FileSystemService()
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+
+        #expect(await appState.moveFiles(files, to: dir.appending(path: "sub")) == nil)
+
+        #expect(storedFiles(of: playlist).map(\.relativePath) == ["sub/b.jpg"])
+    }
+
+    /// A failed one-file move reports only the cause: the notice's title names the op.
+    @Test func aMoveOntoATakenNameReportsTheCause() async throws {
+        let container = try makeContainer()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "sub/a.jpg"], in: container.mainContext, stub: FileSystemService()
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+
+        let message = await appState.moveFiles([files[0]], to: dir.appending(path: "sub"))
+
+        #expect(message?.contains("\n") == false)
+        #expect(message?.contains("a.jpg") == true)
+        #expect(storedFiles(of: playlist).count == 2)
+    }
+
+    /// A move or trash that changed nothing on disk leaves the store-side lists and the sidebar alone.
+    @Test func aDeleteThatTrashedNothingRefreshesNothing() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        var stub = StubFileSystem(result: emptyResult)
+        stub.trashFails = true
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg"], in: context, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (sequence, playlists) = (appState.sequences.version, appState.playlistsVersion)
+
+        #expect(await appState.deleteFiles(files) != nil)
+
+        #expect(appState.sequences.version == sequence)
+        #expect(appState.playlistsVersion == playlists)
+    }
+
+    @Test func movedFilesAreBusyOnlyWhileTheMoveRuns() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let (dir, _, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "b.jpg"], in: context, stub: StubFileSystem(result: emptyResult, whileMoving: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var busyDuringMove: Set<UUID> = []
+        hook.action = { busyDuringMove = appState.busyFileIDs }
+
+        _ = await appState.moveFiles(files, to: dir.appending(path: "sub"))
+
+        #expect(busyDuringMove == Set(files.map(\.id)))
+        #expect(appState.busyFileIDs.isEmpty)
+    }
+
+    @Test func aFailedMoveKeepsTheRowsAndReportsTheCount() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        var stub = StubFileSystem(result: emptyResult)
+        stub.moveFails = true
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let error = await appState.moveFiles(files, to: destination)
+
+        #expect(error == "2 of 2 files couldn't be moved.\na.jpg is locked.")
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["a.jpg", "b.jpg"])
+        #expect(appState.busyFileIDs.isEmpty)
+    }
+
+    @Test func completingAMovePickMovesTheFiles() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+        appState.folderPick = .move(files.map(\.id))
+
+        appState.completeFolderPick(.move(files.map(\.id)), with: .success([destination]))
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(appState.folderPick == nil)
+        #expect(appState.lastMoveDestination == destination)
+        #expect(storedFiles(of: playlist).isEmpty)
+        #expect(appState.errorNotice == nil)
+    }
+
+    /// A re-scan can prune a file while the chooser is open, and the completion may hold the pick
+    /// taken before the prune. The move must leave out the pruned file, never read its row.
+    @Test func aMovePickMovesOnlyTheFilesStillInTheStore() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg", "c.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let pick = FolderPick.move([files[0].id, files[1].id])
+        context.delete(files[0])   // the prune
+        try context.save()
+
+        appState.completeFolderPick(pick, with: .success([destination]))
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["c.jpg"])
+        #expect(appState.errorNotice == nil)
+    }
+
+    /// A confirmed file op whose files go to a Task.
+    enum ConfirmedFileOp: CaseIterable {
+        case delete, move
+
+        @MainActor
+        func confirm(_ files: [PlaylistFile], on appState: AppState) {
+            switch self {
+            case .delete:
+                appState.pendingConfirmation = .delete(files)
+                appState.confirmConfirmation()
+            case .move:
+                appState.completeFolderPick(.move(files.map(\.id)), with: .success([FileManager.default.temporaryDirectory]))
+            }
+        }
+    }
+
+    /// A re-scan applied in the turn before the op's Task starts prunes a target: the op leaves it
+    /// out. Green only: an op that reads the pruned row traps the host.
+    @Test(arguments: ConfirmedFileOp.allCases)
+    func aConfirmedFileOpLeavesOutAFilePrunedBeforeItsTaskStarts(op: ConfirmedFileOp) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg", "c.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        op.confirm([files[0], files[1]], on: appState)
+        context.delete(files[0])   // the prune, before the Task starts
+        try context.save()
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["c.jpg"])
+        #expect(appState.errorNotice == nil)
+    }
+
+    /// A rename committed from a file list leaves out a file that a re-scan pruned in the turn
+    /// before its Task starts. Green only: a rename that reads the pruned row traps the host.
+    @Test func aCommittedRenameLeavesOutAFilePrunedBeforeItsTaskStarts() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        appState.commitRename(of: files[0].id, to: "c.jpg")
+        context.delete(files[0])   // the prune, before the Task starts
+        try context.save()
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["b.jpg"])
+        #expect(appState.errorNotice == nil)
+    }
+
+    @Test func aMovePickWhoseMoveFailsRaisesTheMoveNotice() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        var stub = StubFileSystem(result: emptyResult)
+        stub.moveFails = true
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        appState.completeFolderPick(.move(files.map(\.id)), with: .success([destination]))
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(appState.errorNotice?.title == "Couldn't move")
+        #expect(appState.errorNotice?.message == "2 of 2 files couldn't be moved.\na.jpg is locked.")
+        #expect(storedFiles(of: playlist).count == 2)
+    }
+
+    @Test func aFailedMovePickRaisesTheMoveNotice() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+
+        appState.completeFolderPick(.move([]), with: .failure(CocoaError(.fileReadNoPermission)))
+
+        #expect(appState.errorNotice?.title == "Couldn't move")
+        #expect(appState.errorNotice?.message == CocoaError(.fileReadNoPermission).localizedDescription)
+        #expect(appState.lastMoveDestination == nil)
+    }
+
+    /// A confirmation that still holds a trashed row would act on a deleted model.
+    @Test func aDeletePrunesTheTrashedFilesFromAnOpenConfirmation() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.pendingConfirmation = .audioStrip(files)
+
+        #expect(await appState.deleteFiles([files[0]]) == nil)
+
+        #expect(appState.pendingConfirmation?.audioStripFiles?.map(\.id) == [files[1].id])
+    }
+
+    /// What is open when a removal prunes: nothing, a confirmation without files, or one over files
+    /// the removal leaves.
+    enum OpenConfirmation: CaseIterable {
+        case none, tagRemoval, deleteOfOtherFiles
+    }
+
+    /// Every removal and applied re-scan prunes; when the open confirmation holds no removed file,
+    /// the prune must not re-render the confirmation host that reads this field.
+    @Test(arguments: OpenConfirmation.allCases)
+    func pruningNoFileOfTheOpenConfirmationFiresNoObservation(open: OpenConfirmation) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        switch open {
+        case .none: break
+        case .tagRemoval: appState.pendingConfirmation = .tagRemoval("beach")
+        case .deleteOfOtherFiles:
+            let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/tmp/p", mediaType: .image)
+            context.insert(playlist)
+            appState.pendingConfirmation = .delete([insertFile("a.jpg", order: 0, to: playlist, in: context)])
+        }
+
+        #expect(!firesObservation(
+            reading: { _ = appState.pendingConfirmation },
+            on: { appState.forgetRemovedFiles([UUID()]) }
+        ))
+    }
+
+    /// A removal of unselected files must not re-render the Manager selection readers.
+    @Test func pruningUnselectedFilesFiresNoSelectionObservation() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        appState.managerSelection = [UUID()]
+
+        #expect(!firesObservation(
+            reading: { _ = appState.managerSelection },
+            on: { appState.forgetRemovedFiles([UUID()]) }
+        ))
+    }
+
+    @Test func trashedFilesAreBusyWhileTheTrashRuns() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let (dir, _, files, appState) = try makeMovePlaylist(
+            ["a.jpg"], in: context, stub: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var busyDuringTrash = false
+        hook.action = { busyDuringTrash = files.allSatisfy(appState.isBusy) }
+
+        #expect(await appState.deleteFiles(files) == nil)
+
+        #expect(busyDuringTrash)
+        #expect(appState.busyFileIDs.isEmpty)
+    }
+
+    // MARK: - Busy gate at the disk work
+
+    @Test func aTagEditSkipsABusyFile() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.busyFileIDs.insert(files[1].id)
+
+        #expect(await appState.addTag("beach", to: files)?.contains("busy") == true)
+
+        #expect(files[0].fileName != "a.jpg")
+        #expect(files[1].fileName == "b.jpg")
+        #expect(appState.busyFileIDs == [files[1].id])
+    }
+
+    @Test func aTagEditMarksItsWholeBatchBusy() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let (dir, _, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "b.jpg"], in: context, stub: StubFileSystem(result: emptyResult, whileRenaming: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var busyDuringTagEdit = true
+        hook.action = { busyDuringTagEdit = busyDuringTagEdit && appState.isBusy(files[1]) }
+
+        await appState.addTag("beach", to: files)
+
+        #expect(busyDuringTagEdit)
+        #expect(appState.busyFileIDs.isEmpty)
+    }
+
+    /// A tag edit persists each rename before the next one suspends: an object fetch that skips
+    /// pending changes (as `selectedManagerFiles` does) would otherwise refault the renamed row
+    /// back to its old path.
+    @Test func aRenamedFileKeepsItsNewNameWhileTheTagEditContinues() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "b.jpg"], in: context, stub: StubFileSystem(result: emptyResult, whileRenaming: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var renames = 0
+        hook.action = {
+            renames += 1
+            if renames == 2 { _ = storedFiles(of: playlist) }
+        }
+
+        #expect(await appState.addTag("beach", to: files) == nil)
+
+        #expect(files[0].fileName == TagParser.addTag("beach", to: "a.jpg"))
+        #expect(!context.hasChanges)
+    }
+
+    /// A removal closes a preview open on a removed file, so the lightbox never renders a deleted row.
+    @Test func aDeleteClosesAPreviewOfTheTrashedFile() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.preview.close() }
+        appState.preview.toggle(files[0])
+        try #require(appState.preview.isOpen)
+
+        #expect(await appState.deleteFiles([files[1]]) == nil)
+        #expect(appState.preview.isOpen)   // another file's removal leaves it open
+
+        #expect(await appState.deleteFiles([files[0]]) == nil)
+        #expect(!appState.preview.isOpen)
+    }
+
+    @Test func aDeleteLeavesABusyFileAlone() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.busyFileIDs.insert(files[0].id)
+
+        #expect(await appState.deleteFiles(files)?.contains("busy") == true)
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["a.jpg"])
+        #expect(appState.isBusy(files[0]))
+    }
+
+    @Test func aMoveLeavesABusyFileAlone() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let destination = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: destination) }
+        appState.busyFileIDs.insert(files[0].id)
+
+        #expect(await appState.moveFiles(files, to: destination)?.contains("busy") == true)
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["a.jpg"])
+        #expect(appState.isBusy(files[0]))
+    }
+
+    @Test(arguments: [(1, "1 file busy."), (2, "2 files busy.")])
+    func theBusyNoticeCountsTheBusyFiles(busy: Int, opening: String) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg", "c.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.busyFileIDs.formUnion(files.prefix(busy).map(\.id))
+
+        #expect(appState.busyNotice(files)?.hasPrefix(opening) == true)
+    }
+
+    @Test func aRenameOfABusyFileReportsAnErrorAndDoesNotRename() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, _, files, appState) = try makeMovePlaylist(["a.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        appState.busyFileIDs.insert(files[0].id)
+
+        appState.commitRename(of: files[0].id, to: "b.jpg")
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(files[0].fileName == "a.jpg")
+        #expect(appState.errorNotice?.title == "Couldn't rename")
+        #expect(appState.isBusy(files[0]))
+    }
+
+    // MARK: - Rescan vs disk ops
+
+    /// A playlist over `a.jpg` whose stub folder also lists a new `c.jpg`, so only a rescan that ran
+    /// adds it. `hook` runs inside the op's disk work.
+    private func makeRacePlaylist(
+        in context: ModelContext, hook: DiskOpHook? = nil
+    ) throws -> (dir: URL, playlist: Playlist, file: PlaylistFile, folder: StubFolder, appState: AppState) {
+        let folder = StubFolder([scanned("a.jpg", .image), scanned("c.jpg", .image)])
+        let stub = StubFileSystem(result: emptyResult, whileTrashing: hook, whileMoving: hook, whileRenaming: hook, folder: folder)
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg"], in: context, stub: stub)
+        return (dir, playlist, files[0], folder, appState)
+    }
+
+    @Test(arguments: RacingDiskOp.allCases)
+    func aRescanListedBeforeADiskOpDoesNotUndoIt(_ op: RacingDiskOp) async throws {
+        let container = try makeContainer()
+        let (dir, playlist, file, folder, appState) = try makeRacePlaylist(in: container.mainContext)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        folder.holdsListings = true
+        appState.manage(playlist)
+        try await waitUntil { folder.heldListings == 1 }
+
+        await op.perform(on: file, appState)
+        folder.releaseListings()
+        await appState.updateTask?.value
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == op.storedNames)
+    }
+
+    @Test(arguments: RacingDiskOp.allCases)
+    func aRescanRequestedDuringADiskOpDoesNotUndoIt(_ op: RacingDiskOp) async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        let (dir, playlist, file, folder, appState) = try makeRacePlaylist(in: container.mainContext, hook: hook)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        folder.holdsListings = true
+        hook.action = {
+            appState.manage(playlist)
+            // Time for a rescan that starts at once to list the folder; a deferred one does not list.
+            var spins = 0
+            while folder.heldListings == 0, spins < 1_000 {
+                spins += 1
+                await Task.yield()
+            }
+        }
+
+        await op.perform(on: file, appState)
+        folder.releaseListings()
+        await appState.updateTask?.value
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == op.storedNames)
+    }
+
+    @Test(arguments: RacingDiskOp.allCases)
+    func aPlaylistDeleteWaitsForItsDiskOps(_ op: RacingDiskOp) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let folder = StubFolder([scanned("a.jpg", .image), scanned("b.jpg", .image)])
+        let stub = StubFileSystem(result: emptyResult, whileTrashing: hook, whileMoving: hook, whileRenaming: hook, folder: folder)
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: context, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let playlistCount = { (try? context.fetchCount(FetchDescriptor<Playlist>())) ?? 0 }
+        var deletion: Task<Void, Never>?
+        var held: CheckedContinuation<Void, Never>?
+        hook.action = {
+            deletion = Task { await appState.delete(playlist) }
+            await withCheckedContinuation { held = $0 }
+        }
+
+        let opTask = Task { await op.perform(on: files[0], appState) }
+        try await waitUntil { held != nil }
+        // Time for a delete that does not wait to finish.
+        for _ in 0..<1_000 where playlistCount() == 1 { await Task.yield() }
+        #expect(playlistCount() == 1)
+        // A delete that did not wait destroyed the rows the op's tail reads: resuming the op would
+        // trap the host, so it stays held.
+        guard playlistCount() == 1 else { return }
+        #expect(appState.playlistWork.isDeleting(playlist.id))
+
+        // An op that starts after the delete leaves its file alone.
+        _ = await appState.renameFile(files[1], to: "c.jpg")
+        #expect(folder.files.map(\.fileName) == ["a.jpg", "b.jpg"])
+        // A second delete of the playlist returns at once.
+        var repeatEnded = false
+        Task { await appState.delete(playlist); repeatEnded = true }
+        for _ in 0..<1_000 where !repeatEnded { await Task.yield() }
+        #expect(repeatEnded)
+        // A repeat that waits too would run after the first one, over the destroyed playlist.
+        guard repeatEnded else { return }
+
+        held?.resume()
+        await opTask.value
+        await deletion?.value
+        #expect(playlistCount() == 0)
+        #expect(try context.fetchCount(FetchDescriptor<PlaylistFile>()) == 0)
+        #expect(!appState.playlistWork.isDeletingAny)
+    }
+
+    /// A playlist waiting for its file op before the delete can't be played or managed again: the
+    /// engine and the Manager would then hold rows the delete removes.
+    @Test(arguments: PlayEntry.allCases)
+    func aPlaylistWaitingToBeDeletedCannotBePlayedAgain(_ entry: PlayEntry) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let mediaType: MediaType = entry == .inletPlay ? .audio : .image
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            [mediaType == .audio ? "a.mp3" : "a.jpg"], mediaType: mediaType, in: context,
+            stub: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        var held: CheckedContinuation<Void, Never>?
+        hook.action = { await withCheckedContinuation { held = $0 } }
+        let opTask = Task { _ = await appState.deleteFiles(files) }
+        try await waitUntil { held != nil }
+        let deletion = Task { await appState.delete(playlist) }
+        try await waitUntil { appState.playlistWork.isDeleting(playlist.id) }
+
+        switch entry {
+        case .visualChannel: appState.playOnVisualChannel(playlist)
+        case .audioChannel: appState.playOnAudioChannel(playlist)
+        case .startPlayback: appState.startPlayback(of: playlist)
+        case .inletPlay: appState.startFirstAudioPlaylistOrAdd()
+        }
+
+        let released = appState.managedPlaylist == nil
+            && appState.rememberedPlaylist(for: mediaType) == nil
+            && appState.coordinator.liveVisualPlaylist == nil
+            && appState.coordinator.liveAudioPlaylist == nil
+        #expect(released)
+        if entry == .inletPlay {
+            // No other audio playlist exists, so the inlet's Play raises the add flow.
+            let raisesAddFlow = if case .addPlaylist = appState.folderPick { true } else { false }
+            #expect(raisesAddFlow)
+        }
+        // A played playlist holds rows the delete removes: resuming the op would trap the host.
+        guard released else { return }
+        held?.resume()
+        await opTask.value
+        await deletion.value
+        #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
+    /// A second op on the playlist waits for the re-scan that the first op cancelled: a scan past its
+    /// commit decision still applies, and must not land in an op's disk work.
+    @Test(arguments: RacingDiskOp.allCases)
+    func aSecondDiskOpWaitsForTheCancelledRescan(_ op: RacingDiskOp) async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        let folder = StubFolder([scanned("a.jpg", .image), scanned("b.jpg", .image)])
+        let stub = StubFileSystem(result: emptyResult, whileTrashing: hook, whileMoving: hook, whileRenaming: hook, folder: folder)
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: container.mainContext, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scan = HeldScan(on: playlist, appState)
+        var overlapped = false
+        hook.action = { if !scan.ended { overlapped = true } }
+
+        let first = Task { _ = await appState.deleteFiles([files[1]]) }
+        try await waitUntil { appState.playlistWork.opCount(for: playlist.id) == 1 }
+        let second = Task { await op.perform(on: files[0], appState) }
+        // Time for a second op that does not wait to reach its disk work.
+        for _ in 0..<1_000 where !overlapped { await Task.yield() }
+        #expect(!overlapped)
+
+        scan.open()
+        await first.value
+        await second.value
+        await appState.updateTask?.value   // the deferred re-scan
+        #expect(!overlapped)
+    }
+
+    /// A playlist delete waits for the playlist's cancelled re-scan, which would otherwise apply over
+    /// the deleted playlist.
+    @Test func aPlaylistDeleteWaitsForItsCancelledRescan() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (dir, playlist, _, appState) = try makeMovePlaylist(["a.jpg"], in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let playlistCount = { (try? context.fetchCount(FetchDescriptor<Playlist>())) ?? 0 }
+        let scan = HeldScan(on: playlist, appState)
+
+        let deletion = Task { await appState.delete(playlist) }
+        // Time for a delete that does not wait to finish.
+        for _ in 0..<1_000 where playlistCount() == 1 { await Task.yield() }
+        #expect(playlistCount() == 1)
+
+        scan.open()
+        await deletion.value
+        #expect(scan.ended)
+        #expect(playlistCount() == 0)
+    }
+
+    /// A file op waiting for the cancelled re-scan does no disk work once a delete of its playlist
+    /// has begun meanwhile.
+    @Test(arguments: RacingDiskOp.allCases)
+    func aDiskOpWaitingForTheRescanSkipsADeletedPlaylist(_ op: RacingDiskOp) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let folder = StubFolder([scanned("a.jpg", .image)])
+        let stub = StubFileSystem(result: emptyResult, whileTrashing: hook, whileMoving: hook, whileRenaming: hook, folder: folder)
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg"], in: context, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        let scan = HeldScan(on: playlist, appState)
+        var reachedDisk = false
+        hook.action = { reachedDisk = true }
+
+        let opTask = Task { await op.perform(on: files[0], appState) }
+        try await waitUntil { appState.playlistWork.opCount(for: playlist.id) == 1 }
+        let deletion = Task { await appState.delete(playlist) }
+        try await waitUntil { appState.playlistWork.isDeleting(playlist.id) }
+
+        scan.open()
+        await opTask.value
+        await deletion.value
+        #expect(!reachedDisk)
+        #expect(folder.files.map(\.fileName) == ["a.jpg"])
+        #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
+    /// A file op also waits for a re-scan that a newer one superseded: the superseded scan can be
+    /// past its commit decision too.
+    @Test func aDiskOpWaitsForASupersededRescan() async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg"], in: container.mainContext, stub: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scan = HeldScan(on: playlist, appState)
+        appState.trackBackgroundTask(for: playlist.id) {}
+        var overlapped = false
+        hook.action = { if !scan.ended { overlapped = true } }
+
+        let deletion = Task { _ = await appState.deleteFiles(files) }
+        // Time for an op that does not wait to reach its disk work.
+        for _ in 0..<1_000 where !overlapped { await Task.yield() }
+        #expect(!overlapped)
+
+        scan.open()
+        await deletion.value
+        await appState.updateTask?.value   // the deferred re-scan
+        #expect(!overlapped)
+    }
+
+    /// A superseded re-scan that ends while its successor runs leaves the playlist marked busy, so
+    /// the sidebar spinner and Manager `[esc]` still see the new scan.
+    @Test func aSupersededRescanLeavesThePlaylistBusyWhileTheNewScanRuns() async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        var listings: [CheckedContinuation<Void, Never>] = []
+        hook.action = { await withCheckedContinuation { listings.append($0) } }
+        var stub = StubFileSystem(result: emptyResult, rescanFails: true)
+        stub.whileRescanning = hook
+        let (dir, playlist, _, appState) = try makeMovePlaylist(["a.jpg"], in: container.mainContext, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        let isBusy = { appState.rescanCounts[playlist.id] != nil }
+
+        appState.trackBackgroundTask(for: playlist.id) { await appState.update(playlist) }
+        try await waitUntil { listings.count == 1 }
+        appState.trackBackgroundTask(for: playlist.id) { await appState.update(playlist) }
+        try await waitUntil { listings.count == 2 }
+        listings[0].resume()   // the superseded scan ends
+        // Time for the superseded scan to end.
+        for _ in 0..<1_000 where isBusy() { await Task.yield() }
+        #expect(isBusy())
+
+        listings[1].resume()
+        await appState.updateTask?.value
+        #expect(!isBusy())
+    }
+
+    /// Manager `[esc]` cancels the re-scans in flight and leaves a new playlist's tag derive
+    /// running: nothing re-derives the tags of a playlist whose derive rolled back.
+    @Test func cancellingARescanLeavesANewPlaylistsTagDeriveRunning() async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        var listing: CheckedContinuation<Void, Never>?
+        hook.action = { await withCheckedContinuation { listing = $0 } }
+        var stub = StubFileSystem(result: emptyResult, rescanFails: true)
+        stub.whileRescanning = hook
+        let (dir, playlist, _, appState) = try makeMovePlaylist(["a.jpg"], in: container.mainContext, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        appState.trackBackgroundTask(for: playlist.id) { await appState.update(playlist) }
+        let rescan = try #require(appState.updateTask)
+        try await waitUntil { listing != nil }
+
+        let dirB = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dirB) }
+        let scan = ScanResult(files: [scanned("b [beach].jpg", .image)], counts: [.image: 1], dominantType: .image)
+        let created = appState.makePlaylist(
+            name: "B", bookmark: try BookmarkService.makeBookmark(for: dirB), folderPath: dirB.path,
+            scan: scan, mediaType: .image
+        )
+        let derive = try #require(appState.playlistWork.task(for: created.id))
+        #expect(appState.cancelInProgressOperation())
+        await derive.value
+
+        #expect(created.tagFrequency["beach"] == 1)
+        #expect(rescan.isCancelled)
+        listing?.resume()
+        await rescan.value
+    }
+
+    /// A file op leaves out the claimed files that the re-scan it awaited pruned: a read of a pruned
+    /// row traps. So the test is green only — an op that reads the pruned row traps the host.
+    @Test(arguments: PrunedFileOp.allCases)
+    func aDiskOpLeavesOutTheFilesItsRescanPruned(_ op: PrunedFileOp) async throws {
+        let container = try makeContainer()
+        let folder = StubFolder([scanned("b.jpg", .image)])
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "b.jpg"], in: container.mainContext, stub: StubFileSystem(result: emptyResult, folder: folder)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scan = HeldScan(on: playlist, appState, committing: folder.files)
+
+        let opTask = Task { await op.perform(on: files, appState) }
+        try await waitUntil { appState.playlistWork.opCount(for: playlist.id) == 1 }
+        scan.open()
+        #expect(await opTask.value == nil)
+        await appState.updateTask?.value   // the deferred re-scan
+
+        #expect(storedFiles(of: playlist).map(\.fileName) == op.storedNames)
+        #expect(appState.busyFileIDs.isEmpty)
+    }
+
+    /// File ops on one playlist share it: a second op does its disk work while the first is held.
+    @Test func diskOpsOnOnePlaylistRunSideBySide() async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg", "b.jpg"], in: container.mainContext, stub: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        var held: CheckedContinuation<Void, Never>?
+        hook.action = { await withCheckedContinuation { held = $0 } }
+        let first = Task { _ = await appState.deleteFiles([files[0]]) }
+        try await waitUntil { held != nil }
+
+        var secondEnded = false
+        let second = Task { _ = await appState.renameFile(files[1], to: "c.jpg"); secondEnded = true }
+        try await waitUntil { secondEnded }
+
+        held?.resume()
+        await first.value
+        await second.value
+        #expect(storedFiles(of: playlist).map(\.fileName) == ["c.jpg"])
+    }
+
+    /// A playlist delete drops the re-scan that a file op deferred: no scan starts once the op ends.
+    @Test func aPlaylistDeleteDropsTheRescanItsDiskOpDeferred() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let hook = DiskOpHook()
+        let (dir, playlist, files, appState) = try makeMovePlaylist(
+            ["a.jpg"], in: context, stub: StubFileSystem(result: emptyResult, whileTrashing: hook)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        var held: CheckedContinuation<Void, Never>?
+        hook.action = {
+            appState.manage(playlist)   // requests a re-scan, which the op defers
+            await withCheckedContinuation { held = $0 }
+        }
+        let opTask = Task { _ = await appState.deleteFiles(files) }
+        try await waitUntil { held != nil }
+        let deletion = Task { await appState.delete(playlist) }
+        try await waitUntil { appState.playlistWork.isDeleting(playlist.id) }
+        let lastTask = appState.updateTask
+
+        held?.resume()
+        await opTask.value
+        await deletion.value
+        #expect(appState.updateTask == lastTask)
+        #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 0)
+    }
+
+    /// Re-scans requested during several file ops on one playlist run as one scan, after the last op.
+    @Test func rescansDeferredByDiskOpsRunOnceAfterTheLastOp() async throws {
+        let container = try makeContainer()
+        let hook = DiskOpHook()
+        let scanHook = DiskOpHook()
+        var scans = 0
+        scanHook.action = { scans += 1 }
+        var stub = StubFileSystem(result: emptyResult, whileTrashing: hook, rescanFails: true)
+        stub.whileRescanning = scanHook
+        let (dir, playlist, files, appState) = try makeMovePlaylist(["a.jpg", "b.jpg"], in: container.mainContext, stub: stub)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { appState.coordinator.shutdown() }
+        var held: [CheckedContinuation<Void, Never>] = []
+        hook.action = {
+            appState.manage(playlist)
+            await withCheckedContinuation { held.append($0) }
+        }
+        let first = Task { _ = await appState.deleteFiles([files[0]]) }
+        try await waitUntil { held.count == 1 }
+        let second = Task { _ = await appState.deleteFiles([files[1]]) }
+        try await waitUntil { held.count == 2 }
+
+        held[0].resume()
+        await first.value
+        await appState.updateTask?.value
+        #expect(scans == 0)
+
+        held[1].resume()
+        await second.value
+        await appState.updateTask?.value
+        #expect(scans == 1)
     }
 
     // MARK: - Download on demand
@@ -1360,7 +2333,7 @@ struct AppStateTests {
         let error = await appState.stripAudio(from: [file])
 
         #expect(error == nil)
-        #expect(appState.strippingFileIDs.isEmpty)         // spinner inserted then removed
+        #expect(appState.busyFileIDs.isEmpty)         // spinner inserted then removed
         #expect(try noStripSidecar(in: dir))               // hidden sibling cleaned up
 
         // The audio-free remux took the original's place at the same path.
@@ -1388,9 +2361,30 @@ struct AppStateTests {
 
         let error = await appState.stripAudio(from: [file])
 
-        #expect(error == "Couldn't remove the audio.")
-        #expect(appState.strippingFileIDs.isEmpty)         // balanced even on the failure path
+        #expect(error == FileSystemError.fileNotFound.userMessage)
+        #expect(appState.busyFileIDs.isEmpty)         // balanced even on the failure path
         #expect(try noStripSidecar(in: dir))
+    }
+
+    /// A strip over several files counts the failed ones and gives the first cause: here the
+    /// remuxer's own text for a file it can't read.
+    @Test func aFailedStripOverSeveralFilesReportsTheCountAndTheRemuxCause() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appending(path: "a.mp4"))   // on disk, but no stream to read
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let files = [addFile("a.mp4", order: 0, to: playlist, in: context), addFile("b.mp4", order: 1, to: playlist, in: context)]
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let error = await appState.stripAudio(from: files)
+
+        let lines = error?.components(separatedBy: "\n") ?? []
+        #expect(lines.first == "2 of 2 files couldn't have their audio removed.")
+        #expect(lines.count == 2 && lines[1].contains(" failed: "))
     }
 
     // MARK: - Identifier-based file lists (Task 17 Stage C)
@@ -1994,7 +2988,7 @@ struct AppStateTests {
         #expect(bad.fileName == "c [x][y].mp4")  // invalid file untouched
     }
 
-    @Test func renameTagAcrossPlaylistRewritesEveryFile() async throws {
+    @Test func replaceTagAcrossPlaylistRewritesEveryFile() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2006,7 +3000,7 @@ struct AppStateTests {
         let b = addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
 
         #expect(error == nil)
         #expect(a.tagNames == ["shore"])
@@ -2015,7 +3009,7 @@ struct AppStateTests {
         #expect(playlist.tagFrequency["beach"] == nil)
     }
 
-    @Test func renameTagAcrossPlaylistRewritesActiveFilterAndSavedSearches() async throws {
+    @Test func replaceTagAcrossPlaylistRewritesActiveFilterAndSavedSearches() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2034,15 +3028,403 @@ struct AppStateTests {
         appState.applySavedSearch(active, on: playlist)
         #expect(appState.managerFiles.count == 2)
 
-        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
 
         #expect(error == nil)
-        // The applied filter and every saved search follow the rename rather than pointing at the
+        // The applied filter and every saved search follow the replace rather than pointing at the
         // now-nonexistent "beach", so the filtered list stays populated.
         #expect(playlist.currentFilter?.mustHaveAll == ["shore"])
         #expect(active.filter?.mustHaveAll == ["shore"])
         #expect(parked.filter?.mustHaveAll == ["shore"])
         #expect(appState.managerFiles.count == 2)
+
+        await appState.updateTask?.value
+    }
+
+    /// A busy carrier refuses a playlist-wide tag edit: a skipped one would split the tag.
+    @Test func aPlaylistWideTagReplaceWithABusyCarrierChangesNothing() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        let b = addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.manage(playlist)
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+        appState.busyFileIDs.insert(a.id)
+
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
+
+        #expect(error?.contains("busy") == true)
+        #expect(a.tagNames == ["beach"])
+        #expect(b.tagNames == ["beach"])
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])
+
+        await appState.updateTask?.value
+    }
+
+    @Test func aPlaylistWideTagRemovalWithABusyCarrierChangesNothing() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        let b = addFile("b [beach].mp4", tags: ["beach"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.manage(playlist)
+        let search = addSearch("Beach", tags: ["beach"], to: playlist, in: context)
+        appState.applySavedSearch(search, on: playlist)
+        appState.busyFileIDs.insert(a.id)
+
+        let error = await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
+
+        #expect(error?.contains("busy") == true)
+        #expect(a.tagNames == ["beach"])
+        #expect(b.tagNames == ["beach"])
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach"])
+
+        await appState.updateTask?.value
+    }
+
+    /// The Replace field's commit and the confirmed removal report a refused edit under their titles.
+    @Test(arguments: [PlaylistTagEdit.replace, .remove])
+    func aRefusedPlaylistWideTagEditIsReportedUnderItsTitle(_ edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.manage(playlist)
+        appState.busyFileIDs.insert(a.id)
+
+        switch edit {
+        case .replace: appState.commitTagReplace("beach", with: "shore", on: playlist)
+        case .remove:
+            appState.requestTagRemoval("beach")
+            appState.confirmConfirmation()
+        }
+        for task in appState.confirmationTasks.values { await task.value }
+
+        #expect(appState.errorNotice?.title == (edit == .replace ? "Tag change failed" : "Couldn't remove tag"))
+        await appState.updateTask?.value
+    }
+
+    /// A busy file that does not carry the tag does not hold up a playlist-wide edit.
+    @Test func aPlaylistWideTagReplaceIgnoresABusyFileWithoutTheTag() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
+        let other = addFile("b [sun].mp4", tags: ["sun"], status: .valid, order: 1, to: playlist, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        appState.busyFileIDs.insert(other.id)
+
+        #expect(await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore") == nil)
+        #expect(a.tagNames == ["shore"])
+    }
+
+    /// A playlist-wide edit of `beach` on files tagged `[beach sun]`.
+    enum PlaylistTagEdit: CaseIterable {
+        case replace, remove
+
+        /// The tags of a changed file, and of the filter that follows it.
+        var changedTags: [String] { self == .replace ? ["shore", "sun"] : ["sun"] }
+
+        @MainActor
+        func run(on playlist: Playlist, of appState: AppState) async -> String? {
+            switch self {
+            case .replace: await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
+            case .remove: await appState.removeTagAcrossPlaylist(playlist, tag: "beach")
+            }
+        }
+    }
+
+    /// Two `[beach sun]` files under a filter on both tags; `failing` names the files whose disk
+    /// rename fails.
+    private func tagEditFixture(
+        failing: Set<String>, in context: ModelContext, dir: URL
+    ) throws -> (Playlist, PlaylistFile, PlaylistFile, AppState) {
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
+        context.insert(playlist)
+        let a = addFile("a [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 0, to: playlist, in: context)
+        let b = addFile("b [beach sun].mp4", tags: ["beach", "sun"], status: .valid, order: 1, to: playlist, in: context)
+        var fileSystem = StubFileSystem(result: emptyResult)
+        fileSystem.renameFailsFor = failing
+        let appState = AppState(modelContext: context, fileSystem: fileSystem)
+        appState.manage(playlist)
+        filter(playlist, in: context, of: appState, mustHaveAll: ["beach", "sun"])
+        return (playlist, a, b, appState)
+    }
+
+    /// The filter follows the files that changed; the message counts the files that failed.
+    @Test(arguments: PlaylistTagEdit.allCases)
+    func aPlaylistWideTagEditWithAFailedFileFollowsTheFilesThatChanged(edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, a, b, appState) = try tagEditFixture(failing: ["a [beach sun].mp4"], in: context, dir: dir)
+
+        let error = await edit.run(on: playlist, of: appState)
+
+        #expect(error == "1 of 2 files couldn't be renamed.\nRename failed: locked")
+        #expect(a.tagNames == ["beach", "sun"])
+        #expect(b.tagNames == edit.changedTags)
+        #expect(playlist.currentFilter?.mustHaveAll == edit.changedTags)
+
+        await appState.updateTask?.value
+    }
+
+    /// A failed one-file tag edit reports only the cause: the notice's title names the op.
+    @Test func aFailedOneFileTagEditReportsOnlyTheCause() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (_, a, _, appState) = try tagEditFixture(failing: ["a [beach sun].mp4"], in: context, dir: dir)
+
+        let error = await appState.addTag("sea", to: [a])
+
+        #expect(error == "Rename failed: locked")
+        #expect(a.tagNames == ["beach", "sun"])
+
+        await appState.updateTask?.value
+    }
+
+    /// A Replace with an invalid tag is refused with its message: no file and no filter changes.
+    @Test func aReplaceWithAnInvalidTagIsRefused() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, a, b, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "ab")
+
+        #expect(error == "“ab” isn’t a valid tag (letters, digits, or underscore; at least \(TagParser.minTagLength) characters).")
+        #expect(a.tagNames == ["beach", "sun"])
+        #expect(b.tagNames == ["beach", "sun"])
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach", "sun"])
+
+        await appState.updateTask?.value
+    }
+
+    /// A Replace with an empty entry or the same tag is a no-op, with no message.
+    @Test(arguments: ["", "  ", "Beach"])
+    func aReplaceWithNoNewTagChangesNothing(entry: String) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, a, _, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+        let before = appState.sequences.version
+
+        #expect(await appState.replaceTagAcrossPlaylist(playlist, "beach", with: entry) == nil)
+
+        #expect(a.fileName == "a [beach sun].mp4")
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach", "sun"])
+        #expect(appState.sequences.version == before)
+
+        await appState.updateTask?.value
+    }
+
+    /// An edit that changed no file failed: the filter keeps the tag every file still carries.
+    @Test(arguments: PlaylistTagEdit.allCases)
+    func aPlaylistWideTagEditThatChangedNoFileKeepsTheFilter(edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, a, b, appState) = try tagEditFixture(
+            failing: ["a [beach sun].mp4", "b [beach sun].mp4"], in: context, dir: dir
+        )
+
+        let error = await edit.run(on: playlist, of: appState)
+
+        #expect(error?.contains("locked") == true)
+        #expect(a.tagNames == ["beach", "sun"])
+        #expect(b.tagNames == ["beach", "sun"])
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach", "sun"])
+
+        await appState.updateTask?.value
+    }
+
+    /// An edit on a folder that can't be found changes no file, keeps the playlist's folder and the
+    /// filter, and reports the lost folder.
+    @Test(arguments: PlaylistTagEdit.allCases)
+    func aPlaylistWideTagEditOnALostFolderReportsIt(edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, a, b, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+        playlist.folderBookmark = Data()
+
+        _ = await edit.run(on: playlist, of: appState)
+
+        #expect(a.tagNames == ["beach", "sun"])
+        #expect(b.tagNames == ["beach", "sun"])
+        #expect(playlist.currentFilter?.mustHaveAll == ["beach", "sun"])
+        #expect(playlist.folderBookmark == Data())
+        #expect(playlist.folderPath == dir.path)
+        #expect(appState.errorNotice == ErrorNotice(
+            title: "Folder not found",
+            message: "“P”'s folder can't be found. If it's on a disk that isn't connected, connect the disk and try again. If the folder was deleted, delete the playlist and add the folder again."
+        ))
+
+        await appState.updateTask?.value
+    }
+
+    /// An edit on a renamed folder refreshes the stale bookmark and runs there, with no notice.
+    @Test(arguments: PlaylistTagEdit.allCases)
+    func aPlaylistWideTagEditOnARenamedFolderRefreshesTheBookmark(edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        let renamed = dir.deletingLastPathComponent().appending(path: "\(dir.lastPathComponent)-renamed")
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: renamed)
+        }
+        let (playlist, a, b, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+        try FileManager.default.moveItem(at: dir, to: renamed)
+        try #require(try BookmarkService.resolve(playlist.folderBookmark).isStale)
+
+        _ = await edit.run(on: playlist, of: appState)
+
+        #expect(a.tagNames == edit.changedTags)
+        #expect(b.tagNames == edit.changedTags)
+        #expect(appState.errorNotice == nil)
+        let resolved = try BookmarkService.resolve(playlist.folderBookmark)
+        #expect(resolved.url.standardizedFileURL == renamed.standardizedFileURL)
+        #expect(!resolved.isStale)
+
+        await appState.updateTask?.value
+    }
+
+    /// A refreshed bookmark saves through the `persist` seam, so a failed save reports.
+    @Test func aBookmarkRefreshWhoseSaveFailsReportsIt() throws {
+        struct SaveFailed: Error {}
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        let renamed = dir.deletingLastPathComponent().appending(path: "\(dir.lastPathComponent)-renamed")
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        let playlist = Playlist(
+            name: "P", folderBookmark: try BookmarkService.makeBookmark(for: dir), folderPath: dir.path, mediaType: .image
+        )
+        context.insert(playlist)
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult),
+            persist: { throw SaveFailed() }
+        )
+        defer { appState.coordinator.shutdown() }
+        try FileManager.default.moveItem(at: dir, to: renamed)
+
+        _ = appState.withFolderAccess(to: playlist) { $0 }
+
+        #expect(appState.errorNotice?.title == "Couldn't save your changes")
+    }
+
+    /// A folder opener saves a refreshed bookmark in the middle of its caller. A failed save keeps
+    /// the caller's unsaved edits, which the in-memory state already reflects.
+    @Test func aBookmarkRefreshWhoseSaveFailsKeepsTheCallersEdits() throws {
+        struct SaveFailed: Error {}
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        let renamed = dir.deletingLastPathComponent().appending(path: "\(dir.lastPathComponent)-renamed")
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        let playlist = Playlist(
+            name: "P", folderBookmark: try BookmarkService.makeBookmark(for: dir), folderPath: dir.path, mediaType: .image
+        )
+        context.insert(playlist)
+        try context.save()
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult),
+            persist: { throw SaveFailed() }
+        )
+        defer { appState.coordinator.shutdown() }
+        try FileManager.default.moveItem(at: dir, to: renamed)
+        playlist.name = "Edited"   // the caller's pending edit
+
+        _ = appState.withFolderAccess(to: playlist) { $0 }
+
+        #expect(playlist.name == "Edited")
+        #expect(appState.errorNotice?.title == "Couldn't save your changes")
+    }
+
+    /// The re-scan the edit awaits prunes every carrier: then only the filter carries the tag, and
+    /// it changes there.
+    @Test(arguments: PlaylistTagEdit.allCases)
+    func aPlaylistWideTagEditWhoseRescanPrunedEveryCarrierChangesTheFilter(edit: PlaylistTagEdit) async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, _, _, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+        try context.save()
+        let scan = HeldScan(on: playlist, appState, committing: [])
+
+        let editTask = Task { await edit.run(on: playlist, of: appState) }
+        try await waitUntil { appState.playlistWork.opCount(for: playlist.id) == 1 }
+        scan.open()
+        #expect(await editTask.value == nil)
+        await appState.updateTask?.value   // the deferred re-scan
+
+        #expect(storedFiles(of: playlist).isEmpty)
+        #expect(playlist.currentFilter?.mustHaveAll == edit.changedTags)
+    }
+
+    /// A tag removal with no saved-search delete pending does not write the confirmation.
+    @Test func aPlaylistWideTagRemovalFiresNoConfirmationObservation() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (playlist, _, _, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+
+        #expect(await !firesObservation(
+            reading: { _ = appState.pendingConfirmation },
+            onAwaiting: { _ = await appState.removeTagAcrossPlaylist(playlist, tag: "beach") }
+        ))
+
+        await appState.updateTask?.value
+    }
+
+    /// A tag edit over several files refreshes the store-side lists once, not once per file.
+    @Test func aTagEditOverSeveralFilesBumpsTheSequenceVersionOnce() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (_, a, b, appState) = try tagEditFixture(failing: [], in: context, dir: dir)
+        let before = appState.sequences.version
+
+        #expect(await appState.addTag("cats", to: [a, b]) == nil)
+
+        #expect(a.tagNames.contains("cats"))
+        #expect(b.tagNames.contains("cats"))
+        #expect(appState.sequences.version == before + 1)
 
         await appState.updateTask?.value
     }
@@ -2150,9 +3532,8 @@ struct AppStateTests {
 
     /// The saved-search family is the only one `confirmConfirmation` runs inline, so it is the only
     /// one that dismisses the confirmation and reports a failure in the same update: the delete is a
-    /// store edit, and a failed persist surfaces through `saveError` rather than the `errorNotice`
-    /// the task-backed families use. `RootView` hosts both alerts, and hands the second one straight
-    /// over. Driven through the injectable `persist` seam, since the in-memory store's own `save`
+    /// store edit, and a failed persist surfaces through `errorNotice` at once. `RootView` attaches
+    /// the error alert outside the confirmation, so it shows when the confirmation closes. Driven through the injectable `persist` seam, since the in-memory store's own `save`
     /// never throws.
     @Test func aFailedSavedSearchDeleteDismissesTheConfirmationAndSurfacesTheSaveError() throws {
         struct SaveFailed: Error {}
@@ -2172,10 +3553,10 @@ struct AppStateTests {
         appState.confirmConfirmation()
 
         #expect(appState.pendingConfirmation == nil)
-        #expect(appState.saveError != nil)
+        #expect(appState.errorNotice?.title == "Couldn't save your changes")
     }
 
-    @Test func confirmPlayerDeleteSurfacesFailureAndKeepsFile() async throws {
+    @Test func confirmDeleteSurfacesFailureAndKeepsFile() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2188,7 +3569,7 @@ struct AppStateTests {
         fileSystem.trashFails = true
         let appState = AppState(modelContext: context, fileSystem: fileSystem)
 
-        appState.requestPlayerDelete(file)
+        appState.requestDelete([file])
         appState.confirmConfirmation()
 
         // The fire-and-forget trash fails, so the player reports the message instead of
@@ -2198,7 +3579,7 @@ struct AppStateTests {
             try? await Task.sleep(for: .milliseconds(20))
             waited += 1
         }
-        #expect(appState.errorNotice != nil)
+        #expect(appState.errorNotice?.message == "a.mp4 is locked.")
         #expect(file.playlist === playlist)
         #expect(playlist.files.contains { $0 === file })
     }
@@ -2422,7 +3803,7 @@ struct AppStateTests {
         #expect(appState.errorNotice?.title == "Already saved")
         #expect(appState.errorNotice?.message.contains("Beach") == true)
         #expect(playlist.savedSearches.count == 1)
-        appState.errorNotice = nil
+        appState.dismissErrorNotice()
 
         // A genuinely different combination — the same names in another field — is not a duplicate.
         appState.toggleFilterTag("beach", in: .mustHaveAny, on: playlist)
@@ -2550,7 +3931,8 @@ struct AppStateTests {
         #expect(try context.fetchCount(FetchDescriptor<TagFilter>()) == 0)
     }
 
-    @Test func renameTagOntoExistingTagIsRefused() async throws {
+    /// Replacing a tag with one files already carry merges the two; a file with both keeps one.
+    @Test func replacingATagWithAnExistingTagMergesThem() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2559,19 +3941,21 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
         context.insert(playlist)
         let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
-        addFile("b [shore].mp4", tags: ["shore"], status: .valid, order: 1, to: playlist, in: context)
-        playlist.tagFrequency = ["beach": 1, "shore": 1]
+        let b = addFile("b [shore].mp4", tags: ["shore"], status: .valid, order: 1, to: playlist, in: context)
+        let c = addFile("c [beach shore].mp4", tags: ["beach", "shore"], status: .valid, order: 2, to: playlist, in: context)
+        playlist.tagFrequency = ["beach": 2, "shore": 2]
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        // "shore" already exists as a distinct tag, so the rename is refused with a
-        // message and no file is touched (rather than silently merging the two).
-        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
 
-        #expect(error != nil)
-        #expect(a.fileName == "a [beach].mp4")
+        #expect(error == nil)
+        #expect(a.fileName == "a [shore].mp4")
+        #expect(b.fileName == "b [shore].mp4")
+        #expect(c.fileName == "c [shore].mp4")
+        #expect(playlist.tagFrequency == ["shore": 3])
     }
 
-    @Test func renameTagOntoTagHeldOnlyBySkippedFileIsRefused() async throws {
+    @Test func replacingATagWithOneHeldOnlyByASkippedFileMergesThem() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2580,16 +3964,15 @@ struct AppStateTests {
         let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .video)
         context.insert(playlist)
         let a = addFile("a [beach].mp4", tags: ["beach"], status: .valid, order: 0, to: playlist, in: context)
-        // "shore" lives only on a skipped file, so it never enters `tagFrequency`; the
-        // collision check must still see it and refuse the merge.
+        // "shore" lives only on a skipped file, so it never enters `tagFrequency`.
         addFile("x [shore].jpg", tags: ["shore"], status: .valid, skipped: true, order: 1, to: playlist, in: context)
         playlist.tagFrequency = ["beach": 1]
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
 
-        let error = await appState.renameTagAcrossPlaylist(playlist, from: "beach", to: "shore")
+        let error = await appState.replaceTagAcrossPlaylist(playlist, "beach", with: "shore")
 
-        #expect(error != nil)
-        #expect(a.fileName == "a [beach].mp4")   // untouched
+        #expect(error == nil)
+        #expect(a.fileName == "a [shore].mp4")
     }
 
     @Test func reselectingTheSamePlaylistReScansTheFolder() async throws {
@@ -2700,7 +4083,7 @@ struct AppStateTests {
         let stub = StubFileSystem(result: emptyResult, rescanResult: [])
         let appState = AppState(modelContext: context, fileSystem: stub)
         appState.managedPlaylist = playlist
-        appState.pendingConfirmation = .managerDelete([a])
+        appState.pendingConfirmation = .delete([a])
 
         // The re-scan prunes "a.mp4"; the pending delete that targeted it must be
         // cleared so confirming can't dereference the destroyed model.
@@ -2709,7 +4092,7 @@ struct AppStateTests {
         #expect(appState.pendingConfirmation == nil)
     }
 
-    @Test func managerDeleteRequestModelsOnePendingConfirmation() throws {
+    @Test func deleteRequestModelsOnePendingConfirmation() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .video)
@@ -2719,8 +4102,8 @@ struct AppStateTests {
         appState.managedPlaylist = playlist
 
         // The request models exactly one pending confirmation carrying its target.
-        appState.requestManagerDelete([a])
-        #expect(appState.pendingConfirmation?.managerDeleteFiles?.map(\.id) == [a.id])
+        appState.requestDelete([a])
+        #expect(appState.pendingConfirmation?.deleteFiles?.map(\.id) == [a.id])
 
         // Cancelling clears it.
         appState.cancelConfirmation()
@@ -2802,7 +4185,7 @@ struct AppStateTests {
         #expect(appState.coordinator.liveAudioPlaylist == nil)
     }
 
-    @Test func confirmAudioDeleteAdvancesPastTheTrashedTrack() async throws {
+    @Test func confirmDeleteAdvancesTheLiveAudioChannelPastTheTrashedTrack() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let dir = try makeTempDir()
@@ -2821,43 +4204,9 @@ struct AppStateTests {
         appState.startPlayback(of: audio)
         #expect(audio.currentFileID == first.id)
 
-        // Trashing the playing track must advance the channel to the survivor, mirroring the
-        // visual delete confirmation; otherwise the engine stays on the deleted file.
-        appState.requestAudioDelete(first)
-        appState.confirmConfirmation()
-
-        var waited = 0
-        while audio.files.count > 1 && waited < 100 {
-            try? await Task.sleep(for: .milliseconds(20))
-            waited += 1
-        }
-        #expect(audio.files.count == 1)
-        #expect(audio.currentFileID == secondID)   // reconciled past the trashed track
-    }
-
-    @Test func confirmManagerDeleteAdvancesTheLiveAudioChannel() async throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try Data().write(to: dir.appending(path: "1.mp3"))
-        try Data().write(to: dir.appending(path: "2.mp3"))
-        let bookmark = try BookmarkService.makeBookmark(for: dir)
-        let audio = Playlist(name: "A", folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
-        context.insert(audio)
-        let first = addFile("1.mp3", order: 0, to: audio, in: context)
-        let second = addFile("2.mp3", order: 1, to: audio, in: context)
-        let secondID = second.id
-        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
-        defer { appState.coordinator.shutdown() }
-
-        appState.startPlayback(of: audio)
-        #expect(audio.currentFileID == first.id)
-
-        // Deleting the playing track from the Manager file list must advance the live audio
-        // channel off it, exactly as the audio-overlay delete does — otherwise the engine keeps
-        // the destroyed model and its next advance dereferences it.
-        appState.requestManagerDelete([first])
+        // Trashing the playing track must advance the channel to the survivor; otherwise the
+        // engine keeps the destroyed model and its next advance dereferences it.
+        appState.requestDelete([first])
         appState.confirmConfirmation()
 
         var waited = 0
@@ -3170,7 +4519,7 @@ struct AppStateTests {
         #expect(audio.currentFileID == secondID)   // reconciled off the pruned track
     }
 
-    @Test func audioRescanRemovalClearsPendingAudioDelete() async throws {
+    @Test func audioRescanRemovalPrunesAnOpenConfirmation() async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
@@ -3182,9 +4531,9 @@ struct AppStateTests {
             fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("2.mp3", .audio)])
         )
 
-        // A trash confirmation pointing at a file the re-scan prunes must not survive to act
-        // on a destroyed model.
-        appState.requestAudioDelete(doomed)
+        // A trash confirmation pointing at a file the re-scan prunes must not survive to act on a
+        // destroyed model.
+        appState.requestDelete([doomed])
         await appState.update(audio)
         #expect(appState.pendingConfirmation == nil)
     }
@@ -3342,7 +4691,7 @@ struct AppStateTests {
         defer { appState.coordinator.shutdown() }
 
         appState.startFirstAudioPlaylistOrAdd()
-        #expect(appState.isImportingPlaylist)
+        #expect(appState.folderPick?.isAddPlaylist == true)
         #expect(appState.audioChannelPlaylist == nil)
     }
 
@@ -3357,7 +4706,7 @@ struct AppStateTests {
         appState.startFirstAudioPlaylistOrAdd()
         #expect(appState.audioChannelPlaylist === audio)
         #expect(appState.coordinator.liveAudioPlaylist === audio)
-        #expect(!appState.isImportingPlaylist)
+        #expect(appState.folderPick == nil)
     }
 
     // MARK: - New Playlist switches scope (audio manager redesign — Phase 3)
@@ -3549,7 +4898,7 @@ struct AppStateTests {
         #expect(audio.tagFrequency["jazz"] == 2)
     }
 
-    /// A persist failure is not swallowed: `persistAndRefresh` surfaces it through `saveError` and
+    /// A persist failure is not swallowed: `persistAndRefresh` surfaces it through `errorNotice` and
     /// rolls the context back, so a mutation whose save fails leaves no stale in-memory edit
     /// diverging from the (unchanged) saved store. Driven through the injectable `persist` seam,
     /// since the in-memory store's own `save` never throws.
@@ -3568,9 +4917,216 @@ struct AppStateTests {
 
         appState.toggleServiceFilter(.untagged, on: playlist)
 
-        #expect(appState.saveError != nil)
+        #expect(appState.errorNotice?.title == "Couldn't save your changes")
         // The rollback discarded the pending edit at the store layer, so a later successful save
         // can't silently flush this failed change.
         #expect(context.hasChanges == false)
     }
+
+    /// SwiftUI drops an alert raised while a sheet is on the window (the folder chooser, another
+    /// alert, one still closing), so the error alert waits for the window's last sheet to end.
+    @Test func anErrorNoticeRaisedUnderASheetWaitsForTheLastSheetToEnd() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.windowHasSheet = true
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        #expect(!(appState.shownModal == .report))   // held under the sheet
+
+        appState.windowHasSheet = true        // one sheet ended, a second one is behind it
+        #expect(!(appState.shownModal == .report))
+
+        appState.windowHasSheet = false       // the last sheet ended
+        #expect((appState.shownModal == .report))
+    }
+
+    @Test func anErrorNoticeRaisedWithNoSheetShowsAtOnce() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        #expect((appState.shownModal == .report))
+    }
+
+    /// A report that comes while another is open waits behind it: the open one stays on screen.
+    /// A dismiss exposes it while the closing alert's sheet is still on the window, so it shows
+    /// when that sheet ends: shown in the same turn, it would be lost.
+    @Test func aReportRaisedWhileOneIsOpenWaitsBehindIt() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bookmark = try BookmarkService.makeBookmark(for: dir)
+        let playlist = Playlist(name: "P", folderBookmark: bookmark, folderPath: dir.path, mediaType: .image)
+        context.insert(playlist)
+        let file = addFile("a.jpg", order: 0, to: playlist, in: context)
+        var fileSystem = StubFileSystem(result: emptyResult)
+        fileSystem.trashFails = true
+        let appState = AppState(modelContext: context, fileSystem: fileSystem)
+        defer { appState.coordinator.shutdown() }
+        let open = ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved.")
+        appState.report(open)
+        appState.windowHasSheet = true        // the error alert is on screen
+
+        appState.requestDelete([file])
+        appState.confirmConfirmation()
+        for task in appState.confirmationTasks.values { await task.value }
+        #expect(appState.errorNotice == open)   // the open report stays on screen
+        #expect((appState.shownModal == .report))
+
+        appState.dismissErrorNotice()         // OK, while the alert's sheet still closes
+        #expect(appState.errorNotice?.title == "Couldn't move to Trash")
+        #expect(!(appState.shownModal == .report))
+        appState.windowHasSheet = false       // the alert's sheet ended
+        #expect((appState.shownModal == .report))
+
+        appState.dismissErrorNotice()
+        #expect(appState.errorNotice == nil)
+    }
+
+    /// A batch that saves per file reports a failing store once per file: one alert, not one per file.
+    @Test func aReportEqualToAQueuedOneIsSkipped() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.report(.saveFailed("Disk full"))
+        appState.report(.saveFailed("Disk full"))
+        appState.dismissErrorNotice()
+        #expect(appState.errorNotice == nil)
+    }
+
+    /// A quit during disk work raised while the window has a sheet (an error alert, the chooser)
+    /// waits for the last sheet to end, as an error report does.
+    @Test func aQuitWaitRaisedUnderASheetWaitsForTheLastSheetToEnd() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.replyToTerminate = { _ in }
+        appState.busyFileIDs = [UUID()]
+
+        appState.windowHasSheet = true
+        _ = appState.shouldTerminate()
+        #expect(appState.isWaitingToQuit)
+        #expect(!(appState.shownModal == .quitWait))      // held under the sheet
+
+        appState.windowHasSheet = false       // the last sheet ended
+        #expect((appState.shownModal == .quitWait))
+    }
+
+    /// The quit wait stays behind every modal raised before or after it: it only waits on work.
+    @Test func queuedModalsShowOneAtATimeTheQuitWaitLast() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.replyToTerminate = { _ in }
+        appState.busyFileIDs = [UUID()]
+
+        appState.windowHasSheet = true
+        _ = appState.shouldTerminate()
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+
+        appState.windowHasSheet = false       // the chooser ended
+        #expect(appState.shownModal == .report)
+
+        appState.windowHasSheet = true        // the report is on screen
+        appState.dismissErrorNotice()
+        #expect(appState.shownModal == nil)
+        appState.windowHasSheet = false       // the report ended
+        #expect(appState.shownModal == .quitWait)
+    }
+
+    /// A report raised while the quit wait shows takes its place; the wait shows again after it,
+    /// and the held quit gets no reply in between.
+    @Test func aReportRaisedWhileTheQuitWaitShowsTakesItsPlace() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        var replies: [Bool] = []
+        appState.replyToTerminate = { replies.append($0) }
+        appState.busyFileIDs = [UUID()]
+        _ = appState.shouldTerminate()
+        #expect(appState.shownModal == .quitWait)
+        appState.windowHasSheet = true        // the quit wait is on screen
+
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        #expect(appState.shownModal == nil)   // the quit wait's sheet closes
+        #expect(appState.isWaitingToQuit)
+        appState.windowHasSheet = false
+        #expect(appState.shownModal == .report)
+
+        appState.windowHasSheet = true
+        appState.dismissErrorNotice()
+        appState.windowHasSheet = false
+        #expect(appState.shownModal == .quitWait)
+        #expect(replies.isEmpty)
+    }
+
+    /// Two modals raised in one turn show one at a time: two presented at once, SwiftUI drops one.
+    @Test func twoModalsRaisedInOneTurnShowOneAtATime() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let playlist = Playlist(name: "P", folderBookmark: Data(), folderPath: "/p", mediaType: .image)
+        container.mainContext.insert(playlist)
+
+        appState.requestPlaylistDelete(playlist)
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        #expect(appState.shownModal == .confirmation)
+
+        appState.cancelConfirmation()
+        #expect(appState.shownModal == .report)
+    }
+
+    /// The add flow's failure report and its media-type choice raised under the chooser's sheet
+    /// show as it ends.
+    @Test func theAddFlowsModalsRaisedUnderASheetWaitForItToEnd() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.windowHasSheet = true
+        appState.report(.addPlaylistFailed("“Empty” has no videos, images, or audio files."))
+        #expect(appState.shownModal == nil)   // held under the sheet
+        appState.windowHasSheet = false
+        #expect(appState.shownModal == .report)
+
+        appState.windowHasSheet = true        // the report is on screen
+        appState.dismissErrorNotice()
+        appState.pendingTypeChoice = PendingPlaylist(
+            name: "Mix", bookmark: Data(), folderPath: "/mix",
+            scan: ScanResult(files: [], counts: [.video: 1, .image: 1], dominantType: nil)
+        )
+        #expect(appState.shownModal == nil)
+        appState.windowHasSheet = false
+        #expect(appState.shownModal == .typeChoice)
+    }
+
+    /// A chooser raised in the same turn as a report waits for the report's sheet to end: presented
+    /// beside it, SwiftUI drops the chooser.
+    @Test func aChooserRaisedBesideAReportShowsAfterIt() throws {
+        let container = try makeContainer()
+        let appState = AppState(modelContext: container.mainContext, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        appState.folderPick = .addPlaylist
+        #expect(appState.shownModal == .report)
+
+        appState.windowHasSheet = true        // the report is on screen
+        appState.dismissErrorNotice()
+        #expect(appState.shownModal == nil)
+        appState.windowHasSheet = false       // the report ended
+        #expect(appState.shownModal == .folderPick)
+
+        appState.completeFolderPick(.addPlaylist, with: .failure(CancellationError()))
+        #expect(appState.folderPick == nil)
+    }
+}
+
+private extension AppState {
+    /// The kind of the modal on screen.
+    var shownModal: WindowModal.Kind? { windowModals.shown?.kind }
 }

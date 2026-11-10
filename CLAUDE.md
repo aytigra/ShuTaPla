@@ -2,29 +2,6 @@
 
 macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 
-## **IMPORTANT!!!**: These rules are always in force during planning and implementation process
-
-**Everything in this file governs every task and every *process* — including when you are executing a slash command, running inside a skill, or driving subagents.**
-
-**The work is organized through plan files in doc/tasks folder. A design or implementation decision is settled only once it has been talked through with the user, written into the task doc file. Task steps are established in such file and always implemented only one step at a time. Implementation starts only after confirmation from user.** Anything that lives only in the running context — above all a compaction summary(which can drift) — is provisional.
-
-**Load relevant skills before implementation**
-
-**Ensure test coverage and confirmation/refutal tests before changing code. Always review freshly written tests to prevent traps that interrupt work**
-
-**During the whole implementation process re-check your work against the task doc, not only against the code in front of you.** If agreed goal and surrounding code pull apart, or any uncertainty arises, notice it and resolve it deliberately rather than letting proximity decide, stop and ask if resolution is not obvious.
-
-**When changing SwiftData models - add migration**
-
-**When inferred implementation does not work after several tries - stop guessing, do documentation and web search!**
-
-**Before concluding task/step as done run a checklist**
-
-- does issue navigator has standing issues?
-- does it follow code conventions?
-- can code be simplified and deduplicated?
-- does it adhere to writing rules?
-
 ## Key docs
 
 - `doc/features.md` — feature-spec entry point: overview, Terminology glossary, and a map of the per-topic chapters in `doc/features/` (load only the chapter you need)
@@ -32,90 +9,34 @@ macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
 - `doc/versioning.md` — SwiftData schema versioning: **read before changing any `@Model`** — a missed migration compiles fine and crashes the app at launch
 - `doc/profiling.md` — recording and reading an Instruments trace (host Mac, SwiftUI template): **read before running any profiling tooling** — it is the first step, before invoking `record_trace.py`, `analyze_trace.py`, or `xctrace` — a guessed attach target or launch matches nothing (or the wrong instance) and the recorder silently captures no session
 
-## Writing rules
-
-**Concise Writing Style.** Terse Simplified Technical English ASD-STE100 appropriate for software engineering should be used for all software developer (user) facing outputs.
-
-**Describe the code as it is now — no residue, no change-narration.** Artifacts (docs, plans, comments, commit messages) should describe the current code statically, as if it had always been this way. Two facets of one rule: (1) never describe a dismissed alternative or a corrected/replaced choice; (2) even when nothing was rejected, don't narrate continuity or evolution relative to some earlier state. Mention a former state only when the current choice is genuinely hard to understand without it, and then only as an explanation of the current choice. Work-tracking artifacts in `doc/tasks/` can have change narration because they are describing implementation, but they also shouldn't be overloaded with minute details and verbose descriptions of dismissed paths.
-
 ## Code conventions
 
-Should be applied meaningfully without overdoing.
 
-**Less code is the default; simplify the whole, not just the part you add.** Code is a liability — fewer lines, fewer concepts, and less duplication is very important! Whenever you add to existing code or refactor it, step back and look at the result as a whole: can naming be made consistent, can duplicated logic be folded together, can the new and the old collapse into something smaller and more coherent? Strive to do this as part of the change, not only as a later cleanup — debt compounds fast when every change only adds. 
+**Modals are presented from one app-wide host bound to `AppState` — never view-local.** A `@State` alert inside a view is invisible to `HotkeyRouter`, whose app-wide monitor must be able to *see* a modal to hold the keyboard for it; a view mounted in several places would also carry one copy of the modal per mount, free to word itself differently in each. Raise the modal as a `WindowModal` case on `AppState.windowModals`, which shows one at a time, and present it once (`RootView`), deriving its wording from that state.
 
-**Modularity and helpers**
+**`HotkeyRouter` owns bare keyboard input, not the responder chain.** Its app-wide `NSEvent` monitor intercepts keys before any SwiftUI `.alert`, so a modal's own button shortcuts never fire and bare keys leak to whatever the router routes them to. Present confirmations as `.alert` (with `.defaultAction`/`.cancelAction` buttons that handle `[enter]`/`[esc]` natively) and raise it through `AppState.windowModals`, which the router's `hasBlockingConfirmation` checks. An out-of-process system panel (`.fileImporter`) is raised as a `WindowModal` like the alerts, but its kind's `ownsKeys` is true: `keysBelongElsewhere`, checked before `hasBlockingConfirmation`, passes every bare key through while such a modal is shown.
 
-A type extension in `Extensions/` is a good fit for a general operation on a standard type (e.g. an Array) — but it is one tool among other (inlining, a shared function, or a new type, helper functions), not something to apply everywhere by reflex. Splitting a large file into modules or partials is important!
+**Fetch-based sequence accessors pair with `AppState.sequenceVersion`.** It is bumped on every membership or order mutation; views that read such an accessor read it too.
 
-**Never fault a playlist's whole `files` relationship on the main actor in a hot or repeated path.** Reading `playlist.files` (or `.count` on it) realizes every `PlaylistFile` row into the context — O(folder) main-actor work we deliberately avoid. Anything that runs per tick, per advance, per frame, or per live-feed update must resolve only what it needs through the scoped `ModelContext` accessors in `Models/queries/ModelContext+Sequence.swift`: a predicate / `fetchCount` / identifier fetch keyed on `$0.playlist?.persistentModelID == pid` (the `(playlist, …)` index covers it), fetching just the rows a surface shows or the delta a feed reports. `playlist.files` is acceptable only for a genuine one-shot over the whole set that is off the hot path (a rescan reconcile, a shuffle rebuild).
+**The metadata merge calls `persistAndRefresh()` before the next object-returning `includePendingChanges = false` fetch.** It writes `duration`/`width`/`height`/`fileSizeBytes`/`fingerprint` onto the model, and such a fetch would discard those edits.
 
-**Don't stack a `count: 1` and `count: 2` tap gesture on the same view.** SwiftUI can't fire the single-tap handler until the system double-click interval elapses. Use one `onTapGesture` and branch on the underlying event's click count instead.
+**General standard-type extensions live in `Extensions/`.**
 
-**An icon-only button carries a `Label`, never a bare `Image`.** `Button { … } label: { Label("Loop", systemImage: "repeat") }` with `.labelStyle(.iconOnly)` and `.help(…)`: one string names the control, its tooltip, and its accessibility label, so they cannot drift apart and a glyph can't ship nameless to VoiceOver.
+## App data
 
-**Modals are presented from one app-wide host bound to `AppState` — never view-local.** A `@State` alert inside a view is invisible to `HotkeyRouter`, whose app-wide monitor must be able to *see* a modal to hold the keyboard for it; a view mounted in several places would also carry one copy of the modal per mount, free to word itself differently in each. Drive the modal from an `AppState` field and present it once (`RootView`), deriving its wording from that state.
-
-**`HotkeyRouter` owns bare keyboard input, not the responder chain.** Its app-wide `NSEvent` monitor intercepts keys before any SwiftUI `.alert`, so a modal's own button shortcuts never fire and bare keys leak to whatever the router routes them to. Present confirmations as `.alert` (with `.defaultAction`/`.cancelAction` buttons that handle `[enter]`/`[esc]` natively) and register the modal's `AppState` flag in the router's `hasBlockingConfirmation`.
-
-**A manual SwiftData fetch in a computed property is not Observation-tracked.** A computed accessor that derives from `fetch`/`fetchIdentifiers`/`fetchCount` is *not* re-evaluated when the underlying rows change — Observation tracks only the `@Observable`/`@Model` properties read *in the body*, and the fetch reads none. (A walk over a to-many relationship like `playlist.files` *is* tracked, so swapping such a walk for a store fetch silently drops reactivity.) Pair such an accessor with an observed version signal (`AppState.sequenceVersion`) bumped on every membership/order mutation, and have views read it. A test that seeds rows then reads such an accessor must `save()` first, or the fetch returns empty and indexing traps.
-
-**`@Query` coarsely refaults its own entity's registered instances on *every* store save — use it carefully, containing the blast radius.** A live `@Query<T>` re-runs its fetch on any `willChange` in the context, whatever changed, and re-materializes the `T` instances it vends. SwiftData hands the *same* registered instance to the `@Query` and to every other view holding it, so the refault re-fires those instances' per-keypath observation and re-renders every view reading any of their fields — an unrelated one-field save on some *other* model shakes the whole tree. (Proven: a bare `save()` with no `@Query` never refaults a bystander; a `@Query` over *any* model — even one with no Codable composite — does. It is generic to `@Query`, not tied to a model's shape.) So it is a sharp tool, not a default. Acceptable uses share one property — the refault can't cascade: confine it to an isolated leaf view no other view observes; or keep the vended views cheap and gate their redraws (equatable inputs, manual change-tracking) so a refault re-render stays contained; or, for a list vended into shared chrome, fetch a snapshot and refresh it on an observed version signal bumped only on real membership/order changes. What to never do is let a `@Query` instance reach a dense view unmanaged.
-
-**A `fetch` with `includePendingChanges = false` refaults a matching dirty registered object — discarding its unsaved edits.** It doesn't just filter visibility; it mutates the live instance back to saved store values (unlike Core Data, where pending values survive). So anything that writes derived fields onto a model (the metadata merge of `duration`/`width`/`height`/`fileSizeBytes`/`fingerprint`) must `persistAndRefresh()` **before** the next object-returning `includePendingChanges=false` fetch (`selectedManagerFiles`, `files(in:atRelativePaths:)`, `resumeTarget`, `duplicateSequence`) — don't lean on autosave. Identifier-only fetches (`fetchIdentifiers`) and `model(for:)` don't refault.
-
-## Claude Code configuration
-
-This project uses `~/.claude-ios/` as the Claude Code configuration directory (not the default `~/.claude/`). MCP servers, skills, settings, and memory are all stored there.
-
-## MCP servers
-
-**Xcode MCP** (`xcode`) is available. It provides direct access to the running Xcode instance via `mcpbridge` — use it to build the project, run tests, read/write files through Xcode, search documentation, list navigator issues, and render SwiftUI previews. Prefer Xcode MCP tools over raw `xcodebuild` commands when Xcode is running.
-
-## Skills
-
-Locally installed skills live in `/Users/aytm/.claude-ios/skills/`.
-
-**Loading the relevant skills is mandatory, and it is the first step — before you start reading or changing the code, not after.**
-
-- `skills/swiftui-expert-skill/`
-- `skills/swift-concurrency/`
-- `skills/swift-testing-expert/`
-- `skills/mobile-ios-design/`
-Each skill has a `SKILL.md` with workflow decision trees and a `references/` directory with detailed topic guides. Read the SKILL.md first, then drill into references as needed, or do a search across all of them: `cd ~/.claude-ios/skills && grep -RinE "…" .` (simlinks).
-
-**Consult the skills again whenever an obstacle survives two or three attempts** — the same trigger as the documentation-and-web-search rule above. An unexplained compiler error, a runtime trap, or an API that won't do what it should is a signal to go read or search, inventing a workaround before searching is how a supported, straightforward route gets missed.
+Bundle ids: `com.aytigra.ShuTaPla.debug` (debug, sandboxed), `com.aytigra.ShuTaPla` (release). The thumbnail HEIC cache is `Application Support/<bundle id>/Thumbnails` inside the sandbox container.
 
 ## Testing
 
-**Tests are first-class and lead the work, not trail it.** Write the test before the change it covers, and run it to watch it behave as expected:
+Project instances of the stack's test-crash patterns:
 
-**"Test first" means test the *current* code first — it's a verb, not a file you create.** The point is empirical: before you change anything, you *run* a test and observe how the code behaves as it stands. Writing a `@Test` and not running it is the ritual without the substance. An unrun test proves nothing — it can be green with the bug still present (wrong path exercised, wrong assertion), so it never validated itself as a test. Worse, when the change is driven by a *suspected* bug (a code-review finding, a hunch, a "this looks wrong"), the finding is a **hypothesis**, not a fact — and running the test against the unchanged code is the experiment that confirms or refutes it. If it comes up green on the current code, the bug doesn't reproduce: the finding was a false positive and you must **not** change the code — you'd be mutating correct code and rubber-stamping it with a test that never demonstrated a problem. So: observe the failure *before* writing the fix, always, one change at a time. If you haven't run anything against the unchanged code, you haven't started — and you cannot call a fix done, or even "written, pending a run," on the strength of a test you've never executed.
-- **Fixing a bug:** write a failing test that reproduces it *first*, run it against the unchanged code, and confirm it fails *for the stated reason* (not merely that it's red). Only then fix the code and watch it pass. A green test on the original code means the bug isn't there — refute the finding and leave the code alone. A bug fixed without a reproducing test that was observed to go red-then-green is not done.
-- **Refactoring:** make sure the behavior, the underlying code of it - everything that will be directly or indirectly touched by refactor, is covered by passing tests *before* you start, so the refactor is verified to preserve it. Add the missing coverage first if it isn't there.
-- **New feature:** cover the testable logic as you build it, not as a follow-up. Prefer testing the stateless/pure core (helpers, services with injectable seams) where a view layer makes direct unit testing impractical.
+- **Orphaned context.** `ModelTests.swift` shows the container-holding form. `AppState.init` fetches (`AppStateModel.fetchOrCreate`), so even constructing `AppState` on an orphaned context traps.
+- **Async work outliving the container.** Triggers: `AppState.select(_:)` launches an un-awaited rescan `updateTask`; an engine reaching natural EOF calls `advanceToNext()`, which walks `playlist.playbackSequence`; the slideshow timer. Set `appState.selectedPlaylist = x; appState.recomputeFilteredFiles()` instead of calling `select(x)`, or `await appState.updateTask?.value` before the body ends; always `defer { coordinator.shutdown() }`.
+- **libmpv engine teardown race → `EXC_BAD_ACCESS` in `mpv_wait_event`.** A wakeup-scheduled event drain can land on the serial queue after `mpv_terminate_destroy`; `MPVClient.isTerminated` gates it, and tests still keep to the safe side. Use the window-free `AudioPlaybackEngine` (`vo=null`) for any mpv channel; never `VideoPlaybackEngine` in the test host (it needs a GL surface). Always `defer { shutdown() }`. Back fixtures with empty placeholder files (`Data()`): they fail to load (`END_FILE` reason `error`, not natural EOF), so they never trigger an `advanceToNext()` that touches models after teardown. When a test only needs the coordinator's synchronous bookkeeping, use an image playlist: the image engine has no libmpv.
+- **Same-named model types.** `SchemaIndexMigrationTests` has the raw-SQLite helpers (`indexDDL`, `columns`, `rowCount`).
+- **Closure in a `mutating` extension.** The target enables Approachable Concurrency; `Array.move(fromOffsets:toOffset:)` collects with a `for` loop for this reason.
 
-Treat "where is the test?" as part of the definition of done — don't report a change complete without it.
-
-**Check the issue navigator before reporting done.** A build can succeed while the compiler still flags warnings (deprecations, unused values, concurrency issues) that won't surface unless you look. After the work builds, list navigator issues (`mcp__xcode__XcodeListNavigatorIssues`) and address — or surface to the user — any warnings the change introduced. This is part of the definition of done alongside tests.
-
-**Avoid test traps — they hang the run, not just the test.** A test that hits `EXC_BREAKPOINT` (code=1) or `EXC_BAD_ACCESS` doesn't fail cleanly: it crashes the test host mid-run, so the run never returns a result and the build/test tool (and the agent driving it) stalls. Treat "could this trap?" as a first-class concern when writing tests. The trap classes seen so far, and how to write around each:
-
-1. **Orphaned `ModelContext` → `EXC_BREAKPOINT` on the next `fetch`.** Hold the `ModelContainer` for the whole test body, pulling `container.mainContext` locally — as `ModelTests.swift` does. A helper that builds a container internally and returns only `container.mainContext` lets the container deallocate when the helper returns; the orphaned context traps on its next `fetch` — surfacing at the fetch site, e.g. `AppStateModel.fetchOrCreate` (which `AppState.init` calls, so even constructing `AppState` traps). Plain `init`-and-assert tests trap most reliably; tests with intervening `insert(...)` or `await` may survive by chance because they stretch the autorelease pool, so the failure can look intermittent.
-
-2. **Async work that outlives the in-memory container → `Fatal error: This model instance was destroyed by calling ModelContext.reset`.** A fire-and-forget `Task` that touches SwiftData models keeps running after the test body returns; the container then tears down and the task dereferences a freed (temporary-id) model, trapping mid-run. Triggers: `AppState.select(_:)` launches an un-awaited re-scan `updateTask`; an engine reaching natural EOF calls `advanceToNext()` which walks `playlist.playbackSequence`; the slideshow timer. Write around it — set state directly instead of via the task-launching path (e.g. `appState.selectedPlaylist = x; appState.recomputeFilteredFiles()` rather than `select(x)`), or `await appState.updateTask?.value` before the body ends, and always `defer { coordinator.shutdown() }`.
-
-3. **Real libmpv engine teardown race → `EXC_BAD_ACCESS` in `mpv_wait_event`.** A wakeup-scheduled event drain can land on the serial queue after `mpv_terminate_destroy` (now gated by `MPVClient.isTerminated`). Keep tests on the safe side: use the window-free `AudioPlaybackEngine` (`vo=null`) for any mpv channel — never `VideoPlaybackEngine` in the test host (it needs a GL surface); always `defer { shutdown() }`; and back fixtures with **empty** placeholder files. Empty files fail to load (`END_FILE` reason `error`, not natural EOF), so they never trigger an `advanceToNext()` that would touch models after teardown — that's why `PlaybackCoordinatorTests`/`HotkeyRouterTests` write `Data()` files.
-
-When a routing/logic test only needs the coordinator's synchronous bookkeeping, prefer an **image** playlist (the image engine has no libmpv) over a video/audio one to avoid trap class 3 entirely.
-
-5. **Three or more same-named `@Model` types in one test process → fatal model-cast that hangs the host.** A migration test holding the live model plus two pinned `VersionedSchema` copies that share one entity name (e.g. three `PlaylistFile`) trips SwiftData's entity-name→type registry: a later `context.fetch` resolving a `PersistentIdentifier` traps with `Fatal error: Failed to cast model … to PlaylistFile`, and being fatal it hangs the run. Keep at most **two** same-named types per test (one pinned "from" + the live "to" — the shape of a real single migration stage, which fetches fine), or verify through raw SQLite (`sqlite3_open_v2` + `sqlite_master` / `PRAGMA table_info` / `SELECT COUNT`) so no cast happens — the `SchemaIndexMigrationTests` helpers (`indexDDL`, `columns`, `rowCount`) exist for this.
-
-6. **A `#Predicate` nesting a collection op over a captured array whose body is a to-many subquery → `NSInvalidArgumentException: Unsupported subquery collection expression type` at fetch.** Compiles fine, traps the host at fetch. Refuted form (AND "has all tags"): `names.allSatisfy { n in file.tags.contains { $0.normalizedName == n } }`. Working form — one flat subquery with a count: `file.tags.filter { names.contains($0.normalizedName) }.count == required` (with `required = names.count`). A single subquery is fine (`file.tags.contains { names.contains($0.normalizedName) }`); the trap is wrapping a subquery in an outer `allSatisfy`/`SUBQUERY` over a captured collection.
-
-4. **Closure that captures `inout self` in a `mutating` extension → `EXC_BREAKPOINT` from `dispatch_assert_queue_fail`.** The target builds with `-enable-upcoming-feature NonisolatedNonsendingByDefault`, so a closure passed to `.map`/`.filter`/etc. inside a `mutating` extension method inherits the caller's actor isolation. When the closure runs, `swift_task_isCurrentExecutorWithFlagsImpl` calls `dispatch_assert_queue` against the inherited executor and traps if the current queue doesn't match. Production call sites (e.g. `@MainActor AppState.reorder` → `[Playlist].move(...)`) reach the closure from the main queue and pass the check; a Swift Testing `@Test` on a plain (non-`@MainActor`) suite runs on the cooperative queue and traps. `Array.move(fromOffsets:toOffset:)` in `Extensions/Array+Move.swift` collects with a `for index in source { moved.append(self[index]) }` loop for this reason — don't capture `self` in a closure body inside any `mutating` extension on a value type. If a suite that exercises one of these helpers must keep a closure form, annotate it `@MainActor` so the queue check holds.
-
-**Committed media fixtures live in the `MediaFixture` enum (`ShuTaPlaTests/MediaTestSupport.swift`)**, backed by tiny files in `ShuTaPlaTests/Fixtures/` bundled into the test bundle as resources — each 64×64, ~1s, a few KB, with a silent audio track (so a decode never strains a timeout and the audio-stripping tests have a track to remove). Cases carry the codec: `.h264`/`.h265`/`.mpeg` (AVFoundation-decodable) and `.vp8`/`.vp9` webm (libmpv-only — the `MPVThumbnailer` fallback path); `.hdr` is a 10-bit VP9 tagged BT.2020 PQ (`video-params/gamma == "pq"`, the libmpv HDR path). Resolve one with `try fixture.url`, a throwing `Bundle(for:)` lookup; the enum is `CaseIterable`, so `@Test(arguments: MediaFixture.allCases)` sweeps every codec. `durationlessFixtureURL()` returns `noduration.h264` — a raw H.264 elementary stream libmpv loads but can never assign a duration — kept out of `MediaFixture` so the all-cases duration/HDR guards don't run against a duration-less file. These exercise the stateless extraction helpers (`ThumbnailService.renderThumbnail`, `MPVThumbnailer.frame`/`.duration`), which create and synchronously tear down their own short-lived mpv handles — no wakeup-scheduled drain, so trap class 3 doesn't apply.
+**Committed media fixtures live in the `MediaFixture` enum (`ShuTaPlaTests/MediaTestSupport.swift`)**, backed by tiny files in `ShuTaPlaTests/Fixtures/` bundled into the test bundle as resources — each 64×64, ~1s, a few KB, with a silent audio track (so a decode never strains a timeout and the audio-stripping tests have a track to remove). Cases carry the codec: `.h264`/`.h265`/`.mpeg` (AVFoundation-decodable) and `.vp8`/`.vp9` webm (libmpv-only — the `MPVThumbnailer` fallback path); `.hdr` is a 10-bit VP9 tagged BT.2020 PQ (`video-params/gamma == "pq"`, the libmpv HDR path). Resolve one with `try fixture.url`, a throwing `Bundle(for:)` lookup; the enum is `CaseIterable`, so `@Test(arguments: MediaFixture.allCases)` sweeps every codec. `durationlessFixtureURL()` returns `noduration.h264` — a raw H.264 elementary stream libmpv loads but can never assign a duration — kept out of `MediaFixture` so the all-cases duration/HDR guards don't run against a duration-less file. These exercise the stateless extraction helpers (`ThumbnailService.renderThumbnail`, `MPVThumbnailer.frame`/`.duration`), which create and synchronously tear down their own short-lived mpv handles — no wakeup-scheduled drain, so the libmpv teardown race doesn't apply.
 
 ## Xcode project structure
 

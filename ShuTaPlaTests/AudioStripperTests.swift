@@ -31,8 +31,8 @@ import AVFoundation
         let output = Self.tempOutput(extension: input.pathExtension)
         defer { try? FileManager.default.removeItem(at: output) }
 
-        let ok = await AudioStripper.stripAudio(at: input, to: output)
-        #expect(ok, "\(fixture): remux reported failure")
+        let failure = await AudioStripper.stripAudio(at: input, to: output)
+        #expect(failure == nil, "\(fixture): remux reported failure")
         #expect(FileManager.default.fileExists(atPath: output.path), "\(fixture): no output written")
         let size = try output.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         #expect(size > 0, "\(fixture): output is empty")
@@ -45,7 +45,7 @@ import AVFoundation
         let output = Self.tempOutput(extension: "mp4")
         defer { try? FileManager.default.removeItem(at: output) }
 
-        #expect(await AudioStripper.stripAudio(at: input, to: output))
+        #expect(await AudioStripper.stripAudio(at: input, to: output) == nil)
 
         let asset = AVURLAsset(url: output)
         let video = try await asset.loadTracks(withMediaType: .video)
@@ -55,14 +55,14 @@ import AVFoundation
     }
 
     // A remux that fails after opening the output (a video stream into a WAV container the
-    // muxer rejects) must not leave a truncated file behind.
+    // muxer rejects) reports the failed step and must not leave a truncated file behind.
     @Test func failedRemuxLeavesNoOutputFile() async throws {
         let input = try MediaFixture.h264.url
         let output = Self.tempOutput(extension: "wav")
         defer { try? FileManager.default.removeItem(at: output) }
 
-        let ok = await AudioStripper.stripAudio(at: input, to: output)
-        #expect(!ok, "wav muxer unexpectedly accepted a video stream")
+        let failure = await AudioStripper.stripAudio(at: input, to: output)
+        #expect(failure?.contains(" failed: ") == true, "wav muxer unexpectedly accepted a video stream")
         #expect(!FileManager.default.fileExists(atPath: output.path), "partial output left behind")
     }
 }

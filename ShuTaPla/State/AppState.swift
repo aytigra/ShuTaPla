@@ -87,18 +87,15 @@ final class AppState {
     var lastManagedVideoPlaylist: Playlist?
     var lastManagedImagePlaylist: Playlist?
 
-    /// In-flight background re-scans, keyed by playlist id, started by `rescan(_:)`. Keyed
-    /// per playlist so re-reading one playlist supersedes only its own stale scan: selecting
-    /// an audio playlist while a Manager visual re-scan is in flight leaves the visual scan
-    /// running, rather than dropping it on the floor.
-    var updateTasks: [UUID: Task<Void, Never>] = [:]
+    /// The per-playlist exclusion between file ops, background tasks and a playlist delete.
+    let playlistWork = PlaylistWorkGate()
 
-    /// The most recently started re-scan, so a delete can cancel it and tests can await it
-    /// to completion. Points at whichever `rescan(_:)` ran last.
+    /// The most recently started background task of `trackBackgroundTask`, so tests can await it
+    /// to completion.
     var updateTask: Task<Void, Never>?
 
-    /// In-flight confirmation operations (delete / strip-audio / tag removal) launched
-    /// from the modal confirm handlers, keyed by a token so each retains itself until it
+    /// In-flight confirmation operations (delete / strip-audio / tag removal / playlist delete /
+    /// move) launched from the modal confirm handlers and the folder chooser, keyed by a token so each retains itself until it
     /// finishes (and self-prunes). Retaining them keeps the SwiftData work from running as
     /// an un-owned fire-and-forget Task; `cancelConfirmationTasks()` tears them down.
     var confirmationTasks: [UUID: Task<Void, Never>] = [:]
@@ -142,58 +139,106 @@ final class AppState {
     /// real change and wakes nothing in between.
     private(set) var playlistsVersion = 0
 
-    /// A user-facing message when persisting a mutation fails. Set by `persistAndRefresh` when the
-    /// save throws; the failed edit is rolled back so it can't be flushed by a later save, and the
-    /// store-side lists re-derive from the unchanged saved store. Presented by the app-root alert.
-    var saveError: String?
+    /// The app-root modals, shown one at a time from the head (`WindowModals`). Living on
+    /// `AppState` rather than in the raising view is what lets the `HotkeyRouter` see them, and keeps
+    /// one on screen when the surface that raised it goes away: a confirmation's file op is async,
+    /// and the Manager panel or the player overlay that raised it can be gone by the time it fails.
+    private(set) var windowModals = WindowModals()
 
-    /// The one modal confirmation currently pending, if any (`nil` = none). Its case names the
-    /// destructive family and carries its target; at most one can be pending, enforced by the type.
-    /// While non-nil the matching `.alert` host owns the keyboard: the `HotkeyRouter` passes
-    /// `[enter]`/`[esc]` to its default/cancel buttons and swallows every other key.
-    var pendingConfirmation: PendingConfirmation?
+    /// Applies `change` to the modals, then shows the head when the window has no sheet.
+    private func updateModals(_ change: (inout WindowModals) -> Void) {
+        change(&windowModals)
+        showHeadWithoutSheet()
+    }
 
-    /// A user-facing report that an operation failed or was refused. One channel for all of them,
-    /// presented by the app-root `RootView` alert, which outlives the surface the work was started
-    /// from: a destructive confirmation's file operation is async, and the Manager panel or the
-    /// player overlay that raised it can be gone by the time it fails. Its title carries each site's
-    /// wording. Living on `AppState` rather than in the raising view is what lets the `HotkeyRouter`
-    /// see it — a view-local alert leaves `[esc]` swallowed by the router and bare keys reaching
-    /// playback behind the modal.
-    var errorNotice: ErrorNotice?
+    /// Writes only on a change: every write re-renders the app root.
+    private func showHeadWithoutSheet() {
+        if !windowHasSheet, windowModals.canShowHead { windowModals.showHead() }
+    }
 
-    /// Raises the folder picker for adding a playlist. The Welcome screen and the sidebar's
-    /// plus button both set this; the shared `AddPlaylistFlow` modifier presents the picker.
-    var isImportingPlaylist = false
+    /// Whether the window has a sheet: the folder chooser, an alert, one still closing. Set by the
+    /// `RootView` window bridge. SwiftUI drops a modal raised while a sheet is on the window and
+    /// does not show it when that sheet ends, so the head of `windowModals` shows once the last
+    /// sheet has ended.
+    @ObservationIgnored var windowHasSheet = false {
+        didSet { showHeadWithoutSheet() }
+    }
+
+    /// The one modal confirmation pending, if any (`nil` = none). Its case names the destructive
+    /// family and carries its target. While it shows, the `HotkeyRouter` passes `[enter]`/`[esc]`
+    /// to its default/cancel buttons and swallows every other key.
+    var pendingConfirmation: PendingConfirmation? {
+        get { windowModals.queue.lazy.compactMap(\.confirmation).first }
+        set { updateModals { $0.set(.confirmation, to: newValue.map(WindowModal.confirmation)) } }
+    }
+
+    /// The first queued report that an operation failed or was refused; its title carries each
+    /// site's wording.
+    var errorNotice: ErrorNotice? { windowModals.queue.lazy.compactMap(\.report).first }
+
+    /// Queues `notice` behind the modals already raised. A report equal to a queued one is skipped:
+    /// a batch that saves per file reports a failing store once per file.
+    func report(_ notice: ErrorNotice) {
+        guard !windowModals.queue.contains(where: { $0.report == notice }) else { return }
+        updateModals { $0.raise(.report(notice)) }
+    }
+
+    /// Removes the report on screen.
+    func dismissErrorNotice() {
+        updateModals { $0.removeShown(.report) }
+    }
+
+    /// The folder chooser's purpose, queued or shown (`nil` = none). Setting it raises the chooser;
+    /// the shared `FolderPickFlow` modifier presents it. The panel runs out of process and owns its
+    /// keys: the router passes every bare key through while it shows (`WindowModal.Kind.ownsKeys`).
+    var folderPick: FolderPick? {
+        get { windowModals.queue.lazy.compactMap(\.folderPick).first }
+        set { updateModals { $0.set(.folderPick, to: newValue.map(WindowModal.folderPick)) } }
+    }
+
+    /// The folder the last move went to this session — where the next move's chooser starts.
+    var lastMoveDestination: URL?
 
     /// A scanned Mixed folder awaiting the user's media-type choice. While non-nil the add
-    /// flow shows the choice dialog, which owns the keyboard: the `HotkeyRouter` registers it
-    /// as a blocking modal so bare keys don't leak to playback behind it.
-    var pendingTypeChoice: PendingPlaylist?
-
-    /// A user-facing message when adding a playlist fails (or the folder has no media),
-    /// surfaced by the add flow's alert and registered with the `HotkeyRouter` as blocking.
-    var addPlaylistError: String?
+    /// flow's choice dialog owns the keyboard.
+    var pendingTypeChoice: PendingPlaylist? {
+        get { windowModals.queue.lazy.compactMap(\.typeChoice).first }
+        set { updateModals { $0.set(.typeChoice, to: newValue.map(WindowModal.typeChoice)) } }
+    }
 
     /// True while a picked folder is being scanned into a playlist, so the add buttons can
     /// disable and show a spinner.
     var isAddingPlaylist = false
 
-    /// Files whose audio is being removed, so their list/gallery rows can show a
-    /// spinner while the remux runs.
-    var strippingFileIDs: Set<UUID> = []
+    /// Files under disk work (rename, tag edit, trash, move, audio removal), so their list/gallery rows can show a
+    /// spinner while it runs. A quit waits until it is empty (`hasDiskWork`). Each visible row reads
+    /// the whole set, as it reads `managerSelection`, so every write re-renders the visible rows: an op
+    /// marks and unmarks its claimed files in one write each, and only an early release writes per
+    /// file. The marks stay keyed by id: an op ends them after its
+    /// re-scan await, when a claimed row can be pruned and must not be read (`withFileOp`).
+    var busyFileIDs: Set<UUID> = [] {
+        didSet { quitAfterWait() }
+    }
+
+    /// True while a quit waits for the disk work (`shouldTerminate`). While true the app-root
+    /// alert lists it.
+    var isWaitingToQuit: Bool {
+        get { windowModals.queue.contains { $0.kind == .quitWait } }
+        set { updateModals { $0.set(.quitWait, to: newValue ? .quitWait : nil) } }
+    }
+
+    /// Answers a held quit: `true` quits, `false` keeps the app open. A seam for tests, which
+    /// record the reply in place of sending it.
+    @ObservationIgnored var replyToTerminate: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
 
     /// Folders currently being scanned into new playlists, shown in the sidebar as
     /// transient spinner rows so a large import gives immediate feedback.
     var importingPlaylists: [ImportingPlaylist] = []
 
-    /// IDs of existing playlists with a long-running operation in flight (e.g. a
-    /// background re-scan), so their sidebar rows can show a spinner.
-    var busyPlaylistIDs: Set<UUID> = []
-
-    /// IDs of playlists currently being deleted (their files are being cleaned out
-    /// in batches), so their sidebar rows can show a destructive red spinner.
-    var deletingPlaylistIDs: Set<UUID> = []
+    /// Re-scans in flight per playlist, so its sidebar row can show a spinner. A count: a superseded
+    /// re-scan runs beside the one that replaced it (`trackBackgroundTask`), and the row stays busy
+    /// until the last ends.
+    var rescanCounts: [UUID: Int] = [:]
 
     /// Live column count of the Manager gallery grid, reported by `FileCollectionView`
     /// as it lays out, so keyboard navigation can step in 2D. The list is one column.
@@ -213,7 +258,7 @@ final class AppState {
         self.appStateModel = AppStateModel.fetchOrCreate(in: modelContext)
         let settings = GlobalSettings.fetchOrCreate(in: modelContext)
         self.globalSettings = settings
-        let folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService, prompt: FolderReaccessPanel())
+        let folderAccess = ScopedFolderAccess(bookmarkService: bookmarkService)
         self.folderAccess = folderAccess
         self.cloudFileService = cloudFileService
         let sequences = PlaybackSequences(modelContext: modelContext)
@@ -236,6 +281,16 @@ final class AppState {
         let existing = (try? modelContext.fetch(FetchDescriptor<Playlist>())) ?? []
         self.mode = existing.isEmpty ? .welcome : .manager
 
+        // Saved at once, so the background re-scan's fetch sees the new bookmark and path. The save runs in
+        // the middle of the opener's caller, so a failure keeps the context's pending edits (no
+        // rollback): the caller's in-memory state already reflects them, and the next save retries.
+        folderAccess.onBookmarkRefresh = { [weak self] in
+            guard let self else { return }
+            do { try self.persist() } catch { report(.saveFailed(error.localizedDescription)) }
+        }
+
+        playlistWork.onDeleteEnded = { [weak self] in self?.quitAfterWait() }
+
         resolveActivePlaylists()
         reconstructPlayback()
     }
@@ -253,20 +308,19 @@ final class AppState {
     /// the pending edit so a later successful save can't silently flush it — and the error is
     /// surfaced. The version still bumps so the store-side surfaces re-derive from the saved store.
     func persistAndRefresh() {
+        persistChanges()
+        sequences.bump()
+    }
+
+    /// The save half of `persistAndRefresh`, for a batch that must save each step and refreshes the
+    /// store-side lists once at its end.
+    func persistChanges() {
         do {
             try persist()
         } catch {
             modelContext.rollback()
-            saveError = Self.saveErrorText(error.localizedDescription)
+            report(.saveFailed(error.localizedDescription))
         }
-        sequences.bump()
-    }
-
-    /// The user-facing message the app-root alert presents for a save failure, wrapping the
-    /// underlying error's description. Shared by the main-actor save path (`persistAndRefresh`)
-    /// and the background reconcile path (`update`), which hands its failure back as a `String`.
-    static func saveErrorText(_ detail: String) -> String {
-        "Couldn’t save your changes: \(detail)"
     }
 
     /// Bumps `playlistsVersion`. Called by the mutations that change which playlists exist, their

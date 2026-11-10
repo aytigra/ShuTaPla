@@ -44,10 +44,8 @@ struct VisualOverlay: View {
             scrollTrigger: appState.scrollSelectionToken,
             tagAutoFocus: overlays.visualOverlayFocusesTag,
             onSelectPlaylist: { appState.playOnVisualChannel($0) },
-            onAddPlaylist: { appState.isImportingPlaylist = true },
-            onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeVisualOverlay() },
-            onDeleteFile: { appState.requestPlayerDelete($0) },
-            onRemoveAudio: { appState.requestAudioStrip([$0]) }
+            onAddPlaylist: { appState.folderPick = .addPlaylist },
+            onPlayFile: { coordinator.playNow($0, startingAt: $1); overlays.closeVisualOverlay() }
         )
     }
 

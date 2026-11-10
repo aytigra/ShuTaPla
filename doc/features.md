@@ -44,7 +44,8 @@ Capitalized terms below are used precisely throughout this document.
 
 - macOS only.
 - Single window. All playlists, overlays, and players live inside it so the user can switch seamlessly between playlists of the same or different media type without losing state.
-- Fullscreen presentation for video and image playback.
+- Fullscreen presentation for video and image playback. Entering Player mode takes the window fullscreen, and leaving it puts the window back as it was. A fullscreen the user enters on their own stays, in Player mode or out of it.
+- Closing the window keeps the app running. Reopening it from the Dock brings the window back as it was, fullscreen included.
 
 ## Spec map
 

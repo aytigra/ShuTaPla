@@ -194,4 +194,27 @@ struct SequenceStoreTests {
         try context.save()
         #expect(context.sequence(of: playlist).count == before + 1)
     }
+
+    /// An id batch larger than SQLite's default bound-variable limit (32 766) resolves every row.
+    /// On disk, as the app's store is.
+    @Test func idBatchAboveTheVariableLimitResolves() throws {
+        let count = 40_000
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let schema = appTestSchema
+        let config = ModelConfiguration(schema: schema, url: folder.appending(path: "store.sqlite"))
+        let container = try ModelContainer(for: schema, configurations: [config])
+        let context = container.mainContext
+        var ids: [UUID] = []
+        for i in 0..<count {
+            let file = PlaylistFile(relativePath: "f\(i).jpg", fileName: "f\(i).jpg", sortOrder: i)
+            context.insert(file)
+            ids.append(file.id)
+        }
+        try context.save()
+
+        #expect(context.files(withIDs: ids).count == count)
+        #expect(context.fileNames(withIDs: ids, limit: 3).count == count)
+    }
 }

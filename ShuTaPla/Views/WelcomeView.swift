@@ -3,7 +3,7 @@
 //  ShuTaPla
 //
 //  First-run screen shown when no playlists exist. A prominent "Add Playlist"
-//  button raises the shared `AddPlaylistFlow`: a folder picker whose chosen folder
+//  button raises the shared folder chooser (`FolderPickFlow`) whose chosen folder
 //  is scanned into a playlist, prompting for a media type when the folder is Mixed.
 //
 
@@ -28,7 +28,7 @@ struct WelcomeView: View {
             }
 
             Button {
-                appState.isImportingPlaylist = true
+                appState.folderPick = .addPlaylist
             } label: {
                 Label("Add Playlist", systemImage: "plus")
                     .font(.title3.weight(.medium))

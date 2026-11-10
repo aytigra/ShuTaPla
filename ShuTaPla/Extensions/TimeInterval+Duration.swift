@@ -11,7 +11,7 @@ import Foundation
 extension TimeInterval {
     /// A compact running time: `M:SS`, widening to `H:MM:SS` once the duration
     /// reaches an hour. Negative or non-finite values render as `0:00`.
-    var formattedDuration: String {
+    nonisolated var formattedDuration: String {
         guard isFinite, self >= 0 else { return "0:00" }
         let total = Int(self)
         let hours = total / 3600

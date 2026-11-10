@@ -20,9 +20,8 @@ struct GalleryCell: View {
     let isSelected: Bool
     let isCurrent: Bool
     let isRenaming: Bool
-    let isStripping: Bool
-    @Binding var draftName: String
-    let onCommitRename: () -> Void
+    let isBusy: Bool
+    let onCommitRename: (String) -> Void
     let onCancelRename: () -> Void
 
     @Environment(AppState.self) private var appState
@@ -76,9 +75,9 @@ struct GalleryCell: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(borderColor, lineWidth: 3)
             }
-            // A dimming scrim with a spinner while this cell's audio is being removed.
+            // A dimming scrim with a spinner while this cell's file is under disk work.
             .overlay {
-                if isStripping {
+                if isBusy {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(.black.opacity(0.4))
                         .overlay { ProgressView().controlSize(.small) }
@@ -89,7 +88,7 @@ struct GalleryCell: View {
     @ViewBuilder
     private var caption: some View {
         if isRenaming {
-            RenameFileField(text: $draftName, onCommit: onCommitRename, onCancel: onCancelRename)
+            RenameFileField(name: file.fileName, onCommit: onCommitRename, onCancel: onCancelRename)
         } else {
             Text(file.fileName)
                 .font(.caption)

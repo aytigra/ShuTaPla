@@ -18,8 +18,8 @@ struct FileGalleryCell: View {
     let playlist: Playlist
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
-    @Binding var draftName: String
-    let onCommitRename: (PlaylistFile) -> Void
+    /// Renames a file to the field's text: a row passes its own file's id.
+    let onCommitRename: (UUID, String) -> Void
     let onCancelRename: () -> Void
     let actions: FileActions
 
@@ -27,6 +27,8 @@ struct FileGalleryCell: View {
 
     var body: some View {
         if let file = appState.file(for: id) {
+            // Read while the cell renders: the field can commit after a re-scan has pruned the row.
+            let fileID = file.id
             GalleryCell(
                 file: file,
                 playlist: playlist,
@@ -34,12 +36,11 @@ struct FileGalleryCell: View {
                 isSelected: appState.managerSelection.contains(file.id),
                 isCurrent: file.id == playlist.currentFileID,
                 isRenaming: renamingID == file.id,
-                isStripping: appState.strippingFileIDs.contains(file.id),
-                draftName: $draftName,
-                onCommitRename: { onCommitRename(file) },
+                isBusy: appState.isBusy(file),
+                onCommitRename: { onCommitRename(fileID, $0) },
                 onCancelRename: onCancelRename
             )
-            .fileActions(actions, for: file, in: playlist)
+            .fileActions(actions, for: file)
         }
     }
 }

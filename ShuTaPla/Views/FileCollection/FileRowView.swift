@@ -15,9 +15,8 @@ struct FileRowView: View {
     let isSelected: Bool
     let isCurrent: Bool
     let isRenaming: Bool
-    let isStripping: Bool
-    @Binding var draftName: String
-    let onCommitRename: () -> Void
+    let isBusy: Bool
+    let onCommitRename: (String) -> Void
     let onCancelRename: () -> Void
 
     @Environment(MediaMetadataService.self) private var metadataService
@@ -29,7 +28,7 @@ struct FileRowView: View {
     var body: some View {
         Group {
             if isRenaming {
-                RenameFileField(text: $draftName, onCommit: onCommitRename, onCancel: onCancelRename)
+                RenameFileField(name: file.fileName, onCommit: onCommitRename, onCancel: onCancelRename)
             } else {
                 HStack(spacing: 12) {
                     fileName
@@ -51,10 +50,10 @@ struct FileRowView: View {
         .overlay {
             if isCurrent { Rectangle().strokeBorder(Color.playbackCursor, lineWidth: 2) }
         }
-        // Dim the row behind a spinner while its audio is being removed.
-        .opacity(isStripping ? 0.5 : 1)
+        // Dim the row behind a spinner while its file is under disk work.
+        .opacity(isBusy ? 0.5 : 1)
         .overlay(alignment: .trailing) {
-            if isStripping {
+            if isBusy {
                 ProgressView().controlSize(.small).padding(.trailing, 10)
             }
         }

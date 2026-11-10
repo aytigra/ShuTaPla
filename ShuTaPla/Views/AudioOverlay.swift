@@ -36,10 +36,8 @@ struct AudioOverlay: View {
             scrollTrigger: appState.audioScrollToken,
             tagAutoFocus: false,
             onSelectPlaylist: { appState.playOnAudioChannel($0) },
-            onAddPlaylist: { appState.isImportingPlaylist = true },
-            onPlayFile: { coordinator.playNow($0, startingAt: $1) },
-            onDeleteFile: { appState.requestAudioDelete($0) },
-            onRemoveAudio: { _ in }
+            onAddPlaylist: { appState.folderPick = .addPlaylist },
+            onPlayFile: { coordinator.playNow($0, startingAt: $1) }
         )
     }
 
@@ -75,7 +73,7 @@ struct AudioOverlay: View {
                 HStack(spacing: 12) {
                     AudioTransport(playlist: audio)
                     TimelineScrubber(
-                        position: coordinator.audioCurrentTime,
+                        position: { coordinator.audioCurrentTime },
                         duration: coordinator.audioDuration,
                         width: 160
                     ) { coordinator.seekAudio(to: $0) }
@@ -91,20 +89,25 @@ struct AudioOverlay: View {
     }
 
     private var trackInfo: some View {
-        HStack(spacing: 10) {
+        let file = appState.currentAudioFile
+        return HStack(spacing: 10) {
             Image(systemName: "music.note")
                 .font(.title3)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(appState.currentAudioFile?.fileName ?? "No track playing")
+                Text(file?.fileName ?? "No track playing")
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let name = activePlaylist?.name {
-                    Text(name)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                if let playlist = activePlaylist {
+                    if let file {
+                        FolderPathText(file: file, in: playlist)
+                    } else {
+                        Text(playlist.name)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }

@@ -17,7 +17,7 @@ final class Playlist {
     /// Security-scoped bookmark — the persistent access grant to the folder.
     var folderBookmark: Data = Data()
 
-    /// Display-only path, not used for access.
+    /// Display-only path, not used for access. Each folder open writes the folder's current path.
     var folderPath: String = ""
 
     var mediaType: MediaType = MediaType.video

@@ -11,7 +11,7 @@ extension CGSize {
     /// Pixel dimensions as `"1920×1080"` — width and height joined by a true multiplication
     /// sign (`×`, not the letter `x`). Fractional parts are truncated; media pixel sizes are
     /// whole numbers.
-    var dimensionsText: String {
+    nonisolated var dimensionsText: String {
         "\(Int(width))×\(Int(height))"
     }
 }

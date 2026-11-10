@@ -37,10 +37,6 @@ struct LibraryContext {
     let onAddPlaylist: () -> Void
     /// Double-click a file — play it on this channel.
     let onPlayFile: (Playlist, PlaylistFile) -> Void
-    /// Delete a file (move to Trash) from its row menu.
-    let onDeleteFile: (PlaylistFile) -> Void
-    /// Strip the audio track from a file; a no-op on channels where it doesn't apply.
-    let onRemoveAudio: (PlaylistFile) -> Void
 }
 
 struct LibrarySurface: View {
@@ -49,7 +45,6 @@ struct LibrarySurface: View {
     @Environment(AppState.self) private var appState
 
     @State private var fileRenamingID: UUID?
-    @State private var fileDraftName = ""
     // A switch/re-center scroll for the file list, applied by `PagedList`. Set when the channel
     // asks to re-center (a playlist switch bumps `scrollTrigger`).
     @State private var fileScrollCommand: ScrollCommand?
@@ -70,11 +65,10 @@ struct LibrarySurface: View {
             tagColumn.frame(width: 300)
         }
         // Switching playlists swaps the file list in place without remounting the surface, so an
-        // abandoned rename draft for the old playlist would otherwise survive and re-activate when
-        // that file scrolls back into view. Clear it when the active playlist changes.
+        // open rename for the old playlist would otherwise survive and re-activate when that file
+        // scrolls back into view. Clear it when the active playlist changes.
         .onChange(of: context.activePlaylist?.id) { _, _ in
             fileRenamingID = nil
-            fileDraftName = ""
         }
         // Hold one scoped-access session for the active playlist's folder so the list rows' metadata
         // reads append to a pre-resolved URL instead of resolving the bookmark per file.
@@ -126,6 +120,7 @@ struct LibrarySurface: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(appState.playlistWork.isDeleting(playlist.id))
         .listRowBackground(context.activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
     }
 
@@ -165,18 +160,18 @@ struct LibrarySurface: View {
             targetIndex: fileTargetIndex,
             command: fileScrollCommand,
             renamingID: fileRenamingID,
-            draftName: $fileDraftName,
-            onCommitRename: { commitFileRename($0) },
+            onCommitRename: commitFileRename(of:to:),
             onCancelRename: { fileRenamingID = nil },
             actions: FileActions(
                 onTap: { file in
                     guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { return }
                     context.onPlayFile(playlist, file)
                 },
-                onRename: { fileDraftName = $0.fileName; fileRenamingID = $0.id },
-                onRemoveAudio: { context.onRemoveAudio($0) },
+                onRename: { fileRenamingID = $0.id },
+                onMove: { appState.requestMove([$0]) },
+                onRemoveAudio: { appState.requestAudioStrip([$0]) },
                 onDownload: { appState.downloadFiles([$0]) },
-                onDelete: { context.onDeleteFile($0) }
+                onDelete: { appState.requestDelete([$0]) }
             )
         )
         .onChange(of: context.scrollTrigger) { _, trigger in
@@ -185,10 +180,11 @@ struct LibrarySurface: View {
         }
     }
 
-    private func commitFileRename(_ file: PlaylistFile) {
-        let name = fileDraftName
-        fileRenamingID = nil
-        Task { await appState.renameFileReportingFailure(file, to: name) }
+    /// A field also commits when its row leaves the list (a rename started on another file, a
+    /// prune), so it closes the rename only while it is still the open one.
+    private func commitFileRename(of id: UUID, to name: String) {
+        if fileRenamingID == id { fileRenamingID = nil }
+        appState.commitRename(of: id, to: name)
     }
 
     // MARK: - Tag column
@@ -197,12 +193,15 @@ struct LibrarySurface: View {
     private var tagColumn: some View {
         if let playlist = context.activePlaylist, let current = context.currentFile {
             VStack(alignment: .leading, spacing: 0) {
-                Text(current.fileName)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(current.fileName)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    FolderPathText(file: current, in: playlist)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
                 Divider().padding(.top, 8)
                 TagEditorView(playlist: playlist, files: [current], autoFocus: context.tagAutoFocus)
                 Spacer(minLength: 0)

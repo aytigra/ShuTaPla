@@ -47,8 +47,7 @@ struct PlaylistCenterView: View {
             // scope changes between a gallery and a list playlist.
             FileCollectionView(
                 playlist: playlist,
-                layout: playlist.mediaType != .audio && playlist.preferences.viewMode == .gallery ? .gallery : .list,
-                confirmDelete: { appState.requestManagerDelete($0) }
+                layout: playlist.mediaType != .audio && playlist.preferences.viewMode == .gallery ? .gallery : .list
             )
         }
     }

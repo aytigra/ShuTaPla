@@ -3,10 +3,9 @@
 //  ShuTaPla
 //
 //  Top-level view that switches the window between Welcome, Manager, and Player
-//  based on `AppState.mode`. It also mounts the audio overlay layer (compact and
-//  extended) above whichever mode is showing, since the audio channel is independent
-//  and coexists with Manager and Player alike, and owns the single shared
-//  add-playlist flow that every entry point triggers.
+//  based on `AppState.mode`. In Player mode it also mounts the audio overlay layer
+//  (compact and extended) above the player. It owns the single shared folder chooser
+//  and add-playlist flow that every entry point triggers.
 //
 
 import SwiftUI
@@ -48,16 +47,12 @@ struct RootView: View {
             .environment(appState.preview)
         }
         .environment(overlayManager)
-        // Every destructive confirmation, from one host: the enum allows only one pending at a
-        // time, so one alert presents them all, worded by the enum itself. Hosting them here rather
-        // than at each raising surface is what lets `HotkeyRouter` hold the keyboard for them — and
-        // keeps a confirmation on screen when the panel that raised it goes away under it.
+        // Every destructive confirmation, from one host: one is pending at a time, so one alert
+        // presents them all, worded by the enum itself. Each app-root modal shows when it is the
+        // head of `AppState.windowModals`.
         .alert(
             appState.pendingConfirmation?.title ?? "",
-            isPresented: Binding(
-                get: { appState.pendingConfirmation != nil },
-                set: { if !$0 { appState.cancelConfirmation() } }
-            ),
+            isPresented: appState.isPresented(.confirmation) { appState.cancelConfirmation() },
             presenting: appState.pendingConfirmation
         ) { pending in
             Button(pending.confirmLabel, role: .destructive) { appState.confirmConfirmation() }
@@ -67,36 +62,43 @@ struct RootView: View {
         } message: { pending in
             Text(pending.message)
         }
-        // A persist failure is surfaced app-wide: any mutation surface could have raised it, and
-        // `persistAndRefresh` has already rolled the context back to keep the model consistent.
-        .alert(
-            "Couldn’t save your changes",
-            isPresented: Binding(
-                get: { appState.saveError != nil },
-                set: { if !$0 { appState.saveError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { appState.saveError = nil }
-        } message: {
-            Text(appState.saveError ?? "")
-        }
-        // An operation failed or was refused, wherever it was raised from. Presented app-wide from
-        // one host so the audio overlay (which co-mounts over the Manager panel) can't double-present
-        // it, and so a surface that goes away mid-operation still gets its report shown; the carried
-        // title names the site.
+        // An operation failed or was refused, wherever it was raised from. Presented from one host
+        // so the audio overlay (which co-mounts over the player) can't double-present it; the
+        // carried title names the site.
         .alert(
             appState.errorNotice?.title ?? "",
-            isPresented: Binding(
-                get: { appState.errorNotice != nil },
-                set: { if !$0 { appState.errorNotice = nil } }
-            )
+            isPresented: appState.isPresented(.report) { appState.dismissErrorNotice() }
         ) {
-            Button("OK", role: .cancel) { appState.errorNotice = nil }
+            // The binding is the one dismiss path: an action here would remove two reports.
+            Button("OK", role: .cancel) {}
         } message: {
             Text(appState.errorNotice?.message ?? "")
         }
+        // A quit during disk work: the list shrinks as each file is done, and the app quits by
+        // itself when it is empty (`AppState.shouldTerminate`).
+        .alert(
+            "Waiting to Quit",
+            isPresented: appState.isPresented(.quitWait) { appState.cancelQuit() }
+        ) {
+            Button("Cancel Quitting", role: .cancel) {}
+                .keyboardShortcut(.cancelAction)
+        } message: {
+            // The message runs in this body: the list (a store fetch) is read only while a quit waits.
+            Text(appState.isWaitingToQuit
+                 ? "\(AppConstants.appName) quits when this work ends:\n\(appState.quitWaitItems.joined(separator: "\n"))"
+                 : "")
+        }
+        .folderPickFlow()
         .addPlaylistFlow()
-        .background(WindowCloseBridge { appState.windowWasClosed() })
+        .background(WindowNotificationBridge([NSWindow.willCloseNotification]) { _, _ in
+            appState.windowWasClosed()
+        })
+        .background(WindowNotificationBridge(
+            [NSWindow.willBeginSheetNotification, NSWindow.didEndSheetNotification]
+        ) { name, window in
+            // A sheet queued behind the one that ended is still attached.
+            appState.windowHasSheet = name == NSWindow.willBeginSheetNotification || window.attachedSheet != nil
+        })
         // Player mode claims the window's fullscreen state for as long as it runs, and the mode
         // drives that directly: the window is permanent, so nothing about it can be tied to how long
         // a particular view is on screen. Outside the claim the window is the user's.

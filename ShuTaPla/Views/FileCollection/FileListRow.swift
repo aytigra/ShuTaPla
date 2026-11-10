@@ -30,8 +30,8 @@ struct FileListRow: View {
     let role: FileRowRole
     /// The id of the row currently being renamed on this surface, if any.
     let renamingID: UUID?
-    @Binding var draftName: String
-    let onCommitRename: (PlaylistFile) -> Void
+    /// Renames a file to the field's text: a row passes its own file's id.
+    let onCommitRename: (UUID, String) -> Void
     let onCancelRename: () -> Void
     let actions: FileActions
 
@@ -40,6 +40,8 @@ struct FileListRow: View {
     var body: some View {
         if let file = appState.file(for: id) {
             let cues = cues(for: file)
+            // Read while the row renders: the field can commit after a re-scan has pruned the row.
+            let fileID = file.id
             VStack(spacing: 0) {
                 FileRowView(
                     file: file,
@@ -47,14 +49,13 @@ struct FileListRow: View {
                     isSelected: cues.isSelected,
                     isCurrent: cues.isCurrent,
                     isRenaming: renamingID == file.id,
-                    isStripping: appState.strippingFileIDs.contains(file.id),
-                    draftName: $draftName,
-                    onCommitRename: { onCommitRename(file) },
+                    isBusy: appState.isBusy(file),
+                    onCommitRename: { onCommitRename(fileID, $0) },
                     onCancelRename: onCancelRename
                 )
                 Divider()
             }
-            .fileActions(actions, for: file, in: playlist)
+            .fileActions(actions, for: file)
         }
     }
 

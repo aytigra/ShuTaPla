@@ -139,22 +139,22 @@ struct TagParserTests {
         #expect(TagParser.removeTag("beach", from: "[beach]") == "Untitled")
     }
 
-    // MARK: - Rename
+    // MARK: - Replace
 
-    @Test func renameTagReplaces() {
-        #expect(TagParser.renameTag(from: "beach", to: "shore", in: "sunset [beach sunny].jpg") == "sunset [shore sunny].jpg")
+    @Test func replaceTagReplacesIt() {
+        #expect(TagParser.replaceTag("beach", with: "shore", in: "sunset [beach sunny].jpg") == "sunset [shore sunny].jpg")
     }
 
-    @Test func renameCollapsesResultingDuplicate() {
-        // [beach sand] rename sand -> beach collapses to [beach].
-        #expect(TagParser.renameTag(from: "sand", to: "beach", in: "sunset [beach sand].jpg") == "sunset [beach].jpg")
+    @Test func replaceCollapsesResultingDuplicate() {
+        // [beach sand] replace sand with beach collapses to [beach].
+        #expect(TagParser.replaceTag("sand", with: "beach", in: "sunset [beach sand].jpg") == "sunset [beach].jpg")
     }
 
-    @Test func renameInvalidNewTagIsNoOp() {
-        #expect(TagParser.renameTag(from: "beach", to: "ab", in: "sunset [beach].jpg") == "sunset [beach].jpg")
+    @Test func replaceWithInvalidTagIsNoOp() {
+        #expect(TagParser.replaceTag("beach", with: "ab", in: "sunset [beach].jpg") == "sunset [beach].jpg")
     }
 
-    @Test func renameAbsentOldTagIsNoOp() {
-        #expect(TagParser.renameTag(from: "sand", to: "shore", in: "sunset [beach].jpg") == "sunset [beach].jpg")
+    @Test func replaceAbsentTagIsNoOp() {
+        #expect(TagParser.replaceTag("sand", with: "shore", in: "sunset [beach].jpg") == "sunset [beach].jpg")
     }
 }

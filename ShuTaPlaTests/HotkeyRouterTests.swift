@@ -191,6 +191,7 @@ import AppKit
         #expect(Hotkey(event: keyEvent(keyCode: 37, characters: "l")) == .l)
         #expect(Hotkey(event: keyEvent(keyCode: 1, characters: "s")) == .s)
         #expect(Hotkey(event: keyEvent(keyCode: 15, characters: "r")) == .r)
+        #expect(Hotkey(event: keyEvent(keyCode: 46, characters: "m")) == .m)
         #expect(Hotkey(event: keyEvent(keyCode: 0, characters: "a")) == nil)
     }
 
@@ -308,8 +309,9 @@ import AppKit
         let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
         defer { f.appState.coordinator.shutdown() }
 
+        let playing = try #require(f.appState.coordinator.visualCurrentFile)
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.pendingConfirmation?.playerDeleteFile != nil)
+        #expect(f.appState.pendingConfirmation?.deleteFiles?.map(\.id) == [playing.id])
 
         // While the confirmation is up the alert owns the keyboard: `[enter]`/`[esc]` pass
         // through to its buttons and every other key is swallowed so transport can't run.
@@ -317,7 +319,7 @@ import AppKit
         #expect(f.router.handle(arrowRight) == nil)
         let current = f.playlist.currentFileID
         #expect(f.playlist.currentFileID == current)
-        #expect(f.appState.pendingConfirmation?.playerDeleteFile != nil)
+        #expect(f.appState.pendingConfirmation?.deleteFiles != nil)
 
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)      // passed to the alert's Cancel button
@@ -329,11 +331,11 @@ import AppKit
         f.appState.remember(f.playlist)   // occupy the audio channel slot so currentAudioFile resolves
         defer { f.appState.coordinator.shutdown() }
 
-        // With the audio overlay holding key context, `[delete]` targets the focused audio track
-        // (the audio confirmation), not the visual file — like every other contextual key.
+        // With the audio overlay holding key context, `[delete]` targets the focused audio track,
+        // not the visual file — like every other contextual key.
+        let track = try #require(f.appState.currentAudioFile)
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.pendingConfirmation?.audioDeleteFile != nil)
-        #expect(f.appState.pendingConfirmation?.playerDeleteFile == nil)
+        #expect(f.appState.pendingConfirmation?.deleteFiles?.map(\.id) == [track.id])
     }
 
     @Test func rRaisesRemoveAudioConfirmationForThePlayingVideo() throws {
@@ -362,6 +364,36 @@ import AppKit
 
         #expect(!f.router.route(.r, rightOption: false))   // images have no audio track to strip
         #expect(f.appState.pendingConfirmation == nil)
+    }
+
+    @Test func mRaisesTheFolderChooserForThePlayingFile() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        let playing = try #require(f.appState.coordinator.visualCurrentFile)
+
+        #expect(f.router.route(.m, rightOption: false))
+        #expect(f.appState.folderPick?.moveFileIDs == [playing.id])
+    }
+
+    @Test func mUnderAudioKeyContextTargetsTheAudioTrack() throws {
+        // Like `[delete]`, `[m]` follows key context: with both channels live and the audio
+        // overlay holding it, the focused track moves, not the visual file.
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "2.jpg", "a.mp3", "b.mp3"])
+        let image = makePlaylist(.image, folder: folder, files: ["1.jpg", "2.jpg"], in: context)
+        let audio = makePlaylist(.audio, folder: folder, files: ["a.mp3", "b.mp3"], in: context)
+        let appState = makeAppState(context)
+        appState.mode = .player
+        appState.coordinator.play(image)
+        appState.coordinator.play(audio)
+        appState.remember(audio)   // occupy the audio channel slot so currentAudioFile resolves
+        defer { appState.coordinator.shutdown() }
+        let track = try #require(appState.currentAudioFile)
+
+        let router = makeRouter(appState, overlay: audioOverlay(), closeSpy: CloseSpy())
+        #expect(router.route(.m, rightOption: false))
+        #expect(appState.folderPick?.moveFileIDs == [track.id])
     }
 
     @Test func spaceRestartsAStoppedAudioChannel() throws {
@@ -538,6 +570,27 @@ import AppKit
         #expect(f.playlist.preferences.imageFitMode == nil)
     }
 
+    /// A blocking modal swallows bare keys, `[shift]` too.
+    @Test func shiftBehindABlockingModalLeavesTheFitModeAlone() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        let press = { (down: Bool) in
+            NSEvent.keyEvent(
+                with: .flagsChanged, location: .zero, modifierFlags: down ? .shift : [],
+                timestamp: 0, windowNumber: 0, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56
+            )!
+        }
+        _ = f.router.handle(press(true))
+        _ = f.router.handle(press(false))
+        #expect(f.playlist.preferences.imageFitMode == .cover)   // no modal: the press cycles
+
+        f.appState.report(ErrorNotice(title: "Couldn't move", message: ""))
+        _ = f.router.handle(press(true))
+        _ = f.router.handle(press(false))
+        #expect(f.playlist.preferences.imageFitMode == .cover)
+    }
+
     // MARK: - Text input passthrough
 
     @Test func textInputSwallowsEverything() throws {
@@ -685,11 +738,12 @@ import AppKit
 
     @Test func managerDeleteRequestsConfirmationForSelection() throws {
         let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
-        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
         defer { f.appState.coordinator.shutdown() }
+        let selected = try #require(f.appState.managerFiles.first)
+        f.appState.managerSelection = [selected.id]
 
         #expect(f.router.route(.delete, rightOption: false))
-        #expect(f.appState.pendingConfirmation?.managerDeleteFiles?.count == 1)
+        #expect(f.appState.pendingConfirmation?.deleteFiles?.map(\.id) == [selected.id])
 
         // While the confirmation is up the alert owns the keyboard: `[esc]` passes through
         // to its Cancel button (the idle-esc chain doesn't run), and other keys are
@@ -697,6 +751,43 @@ import AppKit
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)
         #expect(f.router.handle(keyEvent(keyCode: 49)) == nil)   // [space] swallowed
+    }
+
+    @Test func managerMRaisesTheFolderChooserForTheSelection() throws {
+        let f = try managerFixture(.image, files: ["1.jpg", "2.jpg", "3.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        let selected = f.appState.managerFiles.prefix(2).map(\.id)
+        f.appState.managerSelection = Set(selected)
+
+        #expect(f.router.route(.m, rightOption: false))
+        #expect(Set(f.appState.folderPick?.moveFileIDs ?? []) == Set(selected))
+    }
+
+    @Test func managerMIsANoOpWithoutSelection() throws {
+        let f = try managerFixture(.image, files: ["1.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+
+        #expect(!f.router.route(.m, rightOption: false))
+        #expect(f.appState.folderPick == nil)
+    }
+
+    @Test func managerRRequestsRemoveAudioForTheSelection() throws {
+        let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
+        defer { f.appState.coordinator.shutdown() }
+        let selected = try #require(f.appState.managerFiles.first)
+        f.appState.managerSelection = [selected.id]
+
+        #expect(f.router.route(.r, rightOption: false))
+        #expect(f.appState.pendingConfirmation?.audioStripFiles?.map(\.id) == [selected.id])
+    }
+
+    @Test func managerRIsANoOpOnAnImagePlaylist() throws {
+        let f = try managerFixture(.image, files: ["1.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        f.appState.managerSelection = Set(f.appState.managerFiles.map(\.id))
+
+        #expect(!f.router.route(.r, rightOption: false))   // images have no audio track to strip
+        #expect(f.appState.pendingConfirmation == nil)
     }
 
     @Test func tagRemovalConfirmationPassesEnterEscToTheAlertAndSwallowsTheRest() throws {
@@ -729,7 +820,7 @@ import AppKit
         // rather than leaking to playback behind the alert. One channel carries every such
         // report — a refused save, a failed tag edit — so this holds for all of them, and it is
         // why none of them may be raised from a view's own `@State`.
-        f.appState.errorNotice = ErrorNotice(title: "Couldn't remove audio", message: "Couldn't remove audio.")
+        f.appState.report(ErrorNotice(title: "Couldn't remove audio", message: "Couldn't remove audio."))
 
         let current = f.playlist.currentFileID
         #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
@@ -737,6 +828,66 @@ import AppKit
 
         let esc = keyEvent(keyCode: 53)
         #expect(f.router.handle(esc) === esc)                     // passed through to the OK button
+    }
+
+    @Test func quitWaitAlertHoldsKeyboardContext() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        f.appState.replyToTerminate = { _ in }
+        f.appState.isWaitingToQuit = true
+
+        let current = f.playlist.currentFileID
+        #expect(f.router.handle(keyEvent(keyCode: 124)) == nil)   // [arrow right] swallowed
+        #expect(f.playlist.currentFileID == current)              // not advanced behind it
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(f.router.handle(esc) === esc)                     // passed through to Cancel Quitting
+    }
+
+    /// A closing alert is still a sheet on the window, and an alert raised under it is dropped.
+    /// While the window has a sheet, no key raises a modal.
+    @Test func aSheetStillOnTheWindowHoldsKeyboardContext() throws {
+        let f = try managerFixture(.video, files: ["1.mp4", "2.mp4"])
+        f.appState.managerSelection = Set(f.appState.managerFiles.prefix(1).map(\.id))
+        defer { f.appState.coordinator.shutdown() }
+        f.appState.windowHasSheet = true
+
+        #expect(f.router.handle(keyEvent(keyCode: 51)) == nil)            // [delete] swallowed
+        #expect(f.appState.pendingConfirmation == nil)
+        #expect(f.router.handle(keyEvent(keyCode: 46, characters: "m")) == nil)   // [m] swallowed
+        #expect(f.appState.folderPick == nil)
+
+        let esc = keyEvent(keyCode: 53)
+        #expect(f.router.handle(esc) === esc)                               // passed through to the sheet
+    }
+
+    @Test func anOpenFolderChooserPassesEveryKeyThrough() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        f.appState.folderPick = .addPlaylist
+
+        // A key that reaches the app while the chooser is up belongs to the chooser.
+        let s = keyEvent(keyCode: 1, characters: "s")
+        #expect(f.router.handle(s) === s)
+        #expect(f.appState.mode == .player)                          // not stopped behind it
+        #expect(f.appState.coordinator.liveVisualPlaylist != nil)
+        let delete = keyEvent(keyCode: 51)
+        #expect(f.router.handle(delete) === delete)
+        #expect(f.appState.pendingConfirmation == nil)               // no trash alert behind it
+    }
+
+    /// A chooser queued behind a report holds the keyboard like any queued modal: the report on
+    /// screen gets `[esc]`, and nothing acts behind it.
+    @Test func aQueuedFolderChooserHoldsKeyboardContext() throws {
+        let f = try playerFixture(.image, files: ["1.jpg", "2.jpg"])
+        defer { f.appState.coordinator.shutdown() }
+        f.appState.report(ErrorNotice(title: "Couldn't move", message: "1 file(s) couldn't be moved."))
+        f.appState.folderPick = .addPlaylist
+
+        #expect(f.router.handle(keyEvent(keyCode: 1, characters: "s")) == nil)   // [s] swallowed
+        #expect(f.appState.mode == .player)
+        let esc = keyEvent(keyCode: 53)
+        #expect(f.router.handle(esc) === esc)
     }
 
     @Test func playlistDeleteConfirmationHoldsKeyboardContext() throws {

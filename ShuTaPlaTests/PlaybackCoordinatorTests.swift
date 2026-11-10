@@ -9,7 +9,7 @@
 //  Channel exclusivity and suppression run real engines, but the video slot is
 //  filled with the window-free `AudioPlaybackEngine` (injected via the engine
 //  factory) so no Vulkan surface is created in the test host. The folders are real
-//  temp directories with a plain bookmark, so scoped access resolves; the files
+//  temp directories with a bookmark, so scoped access resolves; the files
 //  needn't decode because every assertion is on the coordinator's synchronous
 //  bookkeeping (active playlist, persisted state, suppression), not on mpv output.
 //

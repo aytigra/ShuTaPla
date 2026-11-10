@@ -272,7 +272,7 @@ struct NewPlaylistButton: View {
 
     var body: some View {
         Button {
-            appState.isImportingPlaylist = true
+            appState.folderPick = .addPlaylist
         } label: {
             Label("New Playlist", systemImage: "plus")
         }

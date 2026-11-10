@@ -16,7 +16,7 @@ import Foundation
 nonisolated struct ResolvedBookmark: Sendable, Equatable {
     let url: URL
     /// True when macOS could resolve the bookmark but it should be recreated
-    /// (the folder moved/renamed). The caller re-creates and re-persists it.
+    /// (the folder moved/renamed). `startAccess` re-creates it.
     let isStale: Bool
 }
 
@@ -24,7 +24,6 @@ nonisolated enum BookmarkError: Error, Equatable {
     case creationFailed
     case resolutionFailed
     case fileNotFound
-    case stale
 }
 
 @MainActor
@@ -37,9 +36,8 @@ final class BookmarkService {
 
     private struct Session {
         var refCount: Int
-        /// Whether `startAccessingSecurityScopedResource` actually granted scoped
-        /// access (false for non-scoped bookmarks, e.g. in tests) so the matching
-        /// `stop` is only issued when a `start` took effect.
+        /// Whether `startAccessingSecurityScopedResource` took effect, so the matching
+        /// `stop` is issued only then.
         let didStartScopedAccess: Bool
     }
 
@@ -47,44 +45,42 @@ final class BookmarkService {
 
     // MARK: - Creation / resolution (stateless)
 
-    /// Creates a persistent bookmark for a user-selected folder. Prefers a
-    /// security-scoped bookmark; falls back to a plain one when scoped creation
-    /// isn't available (outside the sandbox, as in tests).
+    /// Creates a persistent security-scoped bookmark for a folder the process can access: one the
+    /// user just picked, or one under an open scoped session.
     nonisolated static func makeBookmark(for url: URL) throws -> Data {
-        if let scoped = try? url.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) {
-            return scoped
-        }
         do {
-            return try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            return try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
         } catch {
             throw BookmarkError.creationFailed
         }
     }
 
-    /// Resolves a bookmark to a URL. Tries a security-scoped resolution first,
-    /// then a plain one, so it handles both scoped (production) and plain (test)
-    /// bookmark data transparently.
+    /// Resolves a security-scoped bookmark to a URL. A bookmark follows its folder into the Trash, so
+    /// a folder in the Trash counts as unresolvable: callers then treat it as deleted, and the
+    /// stored bookmark still resolves to the folder's place after Put Back.
     nonisolated static func resolve(_ bookmark: Data) throws -> ResolvedBookmark {
-        func attempt(_ options: URL.BookmarkResolutionOptions) throws -> ResolvedBookmark {
-            var stale = false
-            let url = try URL(
+        var stale = false
+        let url: URL
+        do {
+            url = try URL(
                 resolvingBookmarkData: bookmark,
-                options: options,
+                options: [.withSecurityScope],
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             )
-            return ResolvedBookmark(url: url, isStale: stale)
-        }
-        if let scoped = try? attempt([.withSecurityScope]) { return scoped }
-        do {
-            return try attempt([])
         } catch {
             throw BookmarkError.resolutionFailed
         }
+        if isInTrash(url) { throw BookmarkError.resolutionFailed }
+        return ResolvedBookmark(url: url, isStale: stale)
+    }
+
+    /// The empty domain mask checks the Trash of the item's own location (`.Trashes/<uid>`
+    /// on another volume, the iCloud Drive Trash); `.userDomainMask` checks only `~/.Trash`.
+    private nonisolated static func isInTrash(_ url: URL) -> Bool {
+        var relationship = FileManager.URLRelationship.other
+        try? FileManager.default.getRelationship(&relationship, of: .trashDirectory, in: [], toItemAt: url)
+        return relationship == .contains
     }
 
     // MARK: - Scoped access (stateless)
@@ -145,36 +141,28 @@ final class BookmarkService {
 
     // MARK: - Reference-counted access sessions
 
-    /// Begins (or joins) a scoped-access session for the bookmark's folder.
-    /// Throws `.stale` when the bookmark needs recreation so the caller can
-    /// re-prompt for the folder.
-    @discardableResult
-    func startAccess(to bookmark: Data) throws -> URL {
+    /// Begins (or joins) a scoped-access session for the bookmark's folder. A stale bookmark (the
+    /// folder moved or was renamed) still opens the folder; `refreshed` is its re-created bookmark,
+    /// or `nil` when the bookmark is current or can't be re-created. The sandbox creates a scoped
+    /// bookmark only for a folder the process is accessing, so the re-creation runs in the session.
+    func startAccess(to bookmark: Data) throws -> (url: URL, refreshed: Data?) {
         let resolved = try Self.resolve(bookmark)
-        if resolved.isStale { throw BookmarkError.stale }
         let url = resolved.url
 
         if var session = sessions[url] {
             session.refCount += 1
             sessions[url] = session
-            return url
+        } else {
+            let didStart = url.startAccessingSecurityScopedResource()
+            sessions[url] = Session(refCount: 1, didStartScopedAccess: didStart)
         }
-        let didStart = url.startAccessingSecurityScopedResource()
-        sessions[url] = Session(refCount: 1, didStartScopedAccess: didStart)
-        return url
+        return (url, resolved.isStale ? try? Self.makeBookmark(for: url) : nil)
     }
 
-    /// Releases one reference. Scoped access is given up only when the last
-    /// reference is dropped.
-    func stopAccess(to bookmark: Data) {
-        guard let resolved = try? Self.resolve(bookmark) else { return }
-        stopAccess(to: resolved.url)
-    }
-
-    /// Releases one reference to an already-resolved folder URL — the form a caller holding the URL
-    /// from `startAccess` uses. Releasing by the captured URL (the key sessions are stored under)
-    /// rather than re-resolving a bookmark that may since have been refreshed to a different folder
-    /// guarantees the grant taken at `startAccess` is the one dropped.
+    /// Releases one reference to the session `startAccess` returned `url` for. Scoped access is given
+    /// up only when the last reference is dropped. The release takes the URL, the key the session is
+    /// stored under: the bookmark can resolve elsewhere by then (the folder was renamed, or the
+    /// bookmark refreshed).
     func stopAccess(to url: URL) {
         guard var session = sessions[url] else { return }
         session.refCount -= 1
