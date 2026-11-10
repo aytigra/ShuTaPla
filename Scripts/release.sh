@@ -111,6 +111,6 @@ if [ "$PUBLISH" = "1" ]; then
     echo "==> Publishing GitHub release v$VERSION…"
     gh release create "v$VERSION" "$DMG" \
         --title "$APP_NAME $VERSION" \
-        --notes "Apple-Silicon build. Requires macOS 26+." \
+        --notes "Apple-Silicon build. Requires macOS 27.2+." \
     || gh release upload "v$VERSION" "$DMG" --clobber
 fi

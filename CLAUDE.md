@@ -1,6 +1,6 @@
 # Shutapla
 
-macOS media player. SwiftUI(macOS 26+) + SwiftData + mpv (libmpv).
+macOS media player. SwiftUI(macOS 27.2+) + SwiftData + mpv (libmpv).
 
 ## Key docs
 

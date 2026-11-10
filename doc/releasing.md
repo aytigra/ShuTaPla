@@ -1,7 +1,7 @@
 # Releasing Shutapla
 
 Builds a signed, notarized, stapled Apple-Silicon `.dmg` that launches on any arm64 Mac
-(macOS 26+) with no Gatekeeper warnings, and publishes it as a GitHub Release asset.
+(macOS 27.2+) with no Gatekeeper warnings, and publishes it as a GitHub Release asset.
 
 The whole pipeline is `Scripts/release.sh`. It archives the Release configuration, exports it
 with the Developer ID identity via `Scripts/ExportOptions.plist`, notarizes and staples the

@@ -19,14 +19,14 @@ Shutapla is a single-window macOS media player built with SwiftUI and SwiftData.
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| UI framework | SwiftUI (macOS 26+) | All views, overlays, controls. AppKit bridges where SwiftUI falls short (split view, hover zones, key monitor, text field). |
+| UI framework | SwiftUI (macOS 27.2+) | All views, overlays, controls. AppKit bridges where SwiftUI falls short (split view, hover zones, key monitor, text field). |
 | Persistence | SwiftData | Playlist metadata, file lists, preferences, app state. |
 | Video/audio playback | mpv (libmpv) | Two independent instances. Handles VP9 WebM, MKV, and all common containers/codecs. |
 | Image display | Core Graphics + SwiftUI | `CGImageSource` for loading/thumbnailing; custom view for pan/zoom; EDR-capable layer for HDR. |
 | File system | Foundation (FileManager, URL) | Recursive enumeration, rename, trash. Security-scoped bookmarks for persistent folder access. One-shot re-scan on activation — no continuous watching. |
 | Remux | FFmpeg (libavformat/libavcodec) | Stream-copy audio strip; same libraries libmpv already links. |
 | Concurrency | Swift Concurrency | Default `MainActor` isolation; `actor` for file I/O, `@concurrent` for off-main CPU work (§10). |
-| Minimum deployment | macOS 26.4 | |
+| Minimum deployment | macOS 27.2 | The bundled Homebrew libmpv/FFmpeg closure is built for the host macOS; the target must not be lower than its newest minimum OS. |
 
 ### mpv integration
 

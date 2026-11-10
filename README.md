@@ -33,7 +33,7 @@ exist.
 
 ## Requirements
 
-- macOS 26 or later
+- macOS 27.2 or later
 - Apple Silicon (arm64)
 
 ## Install

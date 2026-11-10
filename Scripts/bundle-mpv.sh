@@ -74,6 +74,20 @@ bundle_dylib() {
                 install_name_tool -change "$dep" "@rpath/$depbase" "$dest" 2>/dev/null || true
                 bundle_dylib "$dep"
                 ;;
+            @rpath/*)
+                # Some kegs reference a sibling through @rpath with an @loader_path rpath
+                # (brotli). Resolve it against this dylib's rpaths; the reference stays @rpath.
+                local rp candidate
+                depbase="${dep#@rpath/}"
+                while IFS= read -r rp; do
+                    candidate="${rp/@loader_path/$(dirname "$src")}/$depbase"
+                    case "$candidate" in "$BREW_PREFIX"/*) ;; *) continue ;; esac
+                    if [ -f "$candidate" ]; then
+                        bundle_dylib "$candidate"
+                        break
+                    fi
+                done < <(otool -l "$src" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }')
+                ;;
         esac
     done < <(otool -L "$src" | tail -n +2 | awk '{print $1}')
 
