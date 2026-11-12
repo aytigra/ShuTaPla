@@ -34,14 +34,12 @@ extension AppState {
     /// Rebuilds the live channels from each playlist's persisted state at launch — relaunch
     /// behaves like reopening the window, so Playing playlists resume and Paused stay paused.
     /// The audio channel rebuilds in whatever mode the window opens; a non-stopped visual
-    /// playlist reopens Player mode (only if its channel actually came up).
+    /// playlist reopens Player mode. A playlist whose folder can't be opened reports
+    /// `folderNotFound`, stays off its channel and is marked Stopped.
     func reconstructPlayback() {
-        if let audio = audioChannelPlaylist, audio.playbackState != .stopped {
-            coordinator.reconstruct(audio)
-        }
-        if let visual = nonStoppedVisualPlaylist() {
-            coordinator.reconstruct(visual)
-            if coordinator.liveVisualPlaylist != nil { mode = .player }
+        if let audio = audioChannelPlaylist { coordinator.reconstruct(audio) }
+        if let visual = nonStoppedVisualPlaylist(), coordinator.reconstruct(visual) {
+            mode = .player
         }
     }
 

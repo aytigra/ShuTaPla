@@ -43,26 +43,30 @@ extension AppState {
 
     /// The Visual Overlay's analog of `playOnAudioChannel(_:)`: switches the
     /// visual channel to `playlist` through `manage(_:)` — restoring its filter, re-reading its
-    /// folder (every click, the automatic Update), and re-centering the file list — and starts a
-    /// genuinely new selection playing. Re-selecting the playing playlist re-scans and re-centers
-    /// without restarting it.
+    /// folder (every click, the automatic Update), and re-centering the file list. A genuinely new
+    /// selection starts playing and closes the overlay, whose close releases the visual hold; one
+    /// whose start `startOnChannel` refuses changes nothing.
+    /// Re-selecting the playing playlist re-scans and re-centers without restarting it.
     func playOnVisualChannel(_ playlist: Playlist) {
-        guard !playlistWork.isDeleting(playlist.id) else { return }
-        let isNewSelection = coordinator.liveVisualPlaylist !== playlist
+        if coordinator.liveVisualPlaylist !== playlist {
+            guard startOnChannel(playlist) else { return }
+            overlays.closeVisualOverlay()
+        }
         manage(playlist)
-        if isNewSelection { coordinator.play(playlist) }
     }
 
     /// The audio overlay's play-on-select: loads `playlist` into the audio channel slot and
     /// re-reads its folder (every click — the same automatic Update the Manager does). A
-    /// genuinely new selection also starts it playing; re-selecting the loaded one re-scans and
+    /// genuinely new selection also starts it playing and closes the overlay; one whose start
+    /// `startOnChannel` refuses changes nothing. Re-selecting the loaded one re-scans and
     /// re-centers without restarting playback. Independent of the managed slot — the overlay
-    /// drives the audio channel, not the Manager. A playlist being deleted is refused, as in `manage`.
+    /// drives the audio channel, not the Manager.
     func playOnAudioChannel(_ playlist: Playlist) {
-        guard !playlistWork.isDeleting(playlist.id) else { return }
-        let isNewSelection = audioChannelPlaylist !== playlist
-        remember(playlist)   // audioChannelPlaylist = playlist
-        if isNewSelection { coordinator.play(playlist) }
+        if audioChannelPlaylist !== playlist {
+            guard startOnChannel(playlist) else { return }
+            remember(playlist)   // audioChannelPlaylist = playlist
+            overlays.closeAudioOverlay()
+        }
         audioScrollToken += 1   // re-center the overlay file list on the current track
         rescan(playlist)
     }

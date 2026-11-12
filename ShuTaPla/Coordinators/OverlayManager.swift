@@ -29,7 +29,16 @@ final class OverlayManager: HotkeyOverlayContext {
 
     /// The overlays currently on screen. Read by the player view layer to compose its
     /// `.overlay()`/`.transition()` modifiers.
-    private(set) var active: Set<Overlay> = []
+    private(set) var active: Set<Overlay> = [] {
+        didSet {
+            let open = active.contains(.visualOverlay)
+            if open != oldValue.contains(.visualOverlay) { onVisualOverlayChange?(open) }
+        }
+    }
+
+    /// Called with the Visual Overlay's new visibility in the same mutation that changes it,
+    /// whichever path changes it (open, close, `[esc]`, an exclusivity rule, `hideAll`).
+    @ObservationIgnored var onVisualOverlayChange: ((Bool) -> Void)?
 
     /// Granted by `audioDidFullyReveal()` once the audio overlay's slide-in completes,
     /// cleared whenever no audio overlay remains active. Gates `keyContext`: the audio

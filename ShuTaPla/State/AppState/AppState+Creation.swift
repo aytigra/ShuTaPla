@@ -37,31 +37,13 @@ extension AppState {
             return .failed("Couldn't scan \(url.lastPathComponent).")
         }
 
-        let name = url.lastPathComponent
-        let folderPath = url.path(percentEncoded: false)
-
         if scan.isEmpty { return .empty }
 
-        if let type = scan.dominantType {
-            let playlist = makePlaylist(name: name, bookmark: bookmark, folderPath: folderPath, scan: scan, mediaType: type)
-            return .created(playlist)
-        }
-
-        return .needsTypeChoice(
-            PendingPlaylist(name: name, bookmark: bookmark, folderPath: folderPath, scan: scan)
+        let folder = ScannedFolder(
+            name: url.lastPathComponent, bookmark: bookmark, folderPath: url.path(percentEncoded: false), scan: scan
         )
-    }
-
-    /// Completes creation of a Mixed-folder playlist once the user chooses a type.
-    @discardableResult
-    func confirmPlaylist(_ pending: PendingPlaylist, mediaType: MediaType) -> Playlist {
-        makePlaylist(
-            name: pending.name,
-            bookmark: pending.bookmark,
-            folderPath: pending.folderPath,
-            scan: pending.scan,
-            mediaType: mediaType
-        )
+        guard let type = scan.dominantType else { return .needsTypeChoice(folder) }
+        return .created(makePlaylist(from: folder, mediaType: type))
     }
 
     /// Folder-picker callback for the shared add flow: scans the folder and either creates
@@ -71,9 +53,9 @@ extension AppState {
         defer { isAddingPlaylist = false }
         switch await addPlaylist(from: url) {
         case .created:
-            break   // makePlaylist switches to manager mode and selects it
-        case .needsTypeChoice(let pending):
-            pendingTypeChoice = pending
+            break   // makePlaylist places the new playlist
+        case .needsTypeChoice(let folder):
+            pendingTypeChoice = folder
         case .empty:
             report(.addPlaylistFailed("“\(url.lastPathComponent)” has no videos, images, or audio files."))
         case .failed(let message):
@@ -84,27 +66,21 @@ extension AppState {
     /// Resolves the pending media-type choice: creates the Mixed-folder playlist with the
     /// chosen type and dismisses the dialog.
     func confirmPendingTypeChoice(_ mediaType: MediaType) {
-        guard let pending = pendingTypeChoice else { return }
-        confirmPlaylist(pending, mediaType: mediaType)
+        guard let folder = pendingTypeChoice else { return }
+        makePlaylist(from: folder, mediaType: mediaType)
         pendingTypeChoice = nil
     }
 
-    /// Builds and persists a `Playlist` and its `PlaylistFile`s from a scan.
+    /// Builds and persists a `Playlist` and its `PlaylistFile`s from a scanned folder.
     /// Files whose media type differs from the playlist's are marked skipped
     /// (kept for the skipped-files filter, never played). Playable files are
     /// shuffled to seed the initial order.
     @discardableResult
-    func makePlaylist(
-        name: String,
-        bookmark: Data,
-        folderPath: String,
-        scan: ScanResult,
-        mediaType: MediaType
-    ) -> Playlist {
+    func makePlaylist(from folder: ScannedFolder, mediaType: MediaType) -> Playlist {
         let playlist = Playlist(
-            name: name,
-            folderBookmark: bookmark,
-            folderPath: folderPath,
+            name: folder.name,
+            folderBookmark: folder.bookmark,
+            folderPath: folder.folderPath,
             mediaType: mediaType,
             sortOrder: nextSortOrder(for: mediaType)
         )
@@ -112,7 +88,7 @@ extension AppState {
 
         // Shuffle so the initial playback order is randomized; skipped files are
         // ordered after the playable ones and never enter playback.
-        let ordered = FileSystemService.fisherYatesShuffle(scan.files)
+        let ordered = FileSystemService.fisherYatesShuffle(folder.scan.files)
             .sorted { ($0.mediaType == mediaType ? 0 : 1) < ($1.mediaType == mediaType ? 0 : 1) }
 
         // Insert naked rows only — no filename-tag derivation on the main actor; that runs in the
@@ -121,35 +97,26 @@ extension AppState {
         for (index, scanned) in ordered.enumerated() {
             modelContext.makeFile(from: scanned, in: playlist, sortOrder: index)
         }
-        // Persist the inserted rows before anything derives a sequence from them: a player-mode
-        // creation starts playback (which reads the playback sequence) right below, and the
-        // background derivation resolves the playlist by id from the committed store.
+        // The background derivation resolves the playlist by id from the committed store.
         persistAndRefresh()
         notePlaylistsChanged()   // a new sidebar row
 
-        // Player-mode creation comes from a playback overlay (the Visual Overlay or the
-        // audio overlay) and starts the new playlist playing; Manager-mode creation loads it
-        // stopped. A player-mode creation only *remembers* the playlist (so stopping back into
-        // Manager returns to whatever was being managed), while a management creation loads it
-        // into the managed slot and switches the scope to its type.
-        let startsPlaying = mode == .player
-        if startsPlaying {
-            remember(playlist)
-            coordinator.play(playlist)
-        } else {
-            // Only one audio playlist is ever live; releasing the channel keeps a background
-            // playlist from playing on behind a stopped audio creation.
+        // The mode at completion decides, not the entry point: a scan or a Mixed-folder type choice
+        // can outlast a switch between Manager and Player mode. In Player mode the playlist only
+        // joins its selector list.
+        if mode != .player {
+            // Only one audio playlist is ever live, and the new one becomes the Audio Channel Playlist.
             if mediaType == .audio, let live = coordinator.liveAudioPlaylist { coordinator.stop(live) }
             setManaged(playlist)
             managerSelection = []
+            if mode == .welcome { mode = .manager }
         }
-        if mode == .welcome { mode = .manager }
 
         // Derive filename tags / `tagFrequency` off the main actor, reusing the scan in hand (no
         // disk re-read), through the same actor + apply path Update uses. On this freshly-created
         // playlist every row is present (matched by relative path), so the reconcile only derives
         // tags. Tracked so a delete can cancel it and tests can await it.
-        trackBackgroundTask(for: playlist.id) { await self.deriveInBackground(playlist, from: scan.files) }
+        trackBackgroundTask(for: playlist.id) { await self.deriveInBackground(playlist, from: folder.scan.files) }
         return playlist
     }
 

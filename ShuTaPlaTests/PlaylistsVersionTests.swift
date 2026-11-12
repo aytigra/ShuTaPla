@@ -53,10 +53,7 @@ struct PlaylistsVersionTests {
         let before = appState.playlistsVersion
 
         appState.makePlaylist(
-            name: "Clips",
-            bookmark: try BookmarkService.makeBookmark(for: dir),
-            folderPath: dir.path,
-            scan: emptyResult,
+            from: ScannedFolder(name: "Clips", bookmark: try BookmarkService.makeBookmark(for: dir), folderPath: dir.path, scan: emptyResult),
             mediaType: .video
         )
         await appState.updateTask?.value   // drain the create derivation before the container dies
@@ -223,7 +220,7 @@ struct PlaylistsVersionTests {
 
     // MARK: - What the lists read
 
-    /// The accessor the lists call: a plain fetch, one media type, in section order.
+    /// The Manager sidebar's accessor: a plain fetch, one media type, in section order.
     @Test func playlistsAccessorReturnsOneTypeInSectionOrder() throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -252,5 +249,44 @@ struct PlaylistsVersionTests {
         appState.reorder([first, second], fromOffsets: IndexSet(integer: 1), toOffset: 0)
 
         #expect(appState.playlists(ofType: .video).map(\.name) == ["B", "A"])
+    }
+
+    /// The sectioned selector's accessor: the non-empty groups of the requested types, in the
+    /// requested order, each in section order.
+    @Test func sectionsGroupInRequestedOrderAndSkipEmptyTypes() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let seeds: [(String, MediaType, Int)] = [
+            ("Stills", .image, 0), ("Reels", .video, 1), ("Clips", .video, 0), ("Songs", .audio, 0),
+        ]
+        for (name, type, sortOrder) in seeds {
+            context.insert(Playlist(
+                name: name, folderBookmark: Data(), folderPath: "/\(name)", mediaType: type, sortOrder: sortOrder
+            ))
+        }
+        try context.save()
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        let visual = appState.playlistSections(of: [.video, .image])
+        #expect(visual.map(\.mediaType) == [.video, .image])
+        #expect(visual.map { $0.playlists.map(\.name) } == [["Clips", "Reels"], ["Stills"]])
+
+        context.delete(try #require(visual.last?.playlists.first))
+        try context.save()
+
+        #expect(appState.playlistSections(of: [.video, .image]).map(\.mediaType) == [.video])
+    }
+
+    /// The sections come from a fetch, which registers nothing; reading them must register the
+    /// signal, or the selector never re-renders on a bump.
+    @Test func readingSectionsRegistersTheSignal() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+
+        #expect(firesObservation(
+            reading: { _ = appState.playlistSections(of: [.video, .image]) },
+            on: { appState.notePlaylistsChanged() }
+        ))
     }
 }

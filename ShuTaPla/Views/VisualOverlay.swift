@@ -3,9 +3,9 @@
 //  ShuTaPla
 //
 //  The visual player's library overlay: it slides up from the bottom and renders the shared
-//  `LibrarySurface` below a header — a single-type playlist selector, the active playlist's
+//  `LibrarySurface` below a header — a selector of video and image playlists, the active playlist's
 //  filtered file list, and the tag editor for the current file. Double-click a file to play
-//  it and dismiss; selecting a playlist switches the visual channel to it. Bulk multi-select
+//  it and dismiss; selecting a playlist of either type switches the visual channel to it. Bulk multi-select
 //  tag editing stays in Manager mode.
 //
 
@@ -32,12 +32,12 @@ struct VisualOverlay: View {
         .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
     }
 
-    /// The visual channel's wiring for the shared library surface: lists the active type's
+    /// The visual channel's wiring for the shared library surface: lists both visual types'
     /// playlists, switches the visual channel on select, and routes file actions to the
     /// player's delete / strip-audio paths.
     private var visualContext: LibraryContext {
         LibraryContext(
-            mediaType: playlist.mediaType,
+            mediaTypes: [.video, .image],
             activePlaylist: playlist,
             fileIDs: appState.visualChannelFileIDs,
             currentFile: appState.currentVisualFile,

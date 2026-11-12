@@ -442,7 +442,7 @@ final class ManagerSplitViewController: NSSplitViewController, NSToolbarDelegate
         case .scopeTabs:
             return sidebarControl(itemIdentifier, label: "Scope") { ScopeTabs() }
         case .newPlaylist:
-            return sidebarControl(itemIdentifier, label: "New Playlist") { NewPlaylistButton() }
+            return sidebarControl(itemIdentifier, label: NewPlaylistButton.title) { NewPlaylistButton() }
         case .trailingSeparator:
             return NSTrackingSeparatorToolbarItem(identifier: .trailingSeparator, splitView: splitView, dividerIndex: 1)
         case .title:

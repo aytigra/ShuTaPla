@@ -37,4 +37,13 @@ protocol PlaybackSource: AnyObject {
     /// pass back through the coordinator — so the source can sync its persisted
     /// current-file pointer to what is actually playing.
     func engineDidAdvance(to file: PlaylistFile)
+
+    /// Called after `engineDidAdvance(to:)` when the advance came from a forward keyframe step
+    /// past the end of the file — a user command, so the source can settle the transport the way
+    /// it does for a next-file command.
+    func engineDidStepPastEnd(to file: PlaylistFile)
+}
+
+extension PlaybackSource {
+    func engineDidStepPastEnd(to file: PlaylistFile) {}
 }

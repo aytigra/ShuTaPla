@@ -14,7 +14,6 @@ struct RootView: View {
     @Environment(AppState.self) private var appState
     @Environment(PlaybackCoordinator.self) private var coordinator
     @State private var hotkeyRouter = HotkeyRouter()
-    @State private var overlayManager = OverlayManager()
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -46,7 +45,7 @@ struct RootView: View {
             .animation(.easeInOut(duration: 0.2), value: appState.preview.isOpen)
             .environment(appState.preview)
         }
-        .environment(overlayManager)
+        .environment(appState.overlays)
         // Every destructive confirmation, from one host: one is pending at a time, so one alert
         // presents them all, worded by the enum itself. Each app-root modal shows when it is the
         // head of `AppState.windowModals`.
@@ -110,11 +109,11 @@ struct RootView: View {
         // The pause overlay covers the whole screen, so suppression clears every overlay
         // (including audio) — matching the feature spec's "pause overlay clears everything".
         .onChange(of: coordinator.isSuppressed) { _, suppressed in
-            if suppressed { overlayManager.hideAll() }
+            if suppressed { appState.overlays.hideAll() }
         }
         .onAppear {
             hotkeyRouter.appState = appState
-            hotkeyRouter.overlayContext = overlayManager
+            hotkeyRouter.overlayContext = appState.overlays
             hotkeyRouter.startMonitoring()
         }
         .onDisappear { hotkeyRouter.stopMonitoring() }
@@ -126,7 +125,7 @@ struct RootView: View {
     @ViewBuilder
     private var audioOverlayLayer: some View {
         let suppressed = coordinator.isSuppressed
-        let audioActive = !overlayManager.active.isDisjoint(with: [.audioCompact, .audioExtended])
+        let audioActive = !appState.overlays.active.isDisjoint(with: [.audioCompact, .audioExtended])
 
         ZStack(alignment: .top) {
             // The hover trigger is as tall as the compact bar, so it's an easy target along the
@@ -136,8 +135,8 @@ struct RootView: View {
             // it is harmless — `hideCompactAudioOnHoverExit` only touches compact audio.
             if !suppressed {
                 HoverZone(
-                    onEnter: { overlayManager.revealCompactAudioOnHover() },
-                    onExit: { overlayManager.hideCompactAudioOnHoverExit() }
+                    onEnter: { appState.overlays.revealCompactAudioOnHover() },
+                    onExit: { appState.overlays.hideCompactAudioOnHoverExit() }
                 )
                 .frame(height: AppConstants.audioHoverZoneHeight)
                 .frame(maxWidth: .infinity)
@@ -154,7 +153,7 @@ struct RootView: View {
         .task(id: audioActive) {
             guard audioActive else { return }
             try? await Task.sleep(for: .seconds(0.2))
-            overlayManager.audioDidFullyReveal()
+            appState.overlays.audioDidFullyReveal()
         }
     }
 }

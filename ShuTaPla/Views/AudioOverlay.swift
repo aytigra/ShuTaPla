@@ -29,7 +29,7 @@ struct AudioOverlay: View {
     /// plays on select, and routes a row's delete to the audio-delete confirmation.
     private var audioContext: LibraryContext {
         LibraryContext(
-            mediaType: .audio,
+            mediaTypes: [.audio],
             activePlaylist: activePlaylist,
             fileIDs: appState.audioChannelFileIDs,
             currentFile: appState.currentAudioFile,

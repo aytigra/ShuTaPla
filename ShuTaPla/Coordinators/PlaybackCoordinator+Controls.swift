@@ -101,11 +101,11 @@ extension PlaybackCoordinator {
     // MARK: - Slideshow & fit-mode setters
 
     /// Enables/disables and persists the slideshow for an image `playlist`, starting or
-    /// stopping the live timer when it is the active visual channel and not suppressed.
+    /// stopping the live timer when it is the active visual channel and its engine should run.
     func setSlideshowEnabled(_ playlist: Playlist, _ enabled: Bool) {
         playlist.preferences.slideshowEnabled = enabled
         guard channel(of: playlist) == .visualImage else { return }
-        if enabled, !isSuppressed { applySlideshow(for: playlist) }
+        if enabled, shouldBePlaying(playlist) { applySlideshow(for: playlist) }
         else { imageEngine.stopSlideshow() }
     }
 

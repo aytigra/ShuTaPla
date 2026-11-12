@@ -5,10 +5,11 @@
 //  The conductor between the UI and the three playback engines. It owns one
 //  visual channel (video XOR image) and one independent audio channel, starts and
 //  stops playlists on them, and keeps each playlist's persisted Stopped/Playing/
-//  Paused state in step. Suppression — the pause overlay's global halt — is a
-//  transient layer on top: effective playback is a playlist's own `.playing` state
-//  AND `!isSuppressed`, and lifting suppression resumes only the playlists that
-//  were Playing, leaving Paused ones paused.
+//  Paused state in step. Suppression — the pause overlay's global halt — and the
+//  visual hold — the visual channel's halt while the Visual Overlay is open — are
+//  transient layers on top: effective playback is `shouldBePlaying`, and every path
+//  that resumes an engine gates on it, so lifting one halt leaves Paused playlists
+//  and a channel still under the other halt stopped.
 //
 //  It is the engines' `PlaybackSource`: an engine asks it for the next/previous
 //  file (the owning playlist's `sequence`, found from the current file's
@@ -17,7 +18,7 @@
 //  session never spins up an unused libmpv instance.
 //
 //  This primary declaration owns the stored state, the lifecycle that claims and
-//  releases channels (`play`/`stop`/`reconstruct`), suppression, the overlay halt,
+//  releases channels (`play`/`stop`/`reconstruct`), suppression, the visual hold,
 //  and the channel routing every partial reads. The read-only display surface and
 //  the loop/seek/volume/slideshow setters live in `+Controls`, the in-channel
 //  transport in `+Transport`, and file-position persistence plus the `PlaybackSource`
@@ -46,16 +47,16 @@ final class PlaybackCoordinator: PlaybackSource {
     /// The playlist on the independent audio channel, or `nil`.
     private(set) var liveAudioPlaylist: Playlist?
 
-    /// Transiently halts the visual channel's advancement (slideshow timer / video)
-    /// while a non-suppressing overlay edits its files, without changing persisted
-    /// state or showing the pause overlay. Balanced by `resumeVisualForOverlay()`.
-    private(set) var visualHaltedForOverlay = false
+    /// Halts the visual channel's advancement (slideshow timer / video) while the Visual
+    /// Overlay edits its files, without changing persisted state. It follows the overlay's
+    /// visibility, not the channel, so it holds across a playlist switch and a failed start.
+    private(set) var isVisualHeld = false
 
-    /// Whether the visual channel is effectively playing right now — its playlist is `.playing`
-    /// and nothing is suppressing it. Drives the player's display-sleep block and cursor
-    /// auto-hide, which both arm only while the picture is actually moving.
+    /// Whether the visual playlist should be advancing: Playing, not suppressed, not held. Drives
+    /// the player's display-sleep block and cursor auto-hide, so both also stay armed on a still
+    /// image with the slideshow off and on a visual channel with no files left.
     var isVisuallyPlaying: Bool {
-        liveVisualPlaylist?.playbackState == .playing && !isSuppressed
+        liveVisualPlaylist.map(shouldBePlaying) ?? false
     }
 
     /// The image engine — cheap (no libmpv), so it always exists. Player views read
@@ -92,6 +93,9 @@ final class PlaybackCoordinator: PlaybackSource {
 
     /// How often `positionPersistTask` writes the live position to disk.
     let positionPersistInterval: TimeInterval = 5
+
+    /// Called by `play` with a playlist whose folder can't be opened, so every start reports it.
+    @ObservationIgnored var onLostFolder: (Playlist) -> Void = { _ in }
 
     private let makeVideoEngine: () throws -> MPVPlaybackEngine
     private let makeAudioEngine: () throws -> MPVPlaybackEngine
@@ -130,29 +134,45 @@ final class PlaybackCoordinator: PlaybackSource {
         imageEngine.stop()
         folderAccess.releaseAll()
         // Clear the channel bookkeeping so a reused coordinator doesn't report stale
-        // active channels or a leftover suppression/overlay halt.
+        // active channels or a leftover suppression or visual hold.
         liveVisualPlaylist = nil
         visualKind = nil
         liveAudioPlaylist = nil
         isSuppressed = false
-        visualHaltedForOverlay = false
+        isVisualHeld = false
     }
 
     // MARK: - Starting playback
 
     /// Starts `playlist` on its channel, beginning at `file` (or its remembered /
-    /// first file). Starting a visual playlist stops whichever visual playlist was
-    /// playing; audio is independent.
-    func play(_ playlist: Playlist, startingAt file: PlaylistFile? = nil, lifecycle: Bool = false) {
-        switch playlist.mediaType {
-        case .video, .image: startVisual(playlist, startingAt: file, lifecycle: lifecycle)
-        case .audio: startAudio(playlist, startingAt: file, lifecycle: lifecycle)
+    /// first file), replacing the playlist on that channel; the visual and audio channels are
+    /// independent. Returns `false`, with the channel untouched, when the playlist's engine can't be
+    /// created, or when the folder can't be opened, after passing the playlist to `onLostFolder`.
+    @discardableResult
+    func play(_ playlist: Playlist, startingAt file: PlaylistFile? = nil, lifecycle: Bool = false) -> Bool {
+        var engine: MPVPlaybackEngine?
+        if playlist.mediaType != .image {
+            engine = playlist.mediaType == .audio ? ensureAudioEngine() : ensureVideoEngine()
+            guard engine != nil else { return false }
         }
+        guard let folder = folderAccess.begin(for: playlist) else {
+            onLostFolder(playlist)
+            return false
+        }
+        if playlist.mediaType == .audio, let engine {
+            startAudio(playlist, in: folder, on: engine, startingAt: file, lifecycle: lifecycle)
+        } else {
+            startVisual(playlist, in: folder, on: engine, startingAt: file, lifecycle: lifecycle)
+        }
+        return true
     }
 
-    private func startVisual(_ playlist: Playlist, startingAt file: PlaylistFile?, lifecycle: Bool) {
+    /// `engine` is the video engine; `nil` for an image playlist.
+    private func startVisual(
+        _ playlist: Playlist, in folder: URL, on engine: MPVPlaybackEngine?,
+        startingAt file: PlaylistFile?, lifecycle: Bool
+    ) {
         if let current = liveVisualPlaylist, current !== playlist { stopVisual() }
-        guard let folder = folderAccess.begin(for: playlist) else { return }
         cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .visual)
 
         let start = startFile(for: playlist, requested: file)
@@ -161,23 +181,22 @@ final class PlaybackCoordinator: PlaybackSource {
         playlist.playbackState = .playing
         if let start { setCurrentFile(start, on: playlist) }
 
-        switch playlist.mediaType {
-        case .image:
+        if let engine {
+            loadTimeline(playlist, on: engine, folder: folder, start: start, lifecycle: lifecycle)
+        } else {
             imageEngine.source = self
             imageEngine.fitMode = playlist.effectiveImageFitMode(globalSettings)
             // Images have no timeline, so file-position persistence doesn't apply to them.
             if let start { imageEngine.load(start, at: folder.appending(path: start.relativePath)) }
-            if !isSuppressed { applySlideshow(for: playlist) }
-        default:   // video
-            guard let engine = ensureVideoEngine() else { return }
-            loadTimeline(playlist, on: engine, folder: folder, start: start, lifecycle: lifecycle)
+            if shouldBePlaying(playlist) { applySlideshow(for: playlist) }
         }
     }
 
-    private func startAudio(_ playlist: Playlist, startingAt file: PlaylistFile?, lifecycle: Bool) {
+    private func startAudio(
+        _ playlist: Playlist, in folder: URL, on engine: MPVPlaybackEngine,
+        startingAt file: PlaylistFile?, lifecycle: Bool
+    ) {
         if let current = liveAudioPlaylist, current !== playlist { stopAudio() }
-        guard let folder = folderAccess.begin(for: playlist),
-              let engine = ensureAudioEngine() else { return }
         cloudFileService.beginMonitoring(playlist, folderURL: folder, on: .audio)
 
         let start = startFile(for: playlist, requested: file)
@@ -188,7 +207,7 @@ final class PlaybackCoordinator: PlaybackSource {
     }
 
     /// Loads `start` on a timeline engine (video or audio) at its resume position, honoring a
-    /// standing suppression and arming the position-persist loop. Shared tail of both timeline
+    /// standing suppression or visual hold and arming the position-persist loop. Shared tail of both timeline
     /// starts; the caller has already claimed the channel and recorded the current file.
     private func loadTimeline(
         _ playlist: Playlist, on engine: MPVPlaybackEngine, folder: URL,
@@ -200,7 +219,7 @@ final class PlaybackCoordinator: PlaybackSource {
             engine.load(start, at: folder.appending(path: start.relativePath),
                         startingAt: resumePosition(for: playlist, start: start, lifecycle: lifecycle))
         }
-        if isSuppressed { engine.pause() }
+        if !shouldBePlaying(playlist) { engine.pause() }
         startPositionPersistLoop()
     }
 
@@ -223,7 +242,6 @@ final class PlaybackCoordinator: PlaybackSource {
         }
         liveVisualPlaylist = nil
         visualKind = nil
-        visualHaltedForOverlay = false
         finalizeStop(playlist)
     }
 
@@ -259,22 +277,18 @@ final class PlaybackCoordinator: PlaybackSource {
     func unsuppress() {
         guard isSuppressed else { return }
         isSuppressed = false
-        if let playlist = liveVisualPlaylist, playlist.playbackState == .playing { resume(playlist) }
-        if let playlist = liveAudioPlaylist, playlist.playbackState == .playing { resume(playlist) }
+        if let playlist = liveVisualPlaylist, shouldBePlaying(playlist) { resume(playlist) }
+        if let playlist = liveAudioPlaylist, shouldBePlaying(playlist) { resume(playlist) }
     }
 
-    // MARK: - Visual overlay halt
+    // MARK: - Visual hold
 
-    func haltVisualForOverlay() {
-        guard !visualHaltedForOverlay, !isSuppressed, let visual = liveVisualPlaylist else { return }
-        visualHaltedForOverlay = true
-        suspend(visual)
-    }
-
-    func resumeVisualForOverlay() {
-        guard visualHaltedForOverlay, let visual = liveVisualPlaylist else { return }
-        visualHaltedForOverlay = false
-        if !isSuppressed, visual.playbackState == .playing { resume(visual) }
+    func setVisualHeld(_ held: Bool) {
+        guard let visual = liveVisualPlaylist else { isVisualHeld = held; return }
+        let wasPlaying = shouldBePlaying(visual)
+        isVisualHeld = held
+        let playing = shouldBePlaying(visual)
+        if playing != wasPlaying { playing ? resume(visual) : suspend(visual) }
     }
 
     // MARK: - Launch reconstruction
@@ -282,12 +296,20 @@ final class PlaybackCoordinator: PlaybackSource {
     /// Rebuilds `playlist`'s channel at launch from its persisted state — launch's analog of
     /// lifting suppression on a reopened window. A Playing playlist resumes; a Paused one loads
     /// at its remembered file but stays paused; a Stopped one is left untouched. Loading the
-    /// channel sets `.playing`, so a Paused playlist is flipped back afterward.
-    func reconstruct(_ playlist: Playlist) {
+    /// channel sets `.playing`, so a Paused playlist is flipped back afterward. A playlist whose
+    /// folder can't be opened is marked Stopped: launch resumes the one non-stopped visual
+    /// playlist, so a stale Playing one would win over a later choice. Returns whether the
+    /// channel came up.
+    @discardableResult
+    func reconstruct(_ playlist: Playlist) -> Bool {
         let persisted = playlist.playbackState
-        guard persisted != .stopped else { return }
-        play(playlist, lifecycle: true)
+        guard persisted != .stopped else { return false }
+        guard play(playlist, lifecycle: true) else {
+            playlist.playbackState = .stopped
+            return false
+        }
         if persisted == .paused { pause(playlist) }
+        return true
     }
 
     // MARK: - Channel routing

@@ -156,21 +156,29 @@ extension AppState {
 
     /// Starts a playlist playing through the coordinator. A visual playlist takes the window
     /// into Player mode and becomes the managed playlist; an audio playlist plays on its
-    /// independent channel without changing mode or the managed (visual) slot. A playlist being
-    /// deleted is refused, as in `manage`.
+    /// independent channel without changing mode or the managed (visual) slot. A start
+    /// `startOnChannel` refuses changes nothing.
     func startPlayback(of playlist: Playlist, startingAt file: PlaylistFile? = nil) {
-        guard !playlistWork.isDeleting(playlist.id) else { return }
+        guard startOnChannel(playlist, at: file) else { return }
         // Audio is an independent channel driven from its overlay/inlet, so starting it must
         // not disturb the managed visual playlist or the scope.
         if playlist.mediaType == .audio {
             remember(playlist)   // audioChannelPlaylist = playlist
-            coordinator.play(playlist, startingAt: file)
             return
         }
         if managedPlaylist !== playlist { managerSelection = [] }
         setManaged(playlist)
-        coordinator.play(playlist, startingAt: file)
         mode = .player
+    }
+
+    /// Starts `playlist` on its channel. A start is refused, leaving the channel as it was, when
+    /// the playlist is being deleted (the delete released it before it waits for the playlist's
+    /// file ops), the folder can't be opened (reported as `folderNotFound`) or the engine can't
+    /// be created. Every slot, mode and overlay change of a start follows a `true` result, so a
+    /// refused start changes nothing.
+    func startOnChannel(_ playlist: Playlist, at file: PlaylistFile? = nil) -> Bool {
+        guard !playlistWork.isDeleting(playlist.id) else { return false }
+        return coordinator.play(playlist, startingAt: file)
     }
 
     /// Plays the Manager file-list selection (the `[enter]` hotkey): resolves the earliest selected
@@ -197,6 +205,8 @@ extension AppState {
         // scrolled into view, rather than at the top.
         let lastFileID = coordinator.visualCurrentFile?.id
         if let visual { coordinator.stop(visual) }
+        // After the stop, so releasing the visual hold has no channel left to resume.
+        overlays.hideAll()
         coordinator.unsuppress()
         cancelConfirmation()   // dismiss any player-context confirmation left open on exit
         if let visual { setManaged(visual) }

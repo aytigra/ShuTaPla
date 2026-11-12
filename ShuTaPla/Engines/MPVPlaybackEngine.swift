@@ -47,7 +47,7 @@ class MPVPlaybackEngine: SourceNavigating {
     /// (a fresh `load` resets it to play). A `.local` file loads and applies this at once; a
     /// deferred evicted-file load reads it on arrival so a channel paused/suppressed while the
     /// file downloaded doesn't auto-start when its bytes land.
-    private var wantsPlayback = true
+    private(set) var wantsPlayback = true
 
     /// The file the engine considers current. `nil` when stopped or idle. Set on
     /// load and used as the anchor for advance/previous.
@@ -287,7 +287,12 @@ class MPVPlaybackEngine: SourceNavigating {
                 // paired `eof-reached` flip as redundant; the wrap doesn't (a stale eof there
                 // only re-wraps harmlessly).
                 if advance {
-                    if advanceToNext() { forwardStepReachedEnd = true } else { seek(to: 0) }
+                    if advanceToNext() {
+                        forwardStepReachedEnd = true
+                        if let next = currentFile { source?.engineDidStepPastEnd(to: next) }
+                    } else {
+                        seek(to: 0)
+                    }
                 }
             }
         case .fileLoaded:

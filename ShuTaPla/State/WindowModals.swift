@@ -11,7 +11,7 @@ import Foundation
 enum WindowModal {
     case confirmation(PendingConfirmation)
     case report(ErrorNotice)
-    case typeChoice(PendingPlaylist)
+    case typeChoice(ScannedFolder)
     case folderPick(FolderPick)
     case quitWait
 
@@ -46,8 +46,8 @@ enum WindowModal {
         if case .report(let notice) = self { notice } else { nil }
     }
 
-    var typeChoice: PendingPlaylist? {
-        if case .typeChoice(let pending) = self { pending } else { nil }
+    var typeChoice: ScannedFolder? {
+        if case .typeChoice(let folder) = self { folder } else { nil }
     }
 
     var folderPick: FolderPick? {

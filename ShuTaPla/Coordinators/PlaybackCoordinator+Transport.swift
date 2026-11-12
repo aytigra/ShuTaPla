@@ -28,7 +28,7 @@ extension PlaybackCoordinator {
     func unpause(_ playlist: Playlist) {
         guard isLive(playlist) else { return }
         playlist.playbackState = .playing
-        if !isSuppressed { resume(playlist) }
+        if shouldBePlaying(playlist) { resume(playlist) }
     }
 
     func togglePauseIfActive(_ playlist: Playlist) {
@@ -68,6 +68,11 @@ extension PlaybackCoordinator {
         case nil:
             break
         }
+    }
+
+    /// A forward step past the end of a file is a next-file command the engine carried out itself.
+    func engineDidStepPastEnd(to file: PlaylistFile) {
+        if let playlist = file.playlist { settleStateAfterAdvance(playlist) }
     }
 
     /// Loading the landed-on file auto-starts it, so reconcile the persisted state and the
@@ -127,11 +132,11 @@ extension PlaybackCoordinator {
     }
 
     /// Whether `playlist` should currently be advancing, given global suppression, its own
-    /// paused state, and a visual overlay halt. A `jump`'s `load` auto-starts the file, so this
-    /// gates whether to immediately re-suspend it.
-    private func shouldBePlaying(_ playlist: Playlist) -> Bool {
+    /// paused state, and the visual hold. A `load` auto-starts the file, so `jump` and the
+    /// channel starts gate on this whether to immediately re-suspend it.
+    func shouldBePlaying(_ playlist: Playlist) -> Bool {
         guard playlist.playbackState == .playing, !isSuppressed else { return false }
-        if liveVisualPlaylist === playlist, visualHaltedForOverlay { return false }
+        if liveVisualPlaylist === playlist, isVisualHeld { return false }
         return true
     }
 

@@ -9,10 +9,10 @@ On first launch, the main window shows a welcome state with a prominent button t
 A playlist can be created in three equivalent ways:
 
 1. Welcome-state button.
-2. The New Playlist (`+`) button in the Manager toolbar.
+2. The Add Playlist (`+`) button in the Manager toolbar.
 3. The application menu.
 
-Each path opens a folder picker. Once the new playlist's media type is known, the Manager switches to the matching Scope (image, video, or audio) and loads the new playlist as the Managed Playlist, **Stopped** — these paths create it for management without starting playback (an audio creation, like an audio selection, first stops whichever Audio Channel Playlist was live). The Player-mode overlays add a fourth and fifth entry point through the `+` in their playlist selectors; there, consistent with selecting in those overlays, the new playlist **starts playing** immediately on its channel, and the Manager Scope is left unchanged. Stopping the Visual Channel Playlist hands it back to Manager mode as the Managed Playlist, so creation from overlay during Player-mode never has to sync it to Managed Playlist separately; because the Visual Channel only ever holds video or image playlists, stopping it can never enter the Manager managing an audio playlist.
+Each path opens a folder picker. A creation that completes in Manager mode or the welcome state switches the Manager to the matching Scope (image, video, or audio) and loads the new playlist as the Managed Playlist, **Stopped** — it is created for management without starting playback (an audio creation, like an audio selection, first stops whichever Audio Channel Playlist was live). The Player-mode overlays add a fourth and fifth entry point through the `+` in their playlist selectors. A creation that completes in Player mode, from any entry point, only adds the new **Stopped** playlist to its type's playlist lists; the Manager Scope, the Managed Playlist, both channels and the overlays stay as they are. The mode at completion decides, not the entry point: a scan or a Mixed-folder type choice can outlast a switch between Manager and Player mode.
 
 When a folder is read, the app classifies its contents by media type. A folder is **dominant** in one type when the other types are only an incidental minority (for example, a handful of album-cover images among many audio tracks) — concretely, when at least 80% of the recognized media files are of that type:
 
@@ -37,7 +37,7 @@ Each playlist stores:
 - Its own preferences: volume (relative to system volume, default 100%), slideshow interval, slideshow enabled, file-position persistence, image fit mode, list/gallery mode.
 - Its state: playback state (Stopped / Playing / Paused), current file, file-position, filter state, search history, frequently-used-tag ordering (see relevant sections below).
 
-A playlist keeps its folder. When the folder moves or is renamed, the playlist follows it. A folder in the Trash counts as deleted; after Put Back the playlist finds it at its original place. When the folder can't be found, the app doesn't ask the user to locate it: the folder picker grants access to whatever folder is picked, and the files on disk are the source of truth. For a folder on a disk that isn't connected, the user connects the disk; for a deleted folder, the user deletes the playlist and adds the folder again. Deleting a playlist needs no folder access.
+A playlist keeps its folder. When the folder moves or is renamed, the playlist follows it. A folder in the Trash counts as deleted; after Put Back the playlist finds it at its original place. When the folder can't be found, the app doesn't ask the user to locate it: the folder picker grants access to whatever folder is picked, and the files on disk are the source of truth. For a folder on a disk that isn't connected, the user connects the disk; for a deleted folder, the user deletes the playlist and adds the folder again. Starting a playlist whose folder can't be found shows a notice saying so and changes nothing else: the channel keeps its playlist, the window stays in its mode, and an overlay the playlist was picked from stays open. A playlist that was playing or paused at quit and whose folder can't be found at launch shows the same notice and is stopped; with no visual playlist resumed, the window opens in Manager mode. Deleting a playlist needs no folder access.
 
 ### Global settings
 
@@ -71,7 +71,7 @@ A playlist is always in one of three states:
 ### Transitions between states
 
 - **Selecting** a visual playlist in Manager mode (from the left playlists panel) puts it in **Stopped** state and shows it as the Managed Playlist. **Selecting an audio playlist** in Manager mode makes it the **Stopped** Audio Channel Playlist; because only one Audio Channel Playlist is ever live, this first stops whichever audio playlist was playing.
-- **Selecting** a playlist from the Visual Overlay's selector during Player mode immediately starts **Playing** the selected playlist on the Visual Channel. Likewise, selecting an audio playlist from the Audio Overlay starts it playing on the Audio Channel.
+- **Selecting** a different playlist from the Visual Overlay's selector during Player mode immediately starts **Playing** it on the Visual Channel and closes the overlay. Likewise, selecting a different audio playlist from the Audio Overlay starts it playing on the Audio Channel and closes the overlay.
 - **Play** (the Manager toolbar's Play button, or the Audio Inlet's / Audio Overlay's Play control) transitions to **Playing**, starting from the playlist's last-played or first file. The position within that file is honored only when file-position persistence is enabled for the playlist; otherwise it starts from the beginning of the file. See [File-position persistence](#file-position-persistence).
 - **Double-clicking a file** in a file list (whether in Manager mode or in the Visual Overlay during play) transitions to **Playing** starting from that file. As with Play, the position within that file is honored only when file-position persistence is enabled; otherwise it starts from the beginning.
 - **`[p]`** activates Suppression (see [Suppression vs per-playlist pause](playback-controls.md#suppression-vs-per-playlist-pause)); playlist states are unchanged.
@@ -99,6 +99,6 @@ In short: relaunch always continues where it was left off; every other start res
 
 ## Playlist switching (Player mode)
 
-Quick switching during playback lives in the overlays' playlist selectors: the Visual Overlay's selector for the active visual type, and the Expanded Audio Overlay's selector for audio. Both list one media type, offer a `+` to add a playlist from a folder, and start a playlist playing the moment it's selected.
+Quick switching during playback lives in the overlays' playlist selectors: the [Visual Overlay](players.md#visual-overlay)'s for video and image playlists, and the [Expanded Audio Overlay](players.md#audio-overlay-player-mode)'s for audio.
 
 Full management of every playlist — video, image, and audio — (create, rename, delete, reorder) is available only in Manager mode via the left collapsible panel; the Player-mode selectors are quick switchers that also Update and recenter the current file of their channel's playlist.

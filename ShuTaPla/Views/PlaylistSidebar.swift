@@ -27,7 +27,7 @@ struct PlaylistSidebar: View {
         .listStyle(.sidebar)
         .overlay {
             if playlists.isEmpty {
-                NoPlaylistsPlaceholder(mediaType: appState.managerScope)
+                NoPlaylistsPlaceholder(mediaTypes: [appState.managerScope])
             }
         }
         .safeAreaInset(edge: .top) {

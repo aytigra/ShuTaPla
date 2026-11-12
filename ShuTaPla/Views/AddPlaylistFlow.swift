@@ -20,15 +20,15 @@ struct AddPlaylistFlow: ViewModifier {
                 isPresented: appState.isPresented(.typeChoice) { appState.pendingTypeChoice = nil },
                 titleVisibility: .visible,
                 presenting: appState.pendingTypeChoice
-            ) { pending in
-                ForEach(pending.typeChoices, id: \.self) { type in
-                    Button(pending.choiceLabel(for: type)) {
+            ) { folder in
+                ForEach(folder.typeChoices, id: \.self) { type in
+                    Button(folder.choiceLabel(for: type)) {
                         appState.confirmPendingTypeChoice(type)
                     }
                 }
                 Button("Cancel", role: .cancel) {}
-            } message: { pending in
-                Text("“\(pending.name)” has a mix of media. Which type should this playlist be?")
+            } message: { folder in
+                Text("“\(folder.name)” has a mix of media. Which type should this playlist be?")
             }
     }
 }

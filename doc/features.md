@@ -35,7 +35,7 @@ Capitalized terms below are used precisely throughout this document.
 - **Pause Overlay** — the opaque Player-mode overlay (Unpause / Stop) shown while Suppression is active.
 - **Scope** — the sidebar's playlist-type filter in Manager mode (Image / Video / Audio), chosen via the **Scope Tabs**; it selects which playlists can become the Managed Playlist and nothing more.
 - **Service Filter** — a playlist's optional non-tag filter (Untagged / Invalid tagging), separate from the tag filter.
-- **Suppression** — the single transient layer that halts all playback over the per-playlist states (`playback = playing && !suppression`).
+- **Suppression** — the single transient layer that halts all playback over the per-playlist states.
 - **Key Context** — the routing target (Visual Channel or Audio Overlay) that currently receives arrow / `[space]` / `[l]` / seek keys.
 - **Tag Editor** — the multi-select tag-input control used identically in the Manager inspector, the Visual Overlay, and the Audio Overlay.
 - **Filter Strip** — the row at the top of the file list on those same three surfaces, holding everything that narrows a playlist: the four-field tag filter (collapsed behind a caret), the saved searches over it, and the triage counters (untagged / invalid tagging / skipped).

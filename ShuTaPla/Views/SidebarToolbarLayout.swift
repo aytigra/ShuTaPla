@@ -2,7 +2,7 @@
 //  SidebarToolbarLayout.swift
 //  ShuTaPla
 //
-//  Where the Manager's sidebar controls — the scope tabs and New Playlist — go, in both of their
+//  Where the Manager's sidebar controls — the scope tabs and the `+` button — go, in both of their
 //  homes. While the sidebar is open they live in a leading titlebar accessory spanning from its own
 //  origin (just right of the traffic lights) to the sidebar divider, tabs flush leading and the `+`
 //  on the divider; an accessory is not a toolbar item, so nothing can push a control into an

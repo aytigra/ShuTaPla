@@ -55,6 +55,11 @@ final class AppState {
     /// the lightbox view; driven from `togglePreviewOfSelection()`.
     let preview: MediaPreview
 
+    /// Player-mode overlay visibility. Owned here because a playlist switch from an overlay closes
+    /// it and the Visual Overlay's visibility drives the coordinator's visual hold; injected into
+    /// the views and `HotkeyRouter`.
+    let overlays = OverlayManager()
+
     /// Runs the Update path's file reconciliation on its own `ModelContext` off the main actor,
     /// so a re-scan's O(N) derive/diff/write never blocks the UI. Built from the shared container.
     let scanActor: PlaylistScanActor
@@ -121,7 +126,7 @@ final class AppState {
 
     /// The audio overlay's counterpart to `scrollSelectionToken`: bumped by
     /// `playOnAudioChannel` so the extended overlay's file list scrolls the current track
-    /// into view when a playlist is (re-)selected while the overlay is already open.
+    /// into view when the live audio playlist is re-selected while the overlay is open.
     var audioScrollToken = 0
 
     /// The Observation gate the sidebar lists derive against — `sequences.version` for the playlist
@@ -201,7 +206,7 @@ final class AppState {
 
     /// A scanned Mixed folder awaiting the user's media-type choice. While non-nil the add
     /// flow's choice dialog owns the keyboard.
-    var pendingTypeChoice: PendingPlaylist? {
+    var pendingTypeChoice: ScannedFolder? {
         get { windowModals.queue.lazy.compactMap(\.typeChoice).first }
         set { updateModals { $0.set(.typeChoice, to: newValue.map(WindowModal.typeChoice)) } }
     }
@@ -289,7 +294,9 @@ final class AppState {
             do { try self.persist() } catch { report(.saveFailed(error.localizedDescription)) }
         }
 
+        coordinator.onLostFolder = { [weak self] in self?.report(.folderNotFound($0.name)) }
         playlistWork.onDeleteEnded = { [weak self] in self?.quitAfterWait() }
+        overlays.onVisualOverlayChange = { [coordinator] in coordinator.setVisualHeld($0) }
 
         resolveActivePlaylists()
         reconstructPlayback()
@@ -330,7 +337,7 @@ final class AppState {
         playlistsVersion &+= 1
     }
 
-    /// The playlists of `mediaType` in section order — what the two sidebar lists render, in place
+    /// The playlists of `mediaType` in section order — what the Manager sidebar renders, in place
     /// of a live `@Query<Playlist>` (see `playlistsVersion` for why there is no query).
     ///
     /// Reading the version here is the Observation dependency: the fetch itself registers none, so
@@ -340,6 +347,16 @@ final class AppState {
     func playlists(ofType mediaType: MediaType) -> [Playlist] {
         _ = playlistsVersion
         return modelContext.playlists(ofType: mediaType)
+    }
+
+    /// The non-empty per-type groups of `types`' playlists, in the order of `types`; gated on the
+    /// same version as `playlists(ofType:)`.
+    func playlistSections(of types: [MediaType]) -> [PlaylistSection] {
+        _ = playlistsVersion
+        let byType = Dictionary(grouping: modelContext.playlistsInSectionOrder(), by: \.mediaType)
+        return types.compactMap { type in
+            byType[type].map { PlaylistSection(mediaType: type, playlists: $0) }
+        }
     }
 
     /// A playlist's file count for its row badge, gated on the same version — `Playlist.fileCount`

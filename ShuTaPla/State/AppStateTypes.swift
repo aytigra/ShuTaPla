@@ -2,8 +2,7 @@
 //  AppStateTypes.swift
 //  ShuTaPla
 //
-//  The small value types the `AppState` orchestration passes around: the window's
-//  current mode, a grid navigation step, and the playlist-creation payloads.
+//  The small value types the `AppState` orchestration passes around.
 //
 
 import Foundation
@@ -20,16 +19,16 @@ enum MoveDirection {
     case up, down, left, right
 }
 
-/// A scanned folder awaiting a media-type decision because no type dominated it
-/// (a Mixed folder). The view presents the choice and calls back with the type.
-struct PendingPlaylist {
+/// A picked folder, bookmarked and scanned: everything a new playlist over it needs except its
+/// media type. A Mixed folder waits in `AppState.pendingTypeChoice` until the user picks one.
+struct ScannedFolder {
     let name: String
     let bookmark: Data
     let folderPath: String
     let scan: ScanResult
 }
 
-extension PendingPlaylist {
+extension ScannedFolder {
     /// Media types present in the Mixed folder, ordered by frequency (most first) —
     /// the choices the type dialog offers.
     var typeChoices: [MediaType] {
@@ -57,10 +56,17 @@ enum AddPlaylistOutcome {
     /// A single dominant type was detected; the playlist was created.
     case created(Playlist)
     /// The folder is Mixed; the caller must prompt for a media type and then
-    /// call `confirmPlaylist(_:mediaType:)`.
-    case needsTypeChoice(PendingPlaylist)
+    /// call `makePlaylist(from:mediaType:)`.
+    case needsTypeChoice(ScannedFolder)
     /// No recognized media files were found.
     case empty
     /// Bookmark creation or scanning failed.
     case failed(String)
+}
+
+/// One media type's playlists, as a playlist selector groups them.
+struct PlaylistSection: Identifiable {
+    let mediaType: MediaType
+    let playlists: [Playlist]
+    var id: MediaType { mediaType }
 }

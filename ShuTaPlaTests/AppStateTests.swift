@@ -223,6 +223,28 @@ struct AppStateTests {
         #expect(appState.coordinator.liveAudioPlaylist === audio)
     }
 
+    /// A relaunch whose playing playlists' folders can't be found reports each one, marks it
+    /// Stopped, and stays in Manager.
+    @Test func launchReportsPlaylistsWhoseFoldersAreGone() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let visual = makeUnresolvablePlaylist("Pics", file: "i.jpg", type: .image, in: context)
+        visual.playbackState = .playing
+        let audio = makeUnresolvablePlaylist("Tunes", file: "a.mp3", type: .audio, in: context)
+        audio.playbackState = .playing
+        AppStateModel.fetchOrCreate(in: context).audioChannelPlaylistId = audio.id
+        try context.save()
+
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+
+        #expect(appState.mode == .manager)
+        #expect(appState.coordinator.liveVisualPlaylist == nil)
+        #expect(visual.playbackState == .stopped)
+        #expect(audio.playbackState == .stopped)
+        #expect(appState.windowModals.queue.compactMap(\.report) == [.folderNotFound("Tunes"), .folderNotFound("Pics")])
+    }
+
     /// A relaunch with everything Stopped stays in Manager and rebuilds no channel.
     @Test func launchWithAllStoppedStaysInManager() throws {
         let container = try makeContainer()
@@ -376,13 +398,13 @@ struct AppStateTests {
 
         let outcome = await appState.addPlaylist(from: dir)
 
-        guard case .needsTypeChoice(let pending) = outcome else {
+        guard case .needsTypeChoice(let folder) = outcome else {
             Issue.record("expected .needsTypeChoice, got \(outcome)")
             return
         }
         #expect(appState.mode == .welcome)  // not created yet
 
-        let playlist = appState.confirmPlaylist(pending, mediaType: .image)
+        let playlist = appState.makePlaylist(from: folder, mediaType: .image)
         await appState.updateTask?.value   // drain the background tag derivation
         #expect(playlist.mediaType == .image)
         #expect(appState.mode == .manager)
@@ -415,11 +437,11 @@ struct AppStateTests {
 
     @Test func pendingTypeChoiceOrdersByFrequencyAndLabelsWithCounts() {
         let scan = ScanResult(files: [], counts: [.video: 1, .image: 3, .audio: 2], dominantType: nil)
-        let pending = PendingPlaylist(name: "Mix", bookmark: Data(), folderPath: "/mix", scan: scan)
+        let folder = ScannedFolder(name: "Mix", bookmark: Data(), folderPath: "/mix", scan: scan)
 
-        #expect(pending.typeChoices == [.image, .audio, .video])   // most files first
-        #expect(pending.choiceLabel(for: .image) == "Image (3)")
-        #expect(pending.choiceLabel(for: .video) == "Video (1)")
+        #expect(folder.typeChoices == [.image, .audio, .video])   // most files first
+        #expect(folder.choiceLabel(for: .image) == "Image (3)")
+        #expect(folder.choiceLabel(for: .video) == "Video (1)")
     }
 
     @Test func importPlaylistFromMixedFolderRaisesTypeChoiceThenCreates() async throws {
@@ -2150,8 +2172,8 @@ struct AppStateTests {
         defer { try? FileManager.default.removeItem(at: dirB) }
         let scan = ScanResult(files: [scanned("b [beach].jpg", .image)], counts: [.image: 1], dominantType: .image)
         let created = appState.makePlaylist(
-            name: "B", bookmark: try BookmarkService.makeBookmark(for: dirB), folderPath: dirB.path,
-            scan: scan, mediaType: .image
+            from: ScannedFolder(name: "B", bookmark: try BookmarkService.makeBookmark(for: dirB), folderPath: dirB.path, scan: scan),
+            mediaType: .image
         )
         let derive = try #require(appState.playlistWork.task(for: created.id))
         #expect(appState.cancelInProgressOperation())
@@ -4142,11 +4164,10 @@ struct AppStateTests {
         let container = try makeContainer()
         let context = container.mainContext
         let video = Playlist(name: "V", folderBookmark: Data(), folderPath: "/v", mediaType: .video)
-        let audio = Playlist(name: "A", folderBookmark: Data(), folderPath: "/a", mediaType: .audio)
         context.insert(video)
-        context.insert(audio)
         addFile("v.mp4", order: 0, to: video, in: context)
-        addFile("a.mp3", order: 0, to: audio, in: context)
+        let (audio, dir) = try makeLivePlaylist("A", file: "a.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dir) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
 
@@ -4385,38 +4406,116 @@ struct AppStateTests {
         #expect(storedFiles(of: audio).count == 2)
     }
 
-    @Test func addingAudioPlaylistInPlayerModePlaysNewAndStopsOld() async throws {
+    /// A creation that completes in Player mode, whatever its entry point, only adds the Stopped
+    /// playlist: the channels, their states, the slots, the scope and the overlays stay as they were.
+    @Test(arguments: [MediaType.audio, .image])
+    func creationCompletingInPlayerModeOnlyAddsThePlaylist(mediaType: MediaType) async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let dirA = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dirA) }
-        try Data().write(to: dirA.appending(path: "a.mp3"))
-        let bookmarkA = try BookmarkService.makeBookmark(for: dirA)
-        let a = Playlist(name: "A", folderBookmark: bookmarkA, folderPath: dirA.path, mediaType: .audio)
-        context.insert(a)
-        addFile("a.mp3", order: 0, to: a, in: context)
+        let (visual, visualDir) = try makeLivePlaylist("P", file: "1.png", type: .image, in: context)
+        let (audio, audioDir) = try makeLivePlaylist("A", file: "a.mp3", in: context)
+        let newDir = try makeTempDir()
+        defer { [visualDir, audioDir, newDir].forEach { try? FileManager.default.removeItem(at: $0) } }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
+        appState.startPlayback(of: audio)
+        appState.startPlayback(of: visual)   // enters Player mode and manages `visual`
+        appState.overlays.openVisualOverlay()
+        let visualState = visual.playbackState
+        let audioState = audio.playbackState
+        let overlays = appState.overlays.active
+        let scope = appState.managerScope
 
-        appState.startPlayback(of: a)
-        #expect(appState.coordinator.liveAudioPlaylist === a)
-
-        // Creating a playlist from the player-mode audio overlay (mode == .player) starts it
-        // playing — and switching the audio channel stops the one that was live.
-        appState.mode = .player
-        appState.switchScope(to: .image)   // browsing images; the player-mode create must not switch it
-        let dirB = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dirB) }
-        try Data().write(to: dirB.appending(path: "b.mp3"))
-        let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
-        let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
-        let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+        let file = mediaType == .audio ? "b.mp3" : "2.png"
+        let scan = ScanResult(files: [scanned(file, mediaType)], counts: [mediaType: 1], dominantType: mediaType)
+        let created = appState.makePlaylist(
+            from: ScannedFolder(name: "New", bookmark: try BookmarkService.makeBookmark(for: newDir), folderPath: newDir.path, scan: scan),
+            mediaType: mediaType
+        )
         await appState.updateTask?.value   // drain the background tag derivation
 
-        #expect(appState.audioChannelPlaylist === b)
-        #expect(appState.coordinator.liveAudioPlaylist === b)   // the new playlist is what's playing
-        #expect(a.playbackState == .stopped)                // the previous one stopped
-        #expect(appState.managerScope == .image)            // scope unchanged by a player-mode create
+        #expect(appState.mode == .player)
+        #expect(created.playbackState == .stopped)
+        #expect(appState.coordinator.liveVisualPlaylist === visual)
+        #expect(appState.coordinator.liveAudioPlaylist === audio)
+        #expect(visual.playbackState == visualState)
+        #expect(audio.playbackState == audioState)
+        #expect(appState.managedPlaylist === visual)
+        #expect(appState.lastManagedImagePlaylist === visual)
+        #expect(appState.audioChannelPlaylist === audio)
+        #expect(appState.managerScope == scope)
+        #expect(appState.overlays.active == overlays)
+    }
+
+    @Test func closingTheVisualOverlayResumesAPlayingVisualPlaylist() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (image, dir) = try makeLivePlaylist("P", file: "1.png", type: .image, in: context)
+        image.preferences.slideshowEnabled = true
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let coordinator = appState.coordinator
+
+        appState.startPlayback(of: image)
+        appState.overlays.openVisualOverlay()
+        #expect(!coordinator.imageEngine.slideshowEnabled)
+
+        appState.overlays.closeVisualOverlay()
+        #expect(image.playbackState == .playing)
+        #expect(coordinator.imageEngine.slideshowEnabled)
+        await appState.updateTask?.value
+    }
+
+    /// The hold follows the overlay, so a switch whose folder can't be opened leaves the channel
+    /// empty and the next playlist still loads held.
+    @Test func visualHoldOutlastsAFailedSwitch() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dirA) = try makeLivePlaylist("A", file: "a.png", type: .image, in: context)
+        let (c, dirC) = try makeLivePlaylist("C", file: "c.png", type: .image, in: context)
+        c.preferences.slideshowEnabled = true
+        defer { try? FileManager.default.removeItem(at: dirA); try? FileManager.default.removeItem(at: dirC) }
+        let unresolvable = makeUnresolvablePlaylist("B", file: "b.png", type: .image, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let coordinator = appState.coordinator
+
+        appState.startPlayback(of: a)
+        appState.overlays.openVisualOverlay()
+        appState.startPlayback(of: unresolvable)
+        try #require(coordinator.liveVisualPlaylist === a)   // refused: the empty bookmark doesn't resolve
+
+        appState.startPlayback(of: c)
+        #expect(coordinator.liveVisualPlaylist === c)
+        #expect(!coordinator.imageEngine.slideshowEnabled)   // loads held under the open overlay
+
+        appState.overlays.closeVisualOverlay()
+        #expect(coordinator.imageEngine.slideshowEnabled)
+        await appState.updateTask?.value
+    }
+
+    /// Leaving Player mode with the Visual Overlay open closes it and releases the hold, so the
+    /// next playback starts advancing.
+    @Test func exitingPlayerReleasesTheVisualHold() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (image, dir) = try makeLivePlaylist("P", file: "1.png", type: .image, in: context)
+        image.preferences.slideshowEnabled = true
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let coordinator = appState.coordinator
+
+        appState.startPlayback(of: image)
+        appState.overlays.openVisualOverlay()
+        appState.stopAndExitPlayer()
+
+        #expect(appState.overlays.active.isEmpty)
+        #expect(!coordinator.isVisualHeld)
+        appState.startPlayback(of: image)
+        #expect(coordinator.imageEngine.slideshowEnabled)
+        await appState.updateTask?.value
     }
 
     @Test func addingAudioPlaylistInManagerModeSelectsStoppedAndStopsOld() async throws {
@@ -4443,7 +4542,9 @@ struct AppStateTests {
         try Data().write(to: dirB.appending(path: "b.mp3"))
         let bookmarkB = try BookmarkService.makeBookmark(for: dirB)
         let scan = ScanResult(files: [scanned("b.mp3", .audio)], counts: [.audio: 1], dominantType: .audio)
-        let b = appState.makePlaylist(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan, mediaType: .audio)
+        let b = appState.makePlaylist(
+            from: ScannedFolder(name: "B", bookmark: bookmarkB, folderPath: dirB.path, scan: scan), mediaType: .audio
+        )
         await appState.updateTask?.value   // drain the background tag derivation
 
         #expect(appState.audioChannelPlaylist === b)
@@ -4453,42 +4554,133 @@ struct AppStateTests {
         #expect(appState.managerScope == .audio)             // Manager-mode create switches scope
     }
 
-    @Test func playOnVisualChannelPlaysNewAndReCentersEachClick() async throws {
+    /// The Visual Overlay's selector: re-selecting the playing playlist re-scans and re-centers
+    /// with the overlay left open; a different playlist starts playing and closes the overlay.
+    @Test func playOnVisualChannelClosesTheOverlayOnANewSelectionOnly() async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let dir1 = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dir1) }
-        try Data().write(to: dir1.appending(path: "1.png"))
-        let b1 = try BookmarkService.makeBookmark(for: dir1)
-        let p1 = Playlist(name: "P1", folderBookmark: b1, folderPath: dir1.path, mediaType: .image)
-        context.insert(p1)
-        addFile("1.png", order: 0, to: p1, in: context)
-        let dir2 = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dir2) }
-        try Data().write(to: dir2.appending(path: "2.png"))
-        let b2 = try BookmarkService.makeBookmark(for: dir2)
-        let p2 = Playlist(name: "P2", folderBookmark: b2, folderPath: dir2.path, mediaType: .image)
-        context.insert(p2)
-        addFile("2.png", order: 0, to: p2, in: context)
+        let (p1, dir1) = try makeLivePlaylist("P1", file: "1.png", type: .image, in: context)
+        let (p2, dir2) = try makeLivePlaylist("P2", file: "2.png", type: .image, in: context)
+        defer { try? FileManager.default.removeItem(at: dir1); try? FileManager.default.removeItem(at: dir2) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
-
         appState.startPlayback(of: p1)
-        #expect(appState.coordinator.liveVisualPlaylist === p1)
+        appState.overlays.openVisualOverlay()
 
-        // Switching to a different playlist in the overlay starts it playing and re-centers.
         let token0 = appState.scrollSelectionToken
-        appState.playOnVisualChannel(p2)
-        #expect(appState.coordinator.liveVisualPlaylist === p2)   // a new selection plays
-        #expect(appState.scrollSelectionToken > token0)        // asks the file list to re-center
+        appState.playOnVisualChannel(p1)
         await appState.updateTask?.value
+        #expect(appState.coordinator.liveVisualPlaylist === p1)
+        #expect(appState.scrollSelectionToken > token0)
+        #expect(appState.overlays.isVisualOverlayOpen)
 
-        // Re-clicking the already-playing playlist re-centers again without restarting it.
         let token1 = appState.scrollSelectionToken
         appState.playOnVisualChannel(p2)
+        await appState.updateTask?.value
         #expect(appState.coordinator.liveVisualPlaylist === p2)
         #expect(appState.scrollSelectionToken > token1)
+        #expect(!appState.overlays.isVisualOverlayOpen)
+    }
+
+    /// A playlist whose folder can't be opened is refused before anything switches: the previous
+    /// playlist stays live and managed, the overlay stays open, and the folder is reported missing.
+    @Test func playOnVisualChannelRefusesAPlaylistWhoseFolderIsGone() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dirA) = try makeLivePlaylist("A", file: "a.png", type: .image, in: context)
+        defer { try? FileManager.default.removeItem(at: dirA) }
+        let gone = makeUnresolvablePlaylist("B", file: "b.png", type: .image, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.startPlayback(of: a)
+        appState.overlays.openVisualOverlay()
+
+        appState.playOnVisualChannel(gone)
         await appState.updateTask?.value
+        #expect(appState.coordinator.liveVisualPlaylist === a)
+        #expect(a.playbackState == .playing)
+        #expect(appState.managedPlaylist === a)
+        #expect(appState.overlays.isVisualOverlayOpen)
+        #expect(appState.errorNotice == .folderNotFound("B"))
+    }
+
+    @Test func playOnAudioChannelRefusesAPlaylistWhoseFolderIsGone() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dirA) = try makeLivePlaylist("A", file: "a.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dirA) }
+        let gone = makeUnresolvablePlaylist("B", file: "b.mp3", type: .audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        appState.startPlayback(of: a)
+        appState.overlays.expandAudioToExtended()
+
+        appState.playOnAudioChannel(gone)
+        #expect(appState.coordinator.liveAudioPlaylist === a)
+        #expect(appState.audioChannelPlaylist === a)
+        #expect(appState.overlays.active.contains(.audioExtended))
+        #expect(appState.errorNotice == .folderNotFound("B"))
+        await appState.updateTask?.value
+    }
+
+    @Test func startPlaybackStaysInManagerWhenTheFolderIsGone() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let gone = makeUnresolvablePlaylist("B", file: "b.png", type: .image, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let mode = appState.mode
+
+        appState.startPlayback(of: gone)
+        #expect(appState.mode == mode)
+        #expect(appState.coordinator.liveVisualPlaylist == nil)
+        #expect(appState.errorNotice == .folderNotFound("B"))
+        await appState.updateTask?.value
+    }
+
+    /// The transport's starts (the audio Play, a file double-click in an overlay) go to the
+    /// coordinator directly and report a lost folder too.
+    @Test func transportStartsReportAPlaylistWhoseFolderIsGone() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let toggled = makeUnresolvablePlaylist("B", file: "b.mp3", type: .audio, in: context)
+        let jumped = makeUnresolvablePlaylist("C", file: "c.mp3", type: .audio, in: context)
+        let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
+        defer { appState.coordinator.shutdown() }
+        let file = try #require(jumped.files.first)
+
+        appState.coordinator.playOrTogglePause(toggled)
+        appState.coordinator.playNow(jumped, startingAt: file)
+        #expect(appState.coordinator.liveAudioPlaylist == nil)
+        #expect(appState.windowModals.queue.compactMap(\.report) == [.folderNotFound("B"), .folderNotFound("C")])
+    }
+
+    /// The Expanded Audio Overlay's selector: re-selecting the loaded playlist leaves the overlay
+    /// open; a different playlist starts playing and closes it.
+    @Test func playOnAudioChannelClosesTheOverlayOnANewSelectionOnly() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let (a, dirA) = try makeLivePlaylist("A", file: "t.mp3", in: context)
+        let (b, dirB) = try makeLivePlaylist("B", file: "t.mp3", in: context)
+        defer { try? FileManager.default.removeItem(at: dirA); try? FileManager.default.removeItem(at: dirB) }
+        let appState = AppState(
+            modelContext: context,
+            fileSystem: StubFileSystem(result: emptyResult, rescanResult: [scanned("t.mp3", .audio)])
+        )
+        defer { appState.coordinator.shutdown() }
+        appState.playOnAudioChannel(a)
+        await appState.updateTask?.value
+        #expect(appState.coordinator.liveAudioPlaylist === a)
+        appState.overlays.expandAudioToExtended()
+
+        appState.playOnAudioChannel(a)
+        await appState.updateTask?.value
+        #expect(appState.overlays.active.contains(.audioExtended))
+
+        appState.playOnAudioChannel(b)
+        await appState.updateTask?.value
+        #expect(appState.coordinator.liveAudioPlaylist === b)
+        #expect(appState.overlays.active.isEmpty)
     }
 
     @Test func audioRescanAdvancesOffARemovedPlayingTrack() async throws {
@@ -4628,25 +4820,38 @@ struct AppStateTests {
     // window-free `AudioPlaybackEngine` (`vo=null`) plays it, the empty file fails to load
     // (so no natural-EOF advance touches a model after teardown), and `shutdown()` is deferred.
 
-    /// Builds an audio playlist backed by a real temp folder with one empty placeholder file,
+    /// Builds a playlist backed by a real temp folder with one empty placeholder file,
     /// so `coordinator.play` can engage the engine. Returns the folder so the caller can
     /// remove it; the caller owns (and holds) the `ModelContainer` behind `context`.
     @MainActor
-    private func makeLiveAudioPlaylist(_ name: String, file: String, in context: ModelContext) throws -> (Playlist, URL) {
+    private func makeLivePlaylist(
+        _ name: String, file: String, type: MediaType = .audio, in context: ModelContext
+    ) throws -> (Playlist, URL) {
         let dir = try makeTempDir()
         try Data().write(to: dir.appending(path: file))
         let bookmark = try BookmarkService.makeBookmark(for: dir)
-        let playlist = Playlist(name: name, folderBookmark: bookmark, folderPath: dir.path, mediaType: .audio)
+        let playlist = Playlist(name: name, folderBookmark: bookmark, folderPath: dir.path, mediaType: type)
         context.insert(playlist)
         addFile(file, order: 0, to: playlist, in: context)
         return (playlist, dir)
     }
 
+    /// A playlist whose empty bookmark never resolves, as for a deleted folder or a disconnected disk.
+    @discardableResult
+    private func makeUnresolvablePlaylist(
+        _ name: String, file: String, type: MediaType, in context: ModelContext
+    ) -> Playlist {
+        let playlist = Playlist(name: name, folderBookmark: Data(), folderPath: "/missing", mediaType: type)
+        context.insert(playlist)
+        addFile(file, order: 0, to: playlist, in: context)
+        return playlist
+    }
+
     @Test func managerAudioSelectStopsThePreviouslyPlayingPlaylist() async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (a, dirA) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
-        let (b, dirB) = try makeLiveAudioPlaylist("B", file: "b.mp3", in: context)
+        let (a, dirA) = try makeLivePlaylist("A", file: "a.mp3", in: context)
+        let (b, dirB) = try makeLivePlaylist("B", file: "b.mp3", in: context)
         defer { try? FileManager.default.removeItem(at: dirA); try? FileManager.default.removeItem(at: dirB) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -4668,7 +4873,7 @@ struct AppStateTests {
     @Test func reselectingTheActiveAudioPlaylistKeepsItPlaying() async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (a, dir) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
+        let (a, dir) = try makeLivePlaylist("A", file: "a.mp3", in: context)
         defer { try? FileManager.default.removeItem(at: dir) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -4698,7 +4903,7 @@ struct AppStateTests {
     @Test func inletPlayStartsTheFirstAudioPlaylistWhenSomeExist() throws {
         let container = try makeContainer()
         let context = container.mainContext
-        let (audio, dir) = try makeLiveAudioPlaylist("A", file: "a.mp3", in: context)
+        let (audio, dir) = try makeLivePlaylist("A", file: "a.mp3", in: context)
         defer { try? FileManager.default.removeItem(at: dir) }
         let appState = AppState(modelContext: context, fileSystem: StubFileSystem(result: emptyResult))
         defer { appState.coordinator.shutdown() }
@@ -4709,9 +4914,9 @@ struct AppStateTests {
         #expect(appState.folderPick == nil)
     }
 
-    // MARK: - New Playlist switches scope (audio manager redesign — Phase 3)
+    // MARK: - Toolbar `+` switches scope (audio manager redesign — Phase 3)
     //
-    // The toolbar's New Playlist runs through the same `addPlaylist` creation chokepoint as
+    // The toolbar's `+` runs through the same `addPlaylist` creation chokepoint as
     // every other add path, so creating a playlist switches the Manager to the created type's
     // scope and makes it that scope's selection. No engine: a visual create stays off libmpv,
     // and an audio create activates the playlist without starting it.
@@ -5095,7 +5300,7 @@ struct AppStateTests {
 
         appState.windowHasSheet = true        // the report is on screen
         appState.dismissErrorNotice()
-        appState.pendingTypeChoice = PendingPlaylist(
+        appState.pendingTypeChoice = ScannedFolder(
             name: "Mix", bookmark: Data(), folderPath: "/mix",
             scan: ScanResult(files: [], counts: [.video: 1, .image: 1], dominantType: nil)
         )

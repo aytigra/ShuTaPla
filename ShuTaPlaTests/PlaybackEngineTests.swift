@@ -255,6 +255,7 @@ import SwiftData
         engine.handle(.forwardStepSettled(50, frames: 1))
 
         #expect(source.advancedTo == [second.id])
+        #expect(source.steppedPastEndTo == [second.id])
     }
 
     @Test func deadForwardStepWithNoSuccessorWrapsToStart() throws {
@@ -279,6 +280,7 @@ import SwiftData
         engine.handle(.forwardStepSettled(58, frames: 1))   // dead: no next keyframe, settled == origin
 
         #expect(source.advancedTo.isEmpty)                  // nothing to advance to
+        #expect(source.steppedPastEndTo.isEmpty)
         #expect(engine.currentTime == 0)                    // wrapped to the start instead
     }
 
@@ -336,6 +338,7 @@ import SwiftData
         engine.handle(.endFile(.eof))                       // B plays to its own genuine end
 
         #expect(source.advancedTo == [second.id, third.id]) // B's real end still advances to C
+        #expect(source.steppedPastEndTo == [second.id])     // only the step's advance is a command
     }
 
     @Test func forwardStepThatLandedAheadDoesNotAdvance() throws {
@@ -822,6 +825,7 @@ final class MockPlaybackSource: PlaybackSource {
     private(set) var fileAfterCalls = 0
     private(set) var fileBeforeCalls = 0
     private(set) var advancedTo: [UUID] = []
+    private(set) var steppedPastEndTo: [UUID] = []
     private(set) var downloadRequests: [UUID] = []
 
     init(files: [PlaylistFile] = []) { self.files = files }
@@ -841,6 +845,8 @@ final class MockPlaybackSource: PlaybackSource {
     func url(for file: PlaylistFile) -> URL? { urlByID[file.id] }
 
     func engineDidAdvance(to file: PlaylistFile) { advancedTo.append(file.id) }
+
+    func engineDidStepPastEnd(to file: PlaylistFile) { steppedPastEndTo.append(file.id) }
 
     func requestDownload(_ file: PlaylistFile) { downloadRequests.append(file.id) }
 }

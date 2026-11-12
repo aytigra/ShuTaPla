@@ -5,21 +5,24 @@
 //  ModelContext+Playlists.swift
 //  ShuTaPla
 //
-//  One place that yields a sidebar section's playlists, so the spots that need a
-//  single media type's playlists (next sort order, compaction) share it rather
-//  than each fetching and filtering by hand.
+//  One place that yields playlists in section order, so the spots that need them
+//  (the selectors, next sort order, compaction) share it rather than each fetching
+//  and filtering by hand.
 //
 
 import Foundation
 import SwiftData
 
 extension ModelContext {
-    /// The playlists of `mediaType`, ordered by their section `sortOrder`. The fetch
-    /// sorts; the media type is filtered in memory because SwiftData can't translate a
-    /// predicate over the stored enum property.
-    func playlists(ofType mediaType: MediaType) -> [Playlist] {
+    /// Every playlist, ordered by its section `sortOrder`. Callers filter by media type in
+    /// memory because SwiftData can't translate a predicate over the stored enum property.
+    func playlistsInSectionOrder() -> [Playlist] {
         let descriptor = FetchDescriptor<Playlist>(sortBy: [SortDescriptor(\.sortOrder)])
-        let all = (try? fetch(descriptor)) ?? []
-        return all.filter { $0.mediaType == mediaType }
+        return (try? fetch(descriptor)) ?? []
+    }
+
+    /// The playlists of `mediaType`, ordered by their section `sortOrder`.
+    func playlists(ofType mediaType: MediaType) -> [Playlist] {
+        playlistsInSectionOrder().filter { $0.mediaType == mediaType }
     }
 }

@@ -120,6 +120,37 @@ import SwiftData
         #expect(audio.playbackState == .playing)
     }
 
+    @Test func aStartWithoutAnEngineIsRefused() throws {
+        struct EngineUnavailable: Error {}
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["v.mp4", "i.jpg", "a.mp3"])
+        let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
+        let image = makePlaylist(.image, folder: folder, files: [("i.jpg", [])], in: context)
+        let audio = makePlaylist(.audio, folder: folder, files: [("a.mp3", [])], in: context)
+
+        let folderAccess = ScopedFolderAccess(bookmarkService: BookmarkService())
+        let coordinator = PlaybackCoordinator(
+            folderAccess: folderAccess,
+            sequences: PlaybackSequences(modelContext: context),
+            makeVideoEngine: { throw EngineUnavailable() },
+            makeAudioEngine: { throw EngineUnavailable() }
+        )
+        defer { coordinator.shutdown() }
+        coordinator.play(image)
+
+        #expect(!coordinator.play(video))
+        #expect(coordinator.liveVisualPlaylist === image)
+        #expect(image.playbackState == .playing)
+        #expect(video.playbackState == .stopped)
+        #expect(folderAccess.url(for: video.id) == nil)
+
+        #expect(!coordinator.play(audio))
+        #expect(coordinator.liveAudioPlaylist == nil)
+        #expect(audio.playbackState == .stopped)
+        #expect(folderAccess.url(for: audio.id) == nil)
+    }
+
     // MARK: - Suppression
 
     @Test func suppressHaltsBothChannelsWithoutChangingStates() throws {
@@ -184,17 +215,50 @@ import SwiftData
         let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
-        coordinator.reconstruct(image)
-        coordinator.reconstruct(audio)
-        coordinator.reconstruct(video)
-
         // The paused visual loads onto its channel but stays paused; the playing audio resumes;
         // the stopped one never touches a channel.
+        #expect(coordinator.reconstruct(image))
+        #expect(coordinator.reconstruct(audio))
+        #expect(!coordinator.reconstruct(video))
         #expect(coordinator.liveVisualPlaylist === image)
         #expect(image.playbackState == .paused)
         #expect(coordinator.liveAudioPlaylist === audio)
         #expect(audio.playbackState == .playing)
         #expect(video.playbackState == .stopped)
+    }
+
+    // MARK: - Forward step past the end
+
+    /// A forward step past a file's end settles like the next-file command from a Paused
+    /// playlist: Playing unless suppressed, the engine halted while held or suppressed.
+    @Test(arguments: [
+        (held: false, suppressed: false, state: PlaybackState.playing, enginePlays: true),
+        (held: true, suppressed: false, state: .playing, enginePlays: false),
+        (held: false, suppressed: true, state: .paused, enginePlays: false),
+    ])
+    func stepPastEndSettlesLikeNext(
+        _ scenario: (held: Bool, suppressed: Bool, state: PlaybackState, enginePlays: Bool)
+    ) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.mp4", "2.mp4"])
+        let video = makePlaylist(.video, folder: folder, files: [("1.mp4", []), ("2.mp4", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+        coordinator.play(video)
+        coordinator.pause(video)
+        if scenario.held { coordinator.setVisualHeld(true) }
+        if scenario.suppressed { coordinator.suppress() }
+
+        // The engine's step branch: advance (whose load starts the file), then report the step.
+        let engine = try #require(coordinator.videoEngine)
+        #expect(engine.advanceToNext())
+        let landed = try #require(engine.currentFile)
+        coordinator.engineDidStepPastEnd(to: landed)
+
+        #expect(video.playbackState == scenario.state)
+        #expect(engine.wantsPlayback == scenario.enginePlays)
     }
 
     // MARK: - Wrap-around order (PlaybackSource)
@@ -742,6 +806,7 @@ import SwiftData
         coordinator.play(video)
         coordinator.play(audio)
         coordinator.suppress()
+        coordinator.setVisualHeld(true)
 
         coordinator.shutdown()
 
@@ -749,7 +814,7 @@ import SwiftData
         #expect(coordinator.visualKind == nil)
         #expect(coordinator.liveAudioPlaylist == nil)
         #expect(!coordinator.isSuppressed)
-        #expect(!coordinator.visualHaltedForOverlay)
+        #expect(!coordinator.isVisualHeld)
     }
 
     @Test func togglePauseFlipsBetweenPlayingAndPaused() throws {
@@ -842,7 +907,7 @@ import SwiftData
         #expect(coordinator.visualCurrentFile?.id == files[1].id)
     }
 
-    @Test func haltAndResumeVisualForOverlayLeavePersistedStateAlone() throws {
+    @Test func visualHoldLeavesPersistedStateAlone() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.jpg"])
@@ -852,31 +917,152 @@ import SwiftData
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
-        coordinator.haltVisualForOverlay()
-        #expect(coordinator.visualHaltedForOverlay)
-        #expect(image.playbackState == .playing)   // halt is transient; persisted state untouched
+        coordinator.setVisualHeld(true)
+        #expect(coordinator.isVisualHeld)
+        #expect(image.playbackState == .playing)   // the hold is transient; persisted state untouched
 
-        coordinator.resumeVisualForOverlay()
-        #expect(!coordinator.visualHaltedForOverlay)
+        coordinator.setVisualHeld(false)
+        #expect(!coordinator.isVisualHeld)
         #expect(image.playbackState == .playing)
     }
 
-    @Test func haltVisualForOverlayIsSkippedWhileSuppressed() throws {
+    @Test func visualReplacementKeepsTheHold() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let first = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        let second = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        second.preferences.slideshowEnabled = true
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(first)
+        coordinator.setVisualHeld(true)
+        coordinator.play(second)
+        #expect(coordinator.isVisualHeld)
+        #expect(!coordinator.imageEngine.slideshowEnabled)   // loads halted under the open overlay
+
+        coordinator.setVisualHeld(false)
+        #expect(coordinator.imageEngine.slideshowEnabled)    // closing the overlay starts it
+    }
+
+    @Test func videoSwitchedToUnderTheOverlayLoadsHalted() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg", "v.mp4"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        let video = makePlaylist(.video, folder: folder, files: [("v.mp4", [])], in: context)
+
+        let videoEngine = try AudioPlaybackEngine()
+        let coordinator = PlaybackCoordinator(
+            folderAccess: ScopedFolderAccess(bookmarkService: BookmarkService()),
+            sequences: PlaybackSequences(modelContext: context),
+            makeVideoEngine: { videoEngine },
+            makeAudioEngine: { try AudioPlaybackEngine() }
+        )
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.setVisualHeld(true)
+        coordinator.play(video)
+        #expect(coordinator.isVisualHeld)
+        #expect(!videoEngine.wantsPlayback)   // loads halted under the open overlay
+
+        coordinator.setVisualHeld(false)
+        #expect(videoEngine.wantsPlayback)    // closing the overlay starts it
+    }
+
+    @Test func unpauseKeepsTheHold() throws {
         let container = try makeContainer()
         let context = container.mainContext
         let folder = try makeFolder(["1.jpg"])
         let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        image.preferences.slideshowEnabled = true
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.setVisualHeld(true)
+        coordinator.pause(image)
+        coordinator.unpause(image)
+        #expect(image.playbackState == .playing)
+        #expect(!coordinator.imageEngine.slideshowEnabled)   // still halted under the open overlay
+
+        coordinator.setVisualHeld(false)
+        #expect(coordinator.imageEngine.slideshowEnabled)
+    }
+
+    @Test func unsuppressKeepsTheHold() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        image.preferences.slideshowEnabled = true
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.setVisualHeld(true)
+        coordinator.suppress()
+        coordinator.unsuppress()
+        #expect(!coordinator.imageEngine.slideshowEnabled)   // still halted under the open overlay
+
+        coordinator.setVisualHeld(false)
+        #expect(coordinator.imageEngine.slideshowEnabled)
+    }
+
+    @Test func holdSetWhileSuppressedOutlastsUnsuppress() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+        image.preferences.slideshowEnabled = true
 
         let coordinator = makeCoordinator(BookmarkService(), context)
         defer { coordinator.shutdown() }
 
         coordinator.play(image)
         coordinator.suppress()
+        coordinator.setVisualHeld(true)
+        coordinator.unsuppress()
+        #expect(!coordinator.imageEngine.slideshowEnabled)   // still held under the open overlay
 
-        // Suppression already halts the channel, so the overlay-halt is a no-op (nothing to
-        // balance later) rather than double-counting the suspend.
-        coordinator.haltVisualForOverlay()
-        #expect(!coordinator.visualHaltedForOverlay)
+        coordinator.setVisualHeld(false)
+        #expect(coordinator.imageEngine.slideshowEnabled)
+    }
+
+    @Test func enablingTheSlideshowOnAPausedPlaylistLeavesTheTimerStopped() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        coordinator.pause(image)
+        coordinator.setSlideshowEnabled(image, true)
+        #expect(image.preferences.slideshowEnabled)
+        #expect(!coordinator.imageEngine.slideshowEnabled)
+    }
+
+    @Test func visualHoldStopsVisualPlayback() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let folder = try makeFolder(["1.jpg"])
+        let image = makePlaylist(.image, folder: folder, files: [("1.jpg", [])], in: context)
+
+        let coordinator = makeCoordinator(BookmarkService(), context)
+        defer { coordinator.shutdown() }
+
+        coordinator.play(image)
+        #expect(coordinator.isVisuallyPlaying)
+        coordinator.setVisualHeld(true)
+        #expect(!coordinator.isVisuallyPlaying)
     }
 
     // MARK: - Audio overlay surface (Task 15)

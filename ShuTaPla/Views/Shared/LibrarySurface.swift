@@ -2,7 +2,7 @@
 //  LibrarySurface.swift
 //  ShuTaPla
 //
-//  The player-mode library surface: three columns — a single-type playlist selector,
+//  The player-mode library surface: three columns — a playlist selector grouped by media type,
 //  the active playlist's filtered file list (topped by its `FilterStrip`), and a tag editor
 //  for the current file. It drives one playback channel, wired through a `LibraryContext`
 //  that supplies the channel-specific slots and actions; the audio overlay and the
@@ -18,8 +18,9 @@ import AppKit
 /// between the audio channel and the visual channel — which playlists it lists, the
 /// active playlist, its filtered files and current track, and the actions a row triggers.
 struct LibraryContext {
-    /// The one media type the selector lists — the channel's current type.
-    let mediaType: MediaType
+    /// The media types whose playlists the selector lists, grouped by type in this order. A type
+    /// with no playlists gets no group; the groups carry type headers only when there are several.
+    let mediaTypes: [MediaType]
     /// The playlist the surface acts on (highlighted in the selector, source of the file list).
     let activePlaylist: Playlist?
     /// The active playlist's filtered, display-ordered file identifiers, resolved row-by-row.
@@ -58,7 +59,13 @@ struct LibrarySurface: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            playlistsColumn.frame(width: 240)
+            PlaylistSelector(
+                mediaTypes: context.mediaTypes,
+                activePlaylist: context.activePlaylist,
+                onSelect: context.onSelectPlaylist,
+                onAdd: context.onAddPlaylist
+            )
+            .frame(width: 240)
             Divider()
             fileColumn
             Divider()
@@ -73,55 +80,6 @@ struct LibrarySurface: View {
         // Hold one scoped-access session for the active playlist's folder so the list rows' metadata
         // reads append to a pre-resolved URL instead of resolving the bookmark per file.
         .browsingSession(for: context.activePlaylist, folderAccess: appState.folderAccess)
-    }
-
-    // MARK: - Playlists column
-
-    private var playlistsColumn: some View {
-        // One fetch per evaluation, shared by the list and its empty state. Reading it registers
-        // `AppState.playlistsVersion` — the gate that decides when this column re-evaluates, and
-        // why the list is a fetch rather than a `@Query`.
-        let playlists = appState.playlists(ofType: context.mediaType)
-        return VStack(spacing: 0) {
-            List {
-                ForEach(playlists) { playlist in
-                    playlistRow(playlist)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if playlists.isEmpty {
-                    NoPlaylistsPlaceholder(mediaType: context.mediaType)
-                }
-            }
-
-            Divider()
-            HStack {
-                Button { context.onAddPlaylist() } label: {
-                    Image(systemName: "plus").frame(width: 24, height: 24).contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(appState.isAddingPlaylist)
-                .help("Add a playlist from a folder")
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-        }
-    }
-
-    private func playlistRow(_ playlist: Playlist) -> some View {
-        Button { context.onSelectPlaylist(playlist) } label: {
-            HStack {
-                Text(playlist.name).lineLimit(1)
-                Spacer()
-                PlaylistRowBadge(playlist: playlist)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(appState.playlistWork.isDeleting(playlist.id))
-        .listRowBackground(context.activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
     }
 
     // MARK: - File column
@@ -208,6 +166,75 @@ struct LibrarySurface: View {
             }
         } else {
             ContentUnavailableView("No File Playing", systemImage: "tag")
+        }
+    }
+}
+
+extension LibrarySurface {
+    /// The playlist column, grouped by media type with a `+` footer.
+    private struct PlaylistSelector: View {
+        let mediaTypes: [MediaType]
+        let activePlaylist: Playlist?
+        let onSelect: (Playlist) -> Void
+        let onAdd: () -> Void
+
+        @Environment(AppState.self) private var appState
+
+        var body: some View {
+            // One fetch per evaluation, shared by the list and its empty state. Reading it registers
+            // `AppState.playlistsVersion`, so a playlist change re-evaluates this view without the
+            // file and tag columns; that version gate is why the list is a fetch rather than a `@Query`.
+            // The closures `LibrarySurface` passes in are new on every parent pass, so this body
+            // also re-runs with each one (every track change); the fetch is small enough to accept.
+            let sections = appState.playlistSections(of: mediaTypes)
+            VStack(spacing: 0) {
+                List {
+                    ForEach(sections) { section in
+                        Section {
+                            ForEach(section.playlists) { row($0) }
+                        } header: {
+                            if sections.count > 1 { Text(section.mediaType.displayName) }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .overlay {
+                    if sections.isEmpty {
+                        NoPlaylistsPlaceholder(mediaTypes: mediaTypes)
+                    }
+                }
+
+                Divider()
+                HStack {
+                    let addTitle = "Add Playlist"
+                    Button { onAdd() } label: {
+                        Label(addTitle, systemImage: "plus")
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
+                    .disabled(appState.isAddingPlaylist)
+                    .help(addTitle)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+        }
+
+        private func row(_ playlist: Playlist) -> some View {
+            Button { onSelect(playlist) } label: {
+                HStack {
+                    Text(playlist.name).lineLimit(1)
+                    Spacer()
+                    PlaylistRowBadge(playlist: playlist)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.playlistWork.isDeleting(playlist.id))
+            .listRowBackground(activePlaylist === playlist ? Color.accentColor.opacity(AppConstants.selectionHighlightOpacity) : nil)
         }
     }
 }

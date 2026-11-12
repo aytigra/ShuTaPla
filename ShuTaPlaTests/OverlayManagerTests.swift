@@ -197,4 +197,48 @@ import Testing
         m.hideCompactAudioOnHoverExit()
         #expect(m.active.contains(.audioCompact))
     }
+
+    // MARK: - Visual Overlay visibility callback
+
+    /// Every path that drops the Visual Overlay. `AppState` releases the coordinator's visual
+    /// hold from the callback, so a path that drops it silently leaves the hold set.
+    enum VisualOverlayRelease: CaseIterable {
+        case close, closeTopmost, hideAll, expandAudio, pauseOverlay
+
+        @MainActor func apply(to m: OverlayManager) {
+            switch self {
+            case .close: m.closeVisualOverlay()
+            case .closeTopmost: m.closeTopmostOverlay()
+            case .hideAll: m.hideAll()
+            case .expandAudio: m.expandAudioToExtended()
+            case .pauseOverlay: m.show(.pauseOverlay)
+            }
+        }
+    }
+
+    @Test(arguments: VisualOverlayRelease.allCases)
+    func visualOverlayChangeReportsRelease(_ release: VisualOverlayRelease) {
+        let m = OverlayManager()
+        var reported: [Bool] = []
+        m.onVisualOverlayChange = { reported.append($0) }
+        m.openVisualOverlay()
+        release.apply(to: m)
+        #expect(reported == [true, false])
+    }
+
+    @Test func visualOverlayChangeIgnoresOtherMutations() {
+        let m = OverlayManager()
+        var reported: [Bool] = []
+        m.onVisualOverlayChange = { reported.append($0) }
+        m.show(.bottomControls)
+        m.hide(.bottomControls)
+        m.revealCompactAudio()
+        m.closeAudioOverlay()
+        m.openVisualOverlay()
+        m.openVisualOverlay(focusTag: true)
+        m.show(.bottomControls)                   // suppressed while the Visual Overlay is open
+        m.revealCompactAudioOnHover()             // sits on top of the Visual Overlay
+        m.hideCompactAudioOnHoverExit()
+        #expect(reported == [true])
+    }
 }

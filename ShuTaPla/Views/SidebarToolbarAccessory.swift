@@ -2,7 +2,7 @@
 //  SidebarToolbarAccessory.swift
 //  ShuTaPla
 //
-//  The Manager's sidebar-region controls — the scope tabs and New Playlist — while the sidebar is
+//  The Manager's sidebar-region controls — the scope tabs and the `+` button — while the sidebar is
 //  open: a leading titlebar accessory rather than toolbar items. AppKit places a `.leading`
 //  accessory immediately right of the traffic lights and leaves its width to the app; the toolbar's
 //  own items then indent past it, so it composes with the tracking separator that bounds the center
@@ -270,15 +270,17 @@ private struct ScopeTabButton: View {
 struct NewPlaylistButton: View {
     @Environment(AppState.self) private var appState
 
+    static let title = "Add Playlist"
+
     var body: some View {
         Button {
             appState.folderPick = .addPlaylist
         } label: {
-            Label("New Playlist", systemImage: "plus")
+            Label(Self.title, systemImage: "plus")
         }
         .buttonStyle(TitlebarControlButtonStyle())
         .disabled(appState.isAddingPlaylist)
-        .help("Add a playlist from a folder")
+        .help(Self.title)
     }
 }
 

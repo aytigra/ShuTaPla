@@ -2,7 +2,7 @@
 //  WelcomeView.swift
 //  ShuTaPla
 //
-//  First-run screen shown when no playlists exist. A prominent "Add Playlist"
+//  First-run screen shown when no playlists exist. A prominent add-playlist
 //  button raises the shared folder chooser (`FolderPickFlow`) whose chosen folder
 //  is scanned into a playlist, prompting for a media type when the folder is Mixed.
 //

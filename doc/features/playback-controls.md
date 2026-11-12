@@ -99,7 +99,7 @@ Pressing `[p]` or `[space]` while the Pause Overlay is shown also ends the Suppr
 
 ### Suppression vs per-playlist pause
 
-Each playlist is always Stopped, Playing, or Paused - a persistent per-playlist state. **Suppression** is a single transient layer on top of those states: actual playback happens only while a playlist is Playing and Suppression is off (`playback = playing && !suppression`).
+Each playlist is always Stopped, Playing, or Paused - a persistent per-playlist state. **Suppression** is a single transient layer on top of those states: actual playback happens only while a playlist is Playing and Suppression is off (`playback = playing && !suppression`). The Visual Channel Playlist additionally halts while the Visual Overlay is open (see [Overlay interaction rules](#overlay-interaction-rules)).
 
 Suppression is active while the Pause Overlay is shown or the window is closed; when it ends (Unpause, or reopening the window), every Playing playlist continues. Quitting and relaunching the app behaves the same way as closing and reopening the window. Since the Pause Overlay hides the whole UI, playback controls only ever reflect the playlist states.
 

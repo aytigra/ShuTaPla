@@ -912,7 +912,7 @@ import AppKit
 
         // The Mixed-folder media-type dialog is a modal that owns the keyboard: bare keys
         // must be swallowed and `[esc]` pass through, rather than leaking to playback behind it.
-        f.appState.pendingTypeChoice = PendingPlaylist(
+        f.appState.pendingTypeChoice = ScannedFolder(
             name: "Mix", bookmark: Data(), folderPath: "/mix",
             scan: ScanResult(files: [], counts: [.video: 1, .image: 1], dominantType: nil)
         )
